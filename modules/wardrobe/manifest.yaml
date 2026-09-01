@@ -1,0 +1,8 @@
+id: wardrobe
+name: 衣橱
+kind: app
+description: 上传衣服照片，AI 抠单件、试穿和搭配
+version: 0.1.0
+web:
+  route_prefix: /m/wardrobe
+  nav_label: 衣橱

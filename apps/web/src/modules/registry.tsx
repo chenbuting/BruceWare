@@ -4,6 +4,7 @@ import { HelpPage } from "@/pages/HelpPage";
 import { ModulesPage } from "@/pages/ModulesPage";
 import { PortalPage } from "@/pages/PortalPage";
 import { ResumePage } from "@/pages/ResumePage";
+import { WardrobePage } from "@/pages/WardrobePage";
 
 /** 模块页面注册表：侧栏点开后嵌进工作区，不另开窗口 */
 export type ModulePageEntry = {
@@ -37,6 +38,12 @@ export const MODULE_PAGES: Record<string, ModulePageEntry> = {
     desc: "保存简历，用 AI 分析和打字模拟面试。先在设置里配好 AI。",
     wide: true,
     page: ResumePage,
+  },
+  wardrobe: {
+    title: "衣橱",
+    desc: "上传衣服照片，AI 抠单件、试穿和搭配。先在设置里配好 AI。",
+    wide: true,
+    page: WardrobePage,
   },
 };
 

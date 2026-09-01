@@ -1,0 +1,408 @@
+import { useEffect, useRef, useState } from "react";
+
+import {
+  addWardrobeItem,
+  analyzeWardrobePhoto,
+  createWardrobeLook,
+  deleteWardrobeItem,
+  deleteWardrobeLook,
+  fetchWardrobeItems,
+  fetchWardrobeLooks,
+  fetchWardrobeStatus,
+  importWardrobeItems,
+  saveWardrobeReference,
+} from "@/api/client";
+import type { WardrobeDetected, WardrobeItem, WardrobeLook } from "@/api/types";
+import { Card } from "@/components/Card";
+import { ConfirmModal } from "@/components/Modal";
+
+type Tab = "closet" | "import" | "looks";
+
+const PARTS = [
+  { id: "", label: "全部" },
+  { id: "upperbody", label: "上装" },
+  { id: "wholebody_up", label: "外套" },
+  { id: "lowerbody", label: "下装" },
+  { id: "accessories_up", label: "配饰" },
+  { id: "shoes", label: "鞋" },
+];
+const ITEM_PARTS = PARTS.filter((item) => item.id);
+
+type DirectDraft = { file: File; preview: string; name: string; part: string };
+
+/** 衣橱：识别照片里的衣服，生成单件图、试穿和搭配 */
+export function WardrobePage() {
+  const [tab, setTab] = useState<Tab>("closet");
+  const [items, setItems] = useState<WardrobeItem[]>([]);
+  const [looks, setLooks] = useState<WardrobeLook[]>([]);
+  const [part, setPart] = useState("");
+  const [picked, setPicked] = useState<number[]>([]);
+  const [referenceUrl, setReferenceUrl] = useState("");
+  const [uploadId, setUploadId] = useState("");
+  const [detected, setDetected] = useState<WardrobeDetected[]>([]);
+  const [chosen, setChosen] = useState<boolean[]>([]);
+  const [error, setError] = useState("");
+  const [hint, setHint] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [askId, setAskId] = useState<number | null>(null);
+  const [drafts, setDrafts] = useState<DirectDraft[]>([]);
+  const importRef = useRef<HTMLInputElement>(null);
+  const directRef = useRef<HTMLInputElement>(null);
+  const selfRef = useRef<HTMLInputElement>(null);
+
+  async function reload() {
+    const [status, closet, looksData] = await Promise.all([fetchWardrobeStatus(), fetchWardrobeItems(), fetchWardrobeLooks()]);
+    setReferenceUrl(status.reference_url);
+    setItems(closet.items);
+    setLooks(looksData.items);
+  }
+
+  useEffect(() => {
+    reload().catch((err: Error) => setError(err.message));
+  }, []);
+
+  async function onSelf(file: File | undefined) {
+    if (!file) return;
+    setBusy(true);
+    setError("");
+    try {
+      const data = await saveWardrobeReference(file);
+      setReferenceUrl(data.reference_url);
+      setHint("已保存你的照片，试穿会用它");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存失败");
+    } finally {
+      setBusy(false);
+      if (selfRef.current) selfRef.current.value = "";
+    }
+  }
+
+  function clearDrafts() {
+    drafts.forEach((item) => URL.revokeObjectURL(item.preview));
+    setDrafts([]);
+  }
+
+  function onPickDirect(files: FileList | null) {
+    if (!files?.length) return;
+    const next = Array.from(files).map((file) => ({
+      file,
+      preview: URL.createObjectURL(file),
+      name: file.name.replace(/\.[^.]+$/, "") || "衣服",
+      part: "upperbody",
+    }));
+    setDrafts((prev) => {
+      prev.forEach((item) => URL.revokeObjectURL(item.preview));
+      return next;
+    });
+    setError("");
+    setHint(`选了 ${next.length} 张，改好名称和分类再加入`);
+    if (directRef.current) directRef.current.value = "";
+  }
+
+  async function onAddDirect() {
+    if (drafts.length === 0) {
+      setError("请先选衣服图片");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setHint("正在加入衣橱");
+    try {
+      for (const item of drafts) {
+        await addWardrobeItem(item.file, item.name.trim() || "衣服", item.part);
+      }
+      clearDrafts();
+      await reload();
+      setTab("closet");
+      setHint("已加入衣橱");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "加入失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onAnalyze(file: File | undefined) {
+    if (!file) return;
+    setBusy(true);
+    setError("");
+    setHint("");
+    try {
+      const data = await analyzeWardrobePhoto(file);
+      setUploadId(data.upload_id);
+      setDetected(data.items);
+      setChosen(data.items.map(() => true));
+      setHint(data.items.length ? `认出 ${data.items.length} 件` : "没认出衣服");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "识别失败");
+    } finally {
+      setBusy(false);
+      if (importRef.current) importRef.current.value = "";
+    }
+  }
+
+  async function onImport() {
+    const selected = detected.filter((_, index) => chosen[index]);
+    if (!uploadId || selected.length === 0) {
+      setError("请先识别并勾选衣服");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setHint("正在抠图，可能要等一会儿");
+    try {
+      await importWardrobeItems(uploadId, selected);
+      setUploadId("");
+      setDetected([]);
+      setChosen([]);
+      await reload();
+      setTab("closet");
+      setHint("已加入衣橱");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "导入失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onTryOn(ids: number[]) {
+    if (ids.length < 1) {
+      setError("请先选一件衣服");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setHint("正在生成效果图，完成后会放到搭配");
+    try {
+      await createWardrobeLook(ids, "");
+      const data = await fetchWardrobeLooks();
+      setLooks(data.items);
+      setTab("looks");
+      setHint("效果图已放到搭配，衣橱里的原衣服还在");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "生成失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const shown = items.filter((item) => !part || item.part === part);
+
+  return (
+    <>
+      {error ? <p className="mb-4 text-[var(--err)]">{error}</p> : null}
+      {hint ? <p className="mb-4 text-[var(--ok)]">{hint}</p> : null}
+
+      <Card className="mb-4 px-5 py-4">
+        <div className="flex flex-wrap items-center gap-3">
+          {referenceUrl ? (
+            <img src={referenceUrl} alt="我" className="h-16 w-16 rounded-md object-cover" />
+          ) : (
+            <div className="flex h-16 w-16 items-center justify-center rounded-md border border-[var(--line)] text-[12px] text-[var(--muted)]">无照片</div>
+          )}
+          <div className="min-w-0 flex-1 text-[13px] text-[var(--muted)]">
+            先放一张自己的照片，试穿和搭配才会长得像你。单件图可以直接加入；一张图里有好几件，再用识别。
+          </div>
+          <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy} onClick={() => selfRef.current?.click()}>
+            {referenceUrl ? "换我的照片" : "上传我的照片"}
+          </button>
+          <input ref={selfRef} type="file" accept="image/*" className="hidden" onChange={(e) => void onSelf(e.target.files?.[0])} />
+        </div>
+      </Card>
+
+      <div className="mb-4 flex flex-wrap gap-1">
+        {(
+          [
+            ["closet", "衣橱"],
+            ["import", "导入"],
+            ["looks", "搭配"],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            className={`rounded-md px-2.5 py-1.5 text-[13px] ${tab === id ? "bg-[var(--paper)]" : "text-[var(--muted)] hover:bg-[var(--hover)]"}`}
+            onClick={() => setTab(id)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "import" ? (
+        <div className="space-y-4">
+          <Card title="直接加单件图" className="px-5 py-4">
+            <p className="text-[13px] text-[var(--muted)]">商品图、平铺图、已经抠好的衣服，选图就能进衣橱，不用 AI。</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy} onClick={() => directRef.current?.click()}>
+                选图片
+              </button>
+              <input ref={directRef} type="file" accept="image/*" multiple className="hidden" onChange={(e) => onPickDirect(e.target.files)} />
+              {drafts.length > 0 ? (
+                <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy} onClick={() => void onAddDirect()}>
+                  {busy ? "加入中…" : "加入衣橱"}
+                </button>
+              ) : null}
+            </div>
+            {drafts.length > 0 ? (
+              <ul className="mt-4 space-y-3">
+                {drafts.map((item, index) => (
+                  <li key={item.preview} className="flex flex-wrap items-center gap-3 text-[13px]">
+                    <img src={item.preview} alt="" className="h-16 w-16 rounded-md object-contain bg-[var(--bg)]" />
+                    <input
+                      className="w-40 border border-[var(--line)] bg-[var(--paper)] px-2 py-1.5"
+                      value={item.name}
+                      onChange={(e) => setDrafts((prev) => prev.map((row, i) => (i === index ? { ...row, name: e.target.value } : row)))}
+                    />
+                    <select
+                      className="border border-[var(--line)] bg-[var(--paper)] px-2 py-1.5"
+                      value={item.part}
+                      onChange={(e) => setDrafts((prev) => prev.map((row, i) => (i === index ? { ...row, part: e.target.value } : row)))}
+                    >
+                      {ITEM_PARTS.map((row) => (
+                        <option key={row.id} value={row.id}>
+                          {row.label}
+                        </option>
+                      ))}
+                    </select>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </Card>
+          <Card title="从照片里拆衣服" className="px-5 py-4">
+            <p className="text-[13px] text-[var(--muted)]">一张图里有好几件，或人穿着的，先识别再抠图。</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy} onClick={() => importRef.current?.click()}>
+                {busy ? "处理中…" : "选照片识别"}
+              </button>
+              <input ref={importRef} type="file" accept="image/*" className="hidden" onChange={(e) => void onAnalyze(e.target.files?.[0])} />
+              {detected.length > 0 ? (
+                <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy} onClick={() => void onImport()}>
+                  抠图并加入衣橱
+                </button>
+              ) : null}
+            </div>
+            {detected.length > 0 ? (
+              <ul className="mt-4 space-y-2 text-[13px]">
+                {detected.map((item, index) => (
+                  <li key={`${item.name}-${index}`} className="flex items-center gap-3">
+                    <input type="checkbox" checked={chosen[index] || false} onChange={() => setChosen((prev) => prev.map((on, i) => (i === index ? !on : on)))} />
+                    <span>{item.name}</span>
+                    <span className="text-[var(--muted)]">{PARTS.find((row) => row.id === item.part)?.label || item.part}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </Card>
+        </div>
+      ) : null}
+
+      {tab === "closet" ? (
+        <div>
+          <div className="mb-3 flex flex-wrap gap-1">
+            {PARTS.map((item) => (
+              <button
+                key={item.id || "all"}
+                type="button"
+                className={`rounded-md px-2.5 py-1.5 text-[13px] ${part === item.id ? "bg-[var(--paper)]" : "text-[var(--muted)] hover:bg-[var(--hover)]"}`}
+                onClick={() => setPart(item.id)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+          {shown.length === 0 ? (
+            <p className="text-[13px] text-[var(--muted)]">还没有衣服。去「导入」，单件图可以直接加。</p>
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              {shown.map((item) => (
+                <Card key={item.id} className="px-4 py-3">
+                  <div className="aspect-[3/4] overflow-hidden rounded-md bg-[var(--bg)]">
+                    {item.cutout_url || item.original_url ? (
+                      <img src={item.cutout_url || item.original_url} alt={item.name} className="h-full w-full object-contain" />
+                    ) : null}
+                  </div>
+                  <div className="mt-3 text-[13px] font-medium">{item.name}</div>
+                  <div className="text-[12px] text-[var(--muted)]">{item.part_label}</div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-2 py-1 text-[13px] disabled:opacity-50" disabled={busy} onClick={() => void onTryOn([item.id])}>
+                      生成试穿
+                    </button>
+                    <button
+                      type="button"
+                      className={`border px-2 py-1 text-[13px] ${picked.includes(item.id) ? "border-[var(--text)] bg-[var(--bg)]" : "border-[var(--line)] bg-[var(--paper)]"}`}
+                      onClick={() => setPicked((prev) => (prev.includes(item.id) ? prev.filter((id) => id !== item.id) : [...prev, item.id]))}
+                    >
+                      {picked.includes(item.id) ? "已选" : "选来搭配"}
+                    </button>
+                    <button type="button" className="text-[13px] text-[var(--muted)]" onClick={() => setAskId(item.id)}>
+                      删除
+                    </button>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : null}
+
+      {tab === "looks" ? (
+        <div>
+          <Card className="mb-4 px-5 py-4">
+            <p className="text-[13px] text-[var(--muted)]">在衣橱里点「选来搭配」，一件就能试穿，多件就是整套。</p>
+            <div className="mt-3 text-[13px]">已选 {picked.length} 件</div>
+            <button type="button" className="mt-3 border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy || picked.length < 1} onClick={() => void onTryOn(picked)}>
+              生成搭配
+            </button>
+          </Card>
+          {looks.length === 0 ? (
+            <p className="text-[13px] text-[var(--muted)]">还没有搭配图。</p>
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2">
+              {looks.map((look) => (
+                <Card key={look.id} className="px-4 py-3">
+                  {look.image_url ? <img src={look.image_url} alt={look.title} className="w-full rounded-md" /> : null}
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <div className="text-[13px]">{look.title}</div>
+                    <button
+                      type="button"
+                      className="text-[13px] text-[var(--muted)]"
+                      onClick={() =>
+                        deleteWardrobeLook(look.id)
+                          .then(() => setLooks((prev) => prev.filter((item) => item.id !== look.id)))
+                          .catch((err: Error) => setError(err.message))
+                      }
+                    >
+                      删除
+                    </button>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : null}
+
+      {askId !== null ? (
+        <ConfirmModal
+          title="删除衣服"
+          message="从衣橱里拿掉这件？"
+          onConfirm={() => {
+            deleteWardrobeItem(askId)
+              .then(() => {
+                setItems((prev) => prev.filter((item) => item.id !== askId));
+                setPicked((prev) => prev.filter((id) => id !== askId));
+                setAskId(null);
+              })
+              .catch((err: Error) => {
+                setError(err.message);
+                setAskId(null);
+              });
+          }}
+          onClose={() => setAskId(null)}
+        />
+      ) : null}
+    </>
+  );
+}

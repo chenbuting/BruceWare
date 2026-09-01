@@ -1,11 +1,74 @@
 """调用兼容 OpenAI 的对话接口。"""
 
+import ssl
+import time
+from io import BytesIO
 from typing import Any
 
 import httpx
+from PIL import Image
 
 from app.core.config import get_settings
 from app.core.local_settings import load_local_settings
+
+
+def _ssl_context() -> ssl.SSLContext:
+    """兼容一些中转站不规范的 HTTPS。"""
+    ctx = ssl.create_default_context()
+    if hasattr(ssl, "OP_IGNORE_UNEXPECTED_EOF"):
+        ctx.options |= ssl.OP_IGNORE_UNEXPECTED_EOF
+    if hasattr(ssl, "OP_LEGACY_SERVER_CONNECT"):
+        ctx.options |= ssl.OP_LEGACY_SERVER_CONNECT
+    try:
+        ctx.set_ciphers("DEFAULT@SECLEVEL=1")
+    except ssl.SSLError:
+        pass
+    return ctx
+
+
+def _is_ssl_break(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return any(word in text for word in ("ssl", "eof", "unexpected_eof", "certificate", "wrong version number"))
+
+
+def _post(
+    url: str,
+    *,
+    timeout: float,
+    headers: dict[str, str] | None = None,
+    json: Any = None,
+    data: Any = None,
+    files: Any = None,
+) -> httpx.Response:
+    last: Exception | None = None
+    for verify in (_ssl_context(), False):
+        for attempt in range(3):
+            try:
+                with httpx.Client(timeout=httpx.Timeout(timeout, connect=20), verify=verify, follow_redirects=True) as client:
+                    return client.post(url, headers=headers, json=json, data=data, files=files)
+            except Exception as exc:
+                last = exc
+                text = str(exc).lower()
+                if "timeout" in text or "timed out" in text:
+                    raise ValueError("AI 请求超时。照片太大或接口太慢，请换一张小一点的图再试。") from exc
+                if not _is_ssl_break(exc) and attempt == 0:
+                    break
+                time.sleep(0.8 * (attempt + 1))
+    raise ValueError(f"AI 请求失败：{last}") from last
+
+
+def _shrink_image(data: bytes, max_side: int = 1280) -> bytes:
+    """缩小参考图，减少中转站传大图时 SSL 被掐断。"""
+    try:
+        image = Image.open(BytesIO(data))
+        image.thumbnail((max_side, max_side))
+        if image.mode not in ("RGB", "RGBA"):
+            image = image.convert("RGBA" if "A" in image.getbands() else "RGB")
+        buf = BytesIO()
+        image.save(buf, format="PNG", optimize=True)
+        return buf.getvalue()
+    except Exception:
+        return data
 
 
 def load_llm() -> dict[str, str]:
@@ -16,6 +79,9 @@ def load_llm() -> dict[str, str]:
         "base_url": str(stored.get("base_url") or "https://api.openai.com/v1").strip(),
         "api_key": str(stored.get("api_key") or "").strip(),
         "model": str(stored.get("model") or "gpt-4o-mini").strip(),
+        "image_base_url": str(stored.get("image_base_url") or "").strip(),
+        "image_api_key": str(stored.get("image_api_key") or "").strip(),
+        "image_model": str(stored.get("image_model") or "gpt-image-1").strip() or "gpt-image-1",
     }
 
 
@@ -24,8 +90,20 @@ def llm_public() -> dict[str, Any]:
     return {
         "base_url": cfg["base_url"],
         "model": cfg["model"],
+        "image_base_url": cfg.get("image_base_url") or "",
+        "image_model": cfg.get("image_model") or "gpt-image-1",
         "has_key": bool(cfg["api_key"]),
+        "has_image_key": bool(cfg.get("image_api_key")),
     }
+
+
+def _image_auth() -> tuple[str, str, str]:
+    """生图用自己的地址和 Key；没填就退回对话那套。"""
+    cfg = load_llm()
+    key = cfg.get("image_api_key") or cfg["api_key"]
+    if not key:
+        raise ValueError("请先在设置里填写生图 Key，或填写对话 Key")
+    return cfg.get("image_base_url") or cfg["base_url"], key, cfg.get("image_model") or "gpt-image-1"
 
 
 def _completions_url(base_url: str) -> str:
@@ -37,7 +115,7 @@ def _completions_url(base_url: str) -> str:
     return f"{url}/v1/chat/completions"
 
 
-def chat_complete(messages: list[dict[str, str]], timeout: float = 90) -> str:
+def chat_complete(messages: list[dict[str, Any]], timeout: float = 90) -> str:
     """发一轮对话，返回助手文字。"""
 
     cfg = load_llm()
@@ -56,12 +134,7 @@ def chat_complete(messages: list[dict[str, str]], timeout: float = 90) -> str:
         "Authorization": f"Bearer {cfg['api_key']}",
         "Content-Type": "application/json",
     }
-    try:
-        with httpx.Client(timeout=timeout) as client:
-            res = client.post(url, json=payload, headers=headers)
-    except Exception as exc:
-        raise ValueError(f"AI 请求失败：{exc}") from exc
-
+    res = _post(url, timeout=timeout, json=payload, headers=headers)
     if res.status_code >= 400:
         text = res.text[:300]
         raise ValueError(f"AI 接口返回 {res.status_code}：{text}")
@@ -72,3 +145,79 @@ def chat_complete(messages: list[dict[str, str]], timeout: float = 90) -> str:
     except Exception as exc:
         raise ValueError("AI 返回格式不对") from exc
     return str(content or "").strip()
+
+
+def _images_root(base_url: str) -> str:
+    url = base_url.rstrip("/")
+    if url.endswith("/chat/completions"):
+        url = url[: -len("/chat/completions")]
+    if url.endswith("/v1"):
+        return url
+    return f"{url}/v1"
+
+
+def image_edit(prompt: str, images: list[bytes], size: str = "1024x1024", timeout: float = 120) -> bytes:
+    """按参考图改图 / 生图，走兼容 OpenAI 的 images 接口。"""
+
+    base_url, api_key, model = _image_auth()
+    root = _images_root(base_url)
+    headers = {"Authorization": f"Bearer {api_key}"}
+    files: list[tuple[str, tuple[str, bytes, str]]] = []
+    for index, raw in enumerate(images):
+        files.append(("image[]", (f"ref-{index + 1}.png", _shrink_image(raw), "image/png")))
+    data = {"model": model, "prompt": prompt, "size": size, "response_format": "b64_json"}
+    last_error = ""
+    for extra in ({}, {"quality": "high"}):
+        payload = {**data, **extra}
+        try:
+            res = _post(f"{root}/images/edits", timeout=timeout, data=payload, files=files, headers=headers)
+        except Exception as exc:
+            last_error = str(exc)
+            continue
+        if res.status_code < 400:
+            return _read_image_bytes(res.json())
+        last_error = res.text[:300]
+        if res.status_code != 400:
+            break
+    files_single = [("image", (name, blob, mime)) for _, (name, blob, mime) in files]
+    try:
+        res = _post(f"{root}/images/edits", timeout=timeout, data=data, files=files_single, headers=headers)
+        if res.status_code < 400:
+            return _read_image_bytes(res.json())
+        last_error = res.text[:300]
+    except Exception as exc:
+        last_error = str(exc)
+    raise ValueError(f"生图失败：{last_error or '接口不可用'}。请在设置里确认生图模型。")
+
+
+def image_generate(prompt: str, size: str = "1024x1024", timeout: float = 120) -> bytes:
+    """只按文字生图。"""
+
+    base_url, api_key, model = _image_auth()
+    root = _images_root(base_url)
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    payload = {"model": model, "prompt": prompt, "size": size, "response_format": "b64_json", "n": 1}
+    res = _post(f"{root}/images/generations", timeout=timeout, json=payload, headers=headers)
+    if res.status_code >= 400:
+        raise ValueError(f"生图失败：{res.text[:300]}")
+    return _read_image_bytes(res.json())
+
+
+def _read_image_bytes(data: dict[str, Any]) -> bytes:
+    import base64
+
+    try:
+        item = data["data"][0]
+    except Exception as exc:
+        raise ValueError("生图返回格式不对") from exc
+    encoded = item.get("b64_json")
+    if encoded:
+        return base64.b64decode(encoded)
+    url = item.get("url")
+    if url:
+        with httpx.Client(timeout=60) as client:
+            res = client.get(url)
+        if res.status_code >= 400:
+            raise ValueError("生图下载失败")
+        return res.content
+    raise ValueError("生图没有返回图片")

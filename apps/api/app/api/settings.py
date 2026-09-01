@@ -120,7 +120,10 @@ def save_database(form: DatabaseForm):
 class LlmForm(BaseModel):
     base_url: str = "https://api.openai.com/v1"
     model: str = "gpt-4o-mini"
+    image_base_url: str = ""
+    image_model: str = "gpt-image-1"
     api_key: str = Field(default="", description="留空表示不改原 Key")
+    image_api_key: str = Field(default="", description="留空表示不改原生图 Key")
 
 
 @router.put("/settings/llm")
@@ -131,10 +134,14 @@ def save_llm(form: LlmForm):
     existing = load_local_settings(settings.repo_root)
     old = existing.get("llm") if isinstance(existing.get("llm"), dict) else {}
     key = form.api_key.strip() or str(old.get("api_key") or "")
+    image_key = form.image_api_key.strip() or str(old.get("image_api_key") or "")
     existing["llm"] = {
         "base_url": form.base_url.strip() or "https://api.openai.com/v1",
         "model": form.model.strip() or "gpt-4o-mini",
+        "image_base_url": form.image_base_url.strip(),
+        "image_model": form.image_model.strip() or "gpt-image-1",
         "api_key": key,
+        "image_api_key": image_key,
     }
     save_local_settings(settings.repo_root, existing)
     return ok(_settings_payload())

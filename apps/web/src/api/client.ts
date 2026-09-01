@@ -7,6 +7,9 @@ import type {
   PortalLink,
   ResumeDoc,
   SettingsInfo,
+  WardrobeDetected,
+  WardrobeItem,
+  WardrobeLook,
 } from "./types";
 
 /** 请求后端，失败时抛出中文错误 */
@@ -243,4 +246,68 @@ export async function downloadResumeDoc(id: number, filename: string) {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+export function fetchWardrobeStatus() {
+  return request<{ has_reference: boolean; reference_url: string }>("/api/v1/wardrobe/status");
+}
+
+export function saveWardrobeReference(file: File) {
+  const body = new FormData();
+  body.append("file", file);
+  return request<{ has_reference: boolean; reference_url: string }>("/api/v1/wardrobe/reference", {
+    method: "POST",
+    body,
+  });
+}
+
+export function fetchWardrobeItems() {
+  return request<{ items: WardrobeItem[] }>("/api/v1/wardrobe/items");
+}
+
+export function addWardrobeItem(file: File, name: string, part: string) {
+  const body = new FormData();
+  body.append("file", file);
+  body.append("name", name);
+  body.append("part", part);
+  return request<WardrobeItem>("/api/v1/wardrobe/items", { method: "POST", body });
+}
+
+export function deleteWardrobeItem(id: number) {
+  return request<boolean>(`/api/v1/wardrobe/items/${id}`, { method: "DELETE" });
+}
+
+export function analyzeWardrobePhoto(file: File) {
+  const body = new FormData();
+  body.append("file", file);
+  return request<{ upload_id: string; source_name: string; items: WardrobeDetected[] }>("/api/v1/wardrobe/analyze", {
+    method: "POST",
+    body,
+  });
+}
+
+export function importWardrobeItems(uploadId: string, items: WardrobeDetected[]) {
+  return request<{ items: WardrobeItem[] }>("/api/v1/wardrobe/import", {
+    method: "POST",
+    body: JSON.stringify({ upload_id: uploadId, items }),
+  });
+}
+
+export function remakeWardrobeModeled(id: number) {
+  return request<WardrobeItem>(`/api/v1/wardrobe/items/${id}/modeled`, { method: "POST" });
+}
+
+export function fetchWardrobeLooks() {
+  return request<{ items: WardrobeLook[] }>("/api/v1/wardrobe/looks");
+}
+
+export function createWardrobeLook(itemIds: number[], title: string) {
+  return request<WardrobeLook>("/api/v1/wardrobe/looks", {
+    method: "POST",
+    body: JSON.stringify({ item_ids: itemIds, title }),
+  });
+}
+
+export function deleteWardrobeLook(id: number) {
+  return request<boolean>(`/api/v1/wardrobe/looks/${id}`, { method: "DELETE" });
 }

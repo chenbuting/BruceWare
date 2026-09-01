@@ -28,7 +28,10 @@ export type DatabaseInfo = {
 export type LlmInfo = {
   base_url: string;
   model: string;
+  image_base_url: string;
+  image_model: string;
   has_key: boolean;
+  has_image_key: boolean;
 };
 
 export type SettingsInfo = {
@@ -42,7 +45,44 @@ export type SettingsInfo = {
 export type LlmWrite = {
   base_url: string;
   model: string;
+  image_base_url: string;
+  image_model: string;
   api_key: string;
+  image_api_key: string;
+};
+
+export type WardrobeItem = {
+  id: number;
+  name: string;
+  part: string;
+  part_label: string;
+  color: string;
+  secondary_color: string;
+  tags: string[];
+  source_name: string;
+  has_cutout: boolean;
+  has_modeled: boolean;
+  cutout_url: string;
+  modeled_url: string;
+  original_url: string;
+  created_at: string;
+};
+
+export type WardrobeLook = {
+  id: number;
+  title: string;
+  item_ids: number[];
+  image_url: string;
+  created_at: string;
+};
+
+export type WardrobeDetected = {
+  name: string;
+  part: string;
+  color: string;
+  secondaryColor: string;
+  tags: string[];
+  boundingBox: { x: number; y: number; width: number; height: number };
 };
 
 export type DatabaseWrite = {

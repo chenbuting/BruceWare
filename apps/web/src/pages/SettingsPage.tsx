@@ -33,8 +33,12 @@ export function SettingsPage() {
   const [hasPassword, setHasPassword] = useState(false);
   const [llmBase, setLlmBase] = useState("https://api.openai.com/v1");
   const [llmModel, setLlmModel] = useState("gpt-4o-mini");
+  const [llmImageBase, setLlmImageBase] = useState("");
+  const [llmImageModel, setLlmImageModel] = useState("gpt-image-1");
   const [llmKey, setLlmKey] = useState("");
+  const [llmImageKey, setLlmImageKey] = useState("");
   const [hasLlmKey, setHasLlmKey] = useState(false);
+  const [hasImageKey, setHasImageKey] = useState(false);
   const [error, setError] = useState("");
   const [hint, setHint] = useState("");
   const [busy, setBusy] = useState(false);
@@ -64,8 +68,12 @@ export function SettingsPage() {
     if (data.llm) {
       setLlmBase(data.llm.base_url || "https://api.openai.com/v1");
       setLlmModel(data.llm.model || "gpt-4o-mini");
+      setLlmImageBase(data.llm.image_base_url || "");
+      setLlmImageModel(data.llm.image_model || "gpt-image-1");
       setHasLlmKey(data.llm.has_key);
+      setHasImageKey(data.llm.has_image_key);
       setLlmKey("");
+      setLlmImageKey("");
     }
   }
 
@@ -453,20 +461,32 @@ export function SettingsPage() {
           {!managing && visibleIds.includes("ai") ? (
             <Card title="AI" className="px-5 py-4">
               <p className="text-[13px] leading-6 text-[var(--muted)]">
-                兼容 OpenAI 的接口。简历分析和模拟面试会用这里。Key 不回显，不改请留空。
+                对话和生图可以填不同地址。Key 不回显，不改请留空。生图 Key 不填就用对话的 Key。
               </p>
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 <label className="sm:col-span-2">
-                  <span className="mb-1 block text-[var(--muted)]">接口地址</span>
+                  <span className="mb-1 block text-[var(--muted)]">对话接口地址</span>
                   <input className={inputClass} value={llmBase} onChange={(e) => setLlmBase(e.target.value)} />
                 </label>
                 <label>
-                  <span className="mb-1 block text-[var(--muted)]">模型</span>
+                  <span className="mb-1 block text-[var(--muted)]">对话模型</span>
                   <input className={inputClass} value={llmModel} onChange={(e) => setLlmModel(e.target.value)} />
                 </label>
                 <label>
-                  <span className="mb-1 block text-[var(--muted)]">Key{hasLlmKey ? "（已保存，不改请留空）" : ""}</span>
+                  <span className="mb-1 block text-[var(--muted)]">对话 Key{hasLlmKey ? "（已保存，不改请留空）" : ""}</span>
                   <input className={inputClass} type="password" value={llmKey} onChange={(e) => setLlmKey(e.target.value)} />
+                </label>
+                <label className="sm:col-span-2">
+                  <span className="mb-1 block text-[var(--muted)]">生图接口地址</span>
+                  <input className={inputClass} value={llmImageBase} onChange={(e) => setLlmImageBase(e.target.value)} placeholder="不填就用上面的对话地址" />
+                </label>
+                <label>
+                  <span className="mb-1 block text-[var(--muted)]">生图模型</span>
+                  <input className={inputClass} value={llmImageModel} onChange={(e) => setLlmImageModel(e.target.value)} />
+                </label>
+                <label>
+                  <span className="mb-1 block text-[var(--muted)]">生图 Key{hasImageKey ? "（已保存，不改请留空）" : ""}</span>
+                  <input className={inputClass} type="password" value={llmImageKey} onChange={(e) => setLlmImageKey(e.target.value)} />
                 </label>
               </div>
               <div className="mt-5 flex gap-3">
@@ -478,7 +498,14 @@ export function SettingsPage() {
                     setBusy(true);
                     setError("");
                     setHint("");
-                    saveLlm({ base_url: llmBase, model: llmModel, api_key: llmKey })
+                    saveLlm({
+                      base_url: llmBase,
+                      model: llmModel,
+                      image_base_url: llmImageBase,
+                      image_model: llmImageModel,
+                      api_key: llmKey,
+                      image_api_key: llmImageKey,
+                    })
                       .then((data) => {
                         setInfo(data);
                         applyForm(data);
