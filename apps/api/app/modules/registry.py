@@ -30,11 +30,15 @@ def flag_ids(key: str) -> set[str]:
 
 
 def _id_set(repo_root, key: str) -> set[str]:
+    return set(_id_list(repo_root, key))
+
+
+def _id_list(repo_root, key: str) -> list[str]:
     stored = load_local_settings(repo_root).get("modules") or {}
     raw = stored.get(key) if isinstance(stored, dict) else []
     if not isinstance(raw, list):
-        return set()
-    return {str(item) for item in raw}
+        return []
+    return [str(item) for item in raw if str(item).strip()]
 
 
 def discover_modules() -> list[ModuleInfo]:
@@ -81,6 +85,9 @@ def discover_modules() -> list[ModuleInfo]:
                 pinned=True if kind == "common" else module_id not in unpinned,
             )
         )
+    order = _id_list(settings.repo_root, "order")
+    rank = {mid: index for index, mid in enumerate(order)}
+    items.sort(key=lambda item: (item.kind != "app", rank.get(item.id, len(rank)), item.name))
     return items
 
 

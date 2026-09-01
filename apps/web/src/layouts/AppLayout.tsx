@@ -1,8 +1,8 @@
-import { Boxes, CircleHelp, Globe, Home, PanelLeftClose, PanelLeftOpen, Settings } from "lucide-react";
+import { Boxes, CircleHelp, Globe, GripVertical, Home, PanelLeftClose, PanelLeftOpen, Settings } from "lucide-react";
 import { NavLink } from "react-router-dom";
-import { useEffect, useState, type ElementType } from "react";
+import { useEffect, useRef, useState, type ElementType } from "react";
 
-import { fetchSettings } from "@/api/client";
+import { fetchSettings, setModuleOrder } from "@/api/client";
 import type { ModuleInfo } from "@/api/types";
 import { useModules } from "@/modules/ModuleContext";
 import { Workspace } from "@/workspace/Workspace";
@@ -27,6 +27,16 @@ function moduleTo(item: ModuleInfo) {
   return item.route.startsWith("/m/") ? item.route : `/m/${item.id}`;
 }
 
+function navClass(isActive: boolean, collapsed: boolean) {
+  return `flex min-w-0 flex-1 items-center rounded-md text-[13px] ${
+    collapsed ? "justify-center px-0 py-2" : "gap-2 px-2.5 py-2"
+  } ${
+    isActive
+      ? "bg-[var(--paper)] font-medium text-[var(--text)]"
+      : "text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--text)]"
+  }`;
+}
+
 function NavItem({
   to,
   label,
@@ -41,32 +51,75 @@ function NavItem({
   collapsed: boolean;
 }) {
   return (
-    <NavLink
-      to={to}
-      end={end}
-      title={label}
-      className={({ isActive }) =>
-        `flex items-center rounded-md text-[13px] ${
-          collapsed ? "justify-center px-0 py-2" : "gap-2 px-2.5 py-2"
-        } ${
-          isActive
-            ? "bg-[var(--paper)] font-medium text-[var(--text)]"
-            : "text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--text)]"
-        }`
-      }
-    >
+    <NavLink to={to} end={end} title={label} className={({ isActive }) => navClass(isActive, collapsed)}>
       <Icon size={16} />
       {collapsed ? null : label}
     </NavLink>
   );
 }
 
+/** 右侧抓手才能拖，点名称不会误拖 */
+function DraggableNavItem({
+  to,
+  label,
+  icon: Icon,
+  collapsed,
+  dragging,
+  onDragStartItem,
+  onDropItem,
+  onDragEndItem,
+}: {
+  to: string;
+  label: string;
+  icon: ElementType;
+  collapsed: boolean;
+  dragging: boolean;
+  onDragStartItem: () => void;
+  onDropItem: () => void;
+  onDragEndItem: () => void;
+}) {
+  const rowRef = useRef<HTMLDivElement>(null);
+
+  return (
+    <div
+      ref={rowRef}
+      className={`flex items-center rounded-md ${dragging ? "opacity-50" : ""}`}
+      onDragOver={(event) => event.preventDefault()}
+      onDrop={onDropItem}
+    >
+      <NavLink to={to} title={label} className={({ isActive }) => navClass(isActive, collapsed)}>
+        <Icon size={16} />
+        {collapsed ? null : label}
+      </NavLink>
+      {collapsed ? null : (
+        <span
+          draggable
+          title="按住拖动"
+          className="shrink-0 cursor-grab px-1.5 py-2 text-[var(--muted)] hover:text-[var(--text)]"
+          onClick={(event) => event.preventDefault()}
+          onDragStart={(event) => {
+            onDragStartItem();
+            event.dataTransfer.effectAllowed = "move";
+            if (rowRef.current) {
+              event.dataTransfer.setDragImage(rowRef.current, rowRef.current.clientWidth - 8, 16);
+            }
+          }}
+          onDragEnd={onDragEndItem}
+        >
+          <GripVertical size={14} />
+        </span>
+      )}
+    </div>
+  );
+}
+
 /** 侧栏：首页 + 已开启功能 + 公共模块；设置单独放底部 */
 export function AppLayout() {
-  const { modules } = useModules();
+  const { modules, reload } = useModules();
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [dbLabel, setDbLabel] = useState("检测数据源…");
   const [connected, setConnected] = useState<boolean | null>(null);
+  const [dragId, setDragId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchSettings()
@@ -95,6 +148,23 @@ export function AppLayout() {
   const apps = modules.filter((item) => item.kind === "app" && item.enabled && item.pinned);
   const commons = modules.filter((item) => item.kind === "common");
 
+  function moveIn(group: ModuleInfo[], fromId: string, toId: string) {
+    if (fromId === toId) return;
+    if (!group.some((item) => item.id === fromId) || !group.some((item) => item.id === toId)) return;
+    const ids = group.map((item) => item.id);
+    const from = ids.indexOf(fromId);
+    const to = ids.indexOf(toId);
+    if (from < 0 || to < 0) return;
+    ids.splice(from, 1);
+    ids.splice(to, 0, fromId);
+    const isApp = group[0]?.kind === "app";
+    const appIds = isApp ? ids : apps.map((item) => item.id);
+    const commonIds = isApp ? commons.map((item) => item.id) : ids;
+    setModuleOrder([...appIds, ...commonIds])
+      .then(() => reload())
+      .catch(() => undefined);
+  }
+
   return (
     <div className="flex h-screen overflow-hidden bg-[var(--bg)] text-[var(--text)]">
       <aside
@@ -113,30 +183,44 @@ export function AppLayout() {
             {collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
           </button>
         </div>
-        <nav className={`flex-1 space-y-0.5 ${collapsed ? "px-1.5" : "px-2"}`}>
+        <nav className={`min-h-0 flex-1 space-y-0.5 overflow-y-auto ${collapsed ? "px-1.5" : "px-2"}`}>
           <NavItem to="/" label="首页" icon={Home} end collapsed={collapsed} />
           {apps.length > 0 && !collapsed ? (
             <div className="px-2.5 pb-1 pt-3 text-[11px] text-[var(--muted)]">功能</div>
           ) : null}
           {apps.map((item) => (
-            <NavItem
+            <DraggableNavItem
               key={item.id}
               to={moduleTo(item)}
               label={item.name}
               icon={MODULE_ICONS[item.id] || Globe}
               collapsed={collapsed}
+              dragging={dragId === item.id}
+              onDragStartItem={() => setDragId(item.id)}
+              onDropItem={() => {
+                if (dragId) moveIn(apps, dragId, item.id);
+                setDragId(null);
+              }}
+              onDragEndItem={() => setDragId(null)}
             />
           ))}
           {commons.length > 0 && !collapsed ? (
             <div className="px-2.5 pb-1 pt-3 text-[11px] text-[var(--muted)]">公共</div>
           ) : null}
           {commons.map((item) => (
-            <NavItem
+            <DraggableNavItem
               key={item.id}
               to={moduleTo(item)}
               label={item.name}
               icon={MODULE_ICONS[item.id] || CircleHelp}
               collapsed={collapsed}
+              dragging={dragId === item.id}
+              onDragStartItem={() => setDragId(item.id)}
+              onDropItem={() => {
+                if (dragId) moveIn(commons, dragId, item.id);
+                setDragId(null);
+              }}
+              onDragEndItem={() => setDragId(null)}
             />
           ))}
         </nav>

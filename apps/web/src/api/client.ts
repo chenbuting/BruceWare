@@ -52,6 +52,13 @@ export function setModulePinned(id: string, pinned: boolean) {
   });
 }
 
+export function setModuleOrder(ids: string[]) {
+  return request<ModuleList>("/api/v1/modules/order", {
+    method: "PUT",
+    body: JSON.stringify({ ids }),
+  });
+}
+
 export function fetchPortalLinks() {
   return request<{ items: PortalLink[] }>("/api/v1/portal/links");
 }

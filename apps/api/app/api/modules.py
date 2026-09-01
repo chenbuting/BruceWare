@@ -19,14 +19,22 @@ class ModulePinnedBody(BaseModel):
     pinned: bool
 
 
-def _save_id_set(key: str, values: set[str]) -> list[dict]:
+class ModuleOrderBody(BaseModel):
+    ids: list[str]
+
+
+def _save_id_list(key: str, values: list[str]) -> list[dict]:
     settings = get_settings()
     data = load_local_settings(settings.repo_root)
     modules = data.get("modules") if isinstance(data.get("modules"), dict) else {}
-    modules[key] = sorted(values)
+    modules[key] = values
     data["modules"] = modules
     save_local_settings(settings.repo_root, data)
     return modules_as_dicts()
+
+
+def _save_id_set(key: str, values: set[str]) -> list[dict]:
+    return _save_id_list(key, sorted(values))
 
 
 @router.get("/modules")
@@ -72,4 +80,18 @@ def set_module_pinned(module_id: str, body: ModulePinnedBody):
     else:
         unpinned.add(module_id)
     items = _save_id_set("unpinned", unpinned)
+    return ok({"items": items, "count": len(items)})
+
+
+@router.put("/modules/order")
+def set_module_order(body: ModuleOrderBody):
+    """保存侧栏功能 / 公共模块的上下顺序。"""
+
+    known = [item.id for item in discover_modules()]
+    known_set = set(known)
+    ids = [mid for mid in body.ids if mid in known_set]
+    for mid in known:
+        if mid not in ids:
+            ids.append(mid)
+    items = _save_id_list("order", ids)
     return ok({"items": items, "count": len(items)})
