@@ -86,6 +86,7 @@ export type ResumeDoc = {
   target_job: string;
   content: string;
   analysis: string;
+  intro: string;
   updated_at: string;
 };
 

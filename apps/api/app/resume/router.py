@@ -38,6 +38,7 @@ def _doc_dict(row: ResumeDoc) -> dict:
         "target_job": row.target_job or "",
         "content": row.content or "",
         "analysis": row.analysis or "",
+        "intro": getattr(row, "intro", "") or "",
         "updated_at": row.updated_at.isoformat() if row.updated_at else "",
     }
 
@@ -60,6 +61,7 @@ def create_doc(body: ResumeIn, db: Session = Depends(get_db)):
         target_job=body.target_job.strip(),
         content=body.content.strip(),
         analysis="",
+        intro="",
         updated_at=datetime.utcnow(),
     )
     db.add(row)
@@ -117,6 +119,7 @@ async def import_doc(file: UploadFile = File(...), db: Session = Depends(get_db)
         target_job=target[:200],
         content=json.dumps(form, ensure_ascii=False),
         analysis="",
+        intro="",
         updated_at=datetime.utcnow(),
     )
     db.add(row)
@@ -163,6 +166,37 @@ def analyze_doc(doc_id: int, db: Session = Depends(get_db)):
     except ValueError as exc:
         return fail(str(exc))
     row.analysis = text
+    row.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(row)
+    return ok(_doc_dict(row))
+
+
+@router.post("/resume/docs/{doc_id}/intro")
+def generate_intro(doc_id: int, db: Session = Depends(get_db)):
+    row = db.get(ResumeDoc, doc_id)
+    if row is None:
+        return fail("没有这份简历")
+    body_text = flatten_resume(row.content or "")
+    if not body_text.strip():
+        return fail("请先填写简历内容")
+    job = row.target_job.strip() or "未指定岗位"
+    prompt = (
+        "根据简历写一段中文口头自我介绍，大约1分钟，像面试开场时说出来。"
+        "用第一人称，连贯成段，不要条目、不要标题、不要括号提示。"
+        "先讲身份和求职意向，再挑一两段能证明能力的经历，最后收一句为什么适合这个岗位。\n"
+        f"目标岗位：{job}\n\n简历：\n{body_text}"
+    )
+    try:
+        text = chat_complete(
+            [
+                {"role": "system", "content": "你是面试教练，写出能直接开口说的自我介绍。"},
+                {"role": "user", "content": prompt},
+            ]
+        )
+    except ValueError as exc:
+        return fail(str(exc))
+    row.intro = text
     row.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(row)

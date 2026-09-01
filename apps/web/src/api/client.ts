@@ -140,6 +140,12 @@ export function analyzeResumeDoc(id: number) {
   });
 }
 
+export function generateResumeIntro(id: number) {
+  return request<ResumeDoc>(`/api/v1/resume/docs/${id}/intro`, {
+    method: "POST",
+  });
+}
+
 export function fetchInterview(id: number) {
   return request<InterviewSession>(`/api/v1/resume/docs/${id}/interview`);
 }

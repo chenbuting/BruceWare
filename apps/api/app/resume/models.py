@@ -17,6 +17,7 @@ class ResumeDoc(Base):
     target_job = Column(String(200), nullable=False, default="")
     content = Column(Text, nullable=False, default="")
     analysis = Column(Text, nullable=False, default="")
+    intro = Column(Text, nullable=False, default="")
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 

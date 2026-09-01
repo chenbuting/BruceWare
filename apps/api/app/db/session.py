@@ -2,7 +2,7 @@
 
 from collections.abc import Generator
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
@@ -39,6 +39,20 @@ def connect_database(url: str) -> None:
     from app.resume.models import ResumeDoc, ResumeInterview, ResumeInterviewMessage  # noqa: F401
 
     Base.metadata.create_all(bind=_Db.engine)
+    _ensure_resume_columns(_Db.engine)
+
+
+def _ensure_resume_columns(engine: Engine) -> None:
+    """旧库补上简历自我介绍字段，避免只建新表不改旧表。"""
+
+    inspector = inspect(engine)
+    if "resume_docs" not in inspector.get_table_names():
+        return
+    cols = {item["name"] for item in inspector.get_columns("resume_docs")}
+    if "intro" in cols:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE resume_docs ADD COLUMN intro TEXT DEFAULT ''"))
 
 
 def try_connect(url: str) -> tuple[bool, str]:
