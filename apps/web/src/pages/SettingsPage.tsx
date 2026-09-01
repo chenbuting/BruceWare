@@ -177,6 +177,7 @@ export function SettingsPage() {
 
       <div className="flex flex-col gap-4 md:flex-row md:items-start">
         <nav className="flex shrink-0 flex-col gap-1 md:w-44">
+          <div className="px-3 pb-1 text-[11px] text-[var(--muted)]">分类</div>
           {layout.categories.map((item) => (
             <button
               key={item.id}
@@ -193,16 +194,18 @@ export function SettingsPage() {
               {item.label || "未命名"}
             </button>
           ))}
-          <button
-            type="button"
-            className="mt-2 px-3 py-2 text-left text-[13px] text-[var(--muted)] hover:text-[var(--text)]"
-            onClick={() => setManaging((prev) => !prev)}
-          >
-            {managing ? "完成" : "编辑归类"}
-          </button>
         </nav>
 
         <div className="min-w-0 flex-1 space-y-4">
+          <div className="flex justify-end">
+            <button
+              type="button"
+              className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px]"
+              onClick={() => setManaging((prev) => !prev)}
+            >
+              {managing ? "完成" : "编辑归类"}
+            </button>
+          </div>
           {managing ? (
             <Card title="编辑归类" className="px-5 py-4">
               <div className="text-[13px] font-medium">分类</div>
