@@ -177,76 +177,85 @@ export function SettingsPage() {
 
       <div className="flex flex-col gap-4 md:flex-row md:items-start">
         <nav className="flex shrink-0 flex-col gap-1 md:w-44">
-          {layout.categories.map((item, index) =>
-            managing ? (
-              <div key={item.id} className="flex items-center gap-1">
-                <input
-                  className="min-w-0 flex-1 border border-[var(--line)] bg-[var(--paper)] px-2 py-1 text-[13px]"
-                  value={item.label}
-                  onChange={(e) => renameCategory(item.id, e.target.value)}
-                  onBlur={(e) => renameCategory(item.id, e.target.value, true)}
-                />
-                <button type="button" className="px-1 text-[var(--muted)]" title="上移" disabled={index === 0} onClick={() => moveCategory(item.id, -1)}>
-                  ↑
-                </button>
-                <button
-                  type="button"
-                  className="px-1 text-[var(--muted)]"
-                  title="下移"
-                  disabled={index === layout.categories.length - 1}
-                  onClick={() => moveCategory(item.id, 1)}
-                >
-                  ↓
-                </button>
-                <button
-                  type="button"
-                  className="px-1 text-[var(--err)]"
-                  title="删除"
-                  disabled={layout.categories.length <= 1}
-                  onClick={() => removeCategory(item.id)}
-                >
-                  ×
-                </button>
-              </div>
-            ) : (
-              <button
-                key={item.id}
-                type="button"
-                className={`rounded-md px-3 py-2 text-left text-[13px] ${
-                  currentId === item.id ? "bg-[var(--paper)] font-medium" : "text-[var(--muted)] hover:bg-[var(--hover)]"
-                }`}
-                onClick={() => {
-                  setCategoryId(item.id);
-                  setError("");
-                  setHint("");
-                }}
-              >
-                {item.label}
-              </button>
-            ),
-          )}
-          <div className="mt-2 flex flex-wrap gap-2">
-            <button type="button" className="text-[13px] text-[var(--muted)] hover:text-[var(--text)]" onClick={() => setManaging((prev) => !prev)}>
-              {managing ? "完成" : "编辑归类"}
+          {layout.categories.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={`rounded-md px-3 py-2 text-left text-[13px] ${
+                currentId === item.id ? "bg-[var(--paper)] font-medium" : "text-[var(--muted)] hover:bg-[var(--hover)]"
+              }`}
+              onClick={() => {
+                setCategoryId(item.id);
+                setError("");
+                setHint("");
+              }}
+            >
+              {item.label || "未命名"}
             </button>
-            {managing ? (
-              <button type="button" className="text-[13px] text-[var(--muted)] hover:text-[var(--text)]" onClick={addCategory}>
-                新增分类
-              </button>
-            ) : null}
-          </div>
+          ))}
+          <button
+            type="button"
+            className="mt-2 px-3 py-2 text-left text-[13px] text-[var(--muted)] hover:text-[var(--text)]"
+            onClick={() => setManaging((prev) => !prev)}
+          >
+            {managing ? "完成" : "编辑归类"}
+          </button>
         </nav>
 
         <div className="min-w-0 flex-1 space-y-4">
           {managing ? (
-            <Card title="把内容放到分类里" className="px-5 py-4">
-              <p className="mb-3 text-[13px] leading-6 text-[var(--muted)]">每项设置选一个分类。一个分类里可以放多项。</p>
-              <ul className="space-y-3">
+            <Card title="编辑归类" className="px-5 py-4">
+              <div className="text-[13px] font-medium">分类</div>
+              <div className="mt-2 divide-y divide-[var(--line)]">
+                {layout.categories.map((item, index) => (
+                  <div key={item.id} className="flex flex-col gap-2 py-3 first:pt-0 last:pb-0 sm:flex-row sm:items-center">
+                    <input
+                      className={`${inputClass} sm:flex-1`}
+                      value={item.label}
+                      onChange={(e) => renameCategory(item.id, e.target.value)}
+                      onBlur={(e) => renameCategory(item.id, e.target.value, true)}
+                    />
+                    <div className="flex shrink-0 gap-3 text-[13px]">
+                      <button
+                        type="button"
+                        className="text-[var(--muted)] hover:text-[var(--text)] disabled:opacity-40"
+                        disabled={index === 0}
+                        onClick={() => moveCategory(item.id, -1)}
+                      >
+                        上移
+                      </button>
+                      <button
+                        type="button"
+                        className="text-[var(--muted)] hover:text-[var(--text)] disabled:opacity-40"
+                        disabled={index === layout.categories.length - 1}
+                        onClick={() => moveCategory(item.id, 1)}
+                      >
+                        下移
+                      </button>
+                      <button
+                        type="button"
+                        className="text-[var(--err)] disabled:opacity-40"
+                        disabled={layout.categories.length <= 1}
+                        onClick={() => removeCategory(item.id)}
+                      >
+                        删除
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <button type="button" className="mt-1 border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5" onClick={addCategory}>
+                新增分类
+              </button>
+
+              <div className="mt-6 border-t border-[var(--line)] pt-4 text-[13px] font-medium">设置项放到哪</div>
+              <p className="mt-1 text-[13px] leading-6 text-[var(--muted)]">选好分类后点左边「完成」，再点分类就能看到。</p>
+              <div className="mt-2 divide-y divide-[var(--line)]">
                 {SETTING_ITEMS.map((item) => {
                   const place = layout.items.find((row) => row.id === item.id);
                   return (
-                    <li key={item.id} className="flex items-center gap-3">
-                      <span className="w-16 shrink-0">{item.label}</span>
+                    <div key={item.id} className="grid grid-cols-[4.5rem_minmax(0,1fr)] items-center gap-4 py-3 first:pt-0 last:pb-0">
+                      <span className="text-[13px]">{item.label}</span>
                       <select
                         className={inputClass}
                         value={place?.categoryId || currentId}
@@ -258,10 +267,10 @@ export function SettingsPage() {
                           </option>
                         ))}
                       </select>
-                    </li>
+                    </div>
                   );
                 })}
-              </ul>
+              </div>
             </Card>
           ) : null}
 
