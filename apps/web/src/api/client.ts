@@ -11,12 +11,14 @@ import type {
 
 /** 请求后端，失败时抛出中文错误 */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers || {});
+  const isForm = typeof FormData !== "undefined" && init?.body instanceof FormData;
+  if (init?.body && !isForm && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
   const res = await fetch(path, {
     ...init,
-    headers: {
-      ...(init?.body ? { "Content-Type": "application/json" } : {}),
-      ...(init?.headers || {}),
-    },
+    headers,
   });
   const body = (await res.json()) as ApiResult<T>;
   if (!res.ok || !body.ok) {
@@ -153,4 +155,51 @@ export function replyInterview(id: number, content: string) {
     method: "POST",
     body: JSON.stringify({ content }),
   });
+}
+
+export function importResumeDoc(file: File) {
+  const body = new FormData();
+  body.append("file", file);
+  return request<ResumeDoc>("/api/v1/resume/docs/import", {
+    method: "POST",
+    body,
+  });
+}
+
+function filenameFrom(res: Response, fallback: string) {
+  const header = res.headers.get("Content-Disposition") || "";
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(header);
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded[1]);
+    } catch {
+      /* 用后备名 */
+    }
+  }
+  const plain = /filename="?([^";]+)"?/i.exec(header);
+  if (plain?.[1] && plain[1] !== "resume.docx") return plain[1];
+  return fallback.endsWith(".docx") ? fallback : `${fallback}.docx`;
+}
+
+export async function downloadResumeDoc(id: number, filename: string) {
+  const res = await fetch(`/api/v1/resume/docs/${id}/export`);
+  if (!res.ok) {
+    let message = "导出失败";
+    try {
+      const body = (await res.json()) as ApiResult<null>;
+      message = body.message || message;
+    } catch {
+      /* 不是 JSON */
+    }
+    throw new Error(message);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filenameFrom(res, filename);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }

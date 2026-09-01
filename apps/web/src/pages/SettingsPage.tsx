@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { fetchSettings, saveDatabase, saveLlm, testDatabase, testLlm } from "@/api/client";
 import type { DatabaseWrite, SettingsInfo } from "@/api/types";
 import { Card } from "@/components/Card";
+import { ConfirmModal } from "@/components/Modal";
 import { PageFrame } from "@/components/PageFrame";
 import {
   loadLayout,
@@ -20,6 +21,7 @@ export function SettingsPage() {
   const [layout, setLayout] = useState<SettingsLayout>(() => loadLayout());
   const [categoryId, setCategoryId] = useState(() => loadLayout().categories[0]?.id || "");
   const [managing, setManaging] = useState(false);
+  const [deleteCategoryId, setDeleteCategoryId] = useState<string | null>(null);
   const [info, setInfo] = useState<SettingsInfo | null>(null);
   const [mode, setMode] = useState<DatabaseWrite["mode"]>("local");
   const [sqlitePath, setSqlitePath] = useState("./data/bruceware.db");
@@ -239,7 +241,7 @@ export function SettingsPage() {
                         type="button"
                         className="text-[var(--err)] disabled:opacity-40"
                         disabled={layout.categories.length <= 1}
-                        onClick={() => removeCategory(item.id)}
+                        onClick={() => setDeleteCategoryId(item.id)}
                       >
                         删除
                       </button>
@@ -440,6 +442,18 @@ export function SettingsPage() {
           ) : null}
         </div>
       </div>
+
+      {deleteCategoryId ? (
+        <ConfirmModal
+          title="删除分类"
+          message="这个分类里的设置会移到其他分类。确定删除？"
+          onConfirm={() => {
+            removeCategory(deleteCategoryId);
+            setDeleteCategoryId(null);
+          }}
+          onClose={() => setDeleteCategoryId(null)}
+        />
+      ) : null}
     </PageFrame>
   );
 }

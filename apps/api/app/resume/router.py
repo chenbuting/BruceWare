@@ -1,8 +1,12 @@
 """简历：保存、AI 分析、打字模拟面试。"""
 
+import json
 from datetime import datetime
+from pathlib import Path
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -10,7 +14,9 @@ from sqlalchemy.orm import Session
 from app.core.ai import chat_complete
 from app.core.response import fail, ok
 from app.db.session import get_db
+from app.resume.docx_io import build_docx, parse_docx
 from app.resume.models import ResumeDoc, ResumeInterview, ResumeInterviewMessage
+from app.resume.text import flatten_resume
 
 router = APIRouter()
 
@@ -76,6 +82,49 @@ def update_doc(doc_id: int, body: ResumeIn, db: Session = Depends(get_db)):
     return ok(_doc_dict(row))
 
 
+@router.get("/resume/docs/{doc_id}/export")
+def export_doc(doc_id: int, db: Session = Depends(get_db)):
+    row = db.get(ResumeDoc, doc_id)
+    if row is None:
+        return fail("没有这份简历")
+    data = build_docx(row.title, row.content or "")
+    filename = f"{(row.title or '简历').strip() or '简历'}.docx"
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={
+            "Content-Disposition": f"attachment; filename=\"resume.docx\"; filename*=UTF-8''{quote(filename)}",
+        },
+    )
+
+
+@router.post("/resume/docs/import")
+async def import_doc(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    name = (file.filename or "").strip()
+    if name.startswith("~$") or not name.lower().endswith(".docx"):
+        return fail("请上传 Word（.docx）")
+    raw = await file.read()
+    if not raw:
+        return fail("文件是空的")
+    try:
+        form = parse_docx(raw)
+    except Exception:
+        return fail("这个 Word 读不出来，请用充实版这类 .docx")
+    title = str(form.get("basic", {}).get("name") or Path(name).stem or "导入的简历").strip()
+    target = str(form.get("basic", {}).get("target_job") or "").strip()
+    row = ResumeDoc(
+        title=title[:200] or "导入的简历",
+        target_job=target[:200],
+        content=json.dumps(form, ensure_ascii=False),
+        analysis="",
+        updated_at=datetime.utcnow(),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return ok(_doc_dict(row))
+
+
 @router.delete("/resume/docs/{doc_id}")
 def delete_doc(doc_id: int, db: Session = Depends(get_db)):
     row = db.get(ResumeDoc, doc_id)
@@ -95,13 +144,14 @@ def analyze_doc(doc_id: int, db: Session = Depends(get_db)):
     row = db.get(ResumeDoc, doc_id)
     if row is None:
         return fail("没有这份简历")
-    if not (row.content or "").strip():
+    body_text = flatten_resume(row.content or "")
+    if not body_text.strip():
         return fail("请先填写简历内容")
     job = row.target_job.strip() or "未指定"
     prompt = (
         "你是资深招聘顾问。根据简历给出中文分析，分三块：优点、风险/不足、可改的具体建议。"
         "每块用短句条目，不要空话。\n"
-        f"目标岗位：{job}\n\n简历：\n{row.content}"
+        f"目标岗位：{job}\n\n简历：\n{body_text}"
     )
     try:
         text = chat_complete(
@@ -156,14 +206,15 @@ def start_interview(doc_id: int, db: Session = Depends(get_db)):
     row = db.get(ResumeDoc, doc_id)
     if row is None:
         return fail("没有这份简历")
-    if not (row.content or "").strip():
+    body_text = flatten_resume(row.content or "")
+    if not body_text.strip():
         return fail("请先填写简历内容")
     job = row.target_job.strip() or "未指定岗位"
     system = (
         "你是面试官，用中文进行一轮打字模拟面试。"
         "每次只问一个问题，根据简历和对方回答追问。"
         "对方说结束或你认为问得差不多时，给简短总评。"
-        f"目标岗位：{job}\n简历：\n{row.content}"
+        f"目标岗位：{job}\n简历：\n{body_text}"
     )
     try:
         first = chat_complete(

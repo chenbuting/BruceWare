@@ -16,10 +16,14 @@ venv/
 .pytest_cache/
 *.log
 
-# 本地数据
+# 本地数据（含导入的简历内容）
 data/
 *.db
 *.sqlite3
+*.docx
+
+# 浏览器验证残留
+.playwright-cli/
 
 # Node / 前端
 node_modules/

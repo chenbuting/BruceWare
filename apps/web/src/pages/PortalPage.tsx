@@ -2,19 +2,32 @@ import { useEffect, useState, type FormEvent } from "react";
 
 import { createPortalLink, deletePortalLink, fetchPortalLinks, updatePortalLink } from "@/api/client";
 import type { PortalLink } from "@/api/types";
-import { Card } from "@/components/Card";
+import { Modal } from "@/components/Modal";
 
 const inputClass = "w-full border border-[var(--line)] bg-[var(--paper)] px-2 py-1.5";
 
 const emptyForm = { title: "", url: "", remark: "" };
 
-/** 网站入口：收藏常用网站 */
+function hostOf(url: string) {
+  try {
+    return new URL(url).host.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+/** 网站入口：先看站点，新增编辑用弹框 */
 export function PortalPage() {
   const [items, setItems] = useState<PortalLink[]>([]);
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [error, setError] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [deleteId, setDeleteId] = useState<number | null>(null);
+  const [notice, setNotice] = useState("");
+  const [formError, setFormError] = useState("");
   const [busy, setBusy] = useState(false);
+
+  const showForm = adding || editingId !== null;
 
   async function reload() {
     const data = await fetchPortalLinks();
@@ -22,13 +35,13 @@ export function PortalPage() {
   }
 
   useEffect(() => {
-    reload().catch((err: Error) => setError(err.message));
+    reload().catch((err: Error) => setNotice(err.message));
   }, []);
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
-    setError("");
+    setFormError("");
     try {
       if (editingId === null) {
         await createPortalLink(form);
@@ -37,110 +50,169 @@ export function PortalPage() {
       }
       setForm(emptyForm);
       setEditingId(null);
+      setAdding(false);
       await reload();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "保存失败");
+      setFormError(err instanceof Error ? err.message : "保存失败");
     } finally {
       setBusy(false);
     }
   }
 
-  async function onDelete(id: number) {
-    if (!window.confirm("删除这条收藏？")) return;
-    setError("");
+  async function confirmDelete() {
+    if (deleteId === null) return;
+    setBusy(true);
     try {
-      await deletePortalLink(id);
-      if (editingId === id) {
+      await deletePortalLink(deleteId);
+      if (editingId === deleteId) {
         setEditingId(null);
         setForm(emptyForm);
+        setAdding(false);
       }
+      setDeleteId(null);
       await reload();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "删除失败");
+      setNotice(err instanceof Error ? err.message : "删除失败");
+      setDeleteId(null);
+    } finally {
+      setBusy(false);
     }
   }
 
   function startEdit(item: PortalLink) {
+    setFormError("");
+    setAdding(false);
     setEditingId(item.id);
     setForm({ title: item.title, url: item.url, remark: item.remark });
   }
 
-  function cancelEdit() {
+  function startAdd() {
+    setFormError("");
     setEditingId(null);
     setForm(emptyForm);
+    setAdding(true);
+  }
+
+  function cancelForm() {
+    setEditingId(null);
+    setAdding(false);
+    setForm(emptyForm);
+    setFormError("");
   }
 
   return (
     <>
-      {error ? <p className="mb-4 text-[var(--err)]">{error}</p> : null}
+      <div className="mb-4 flex justify-end">
+        <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px]" onClick={startAdd}>
+          添加
+        </button>
+      </div>
 
-      <Card title={editingId === null ? "收藏" : "编辑收藏"} className="px-5 py-4">
-        <form className="grid gap-3 sm:grid-cols-[1fr_1.4fr_1fr_auto] sm:items-end" onSubmit={onSubmit}>
-          <label>
-            <span className="mb-1 block text-[var(--muted)]">名称</span>
-            <input
-              className={inputClass}
-              value={form.title}
-              onChange={(e) => setForm({ ...form, title: e.target.value })}
-              required
-            />
-          </label>
-          <label>
-            <span className="mb-1 block text-[var(--muted)]">网址</span>
-            <input
-              className={inputClass}
-              value={form.url}
-              onChange={(e) => setForm({ ...form, url: e.target.value })}
-              placeholder="https://"
-              required
-            />
-          </label>
-          <label>
-            <span className="mb-1 block text-[var(--muted)]">备注</span>
-            <input
-              className={inputClass}
-              value={form.remark}
-              onChange={(e) => setForm({ ...form, remark: e.target.value })}
-            />
-          </label>
-          <div className="flex gap-3">
-            <button type="submit" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy}>
-              {editingId === null ? "添加" : "保存"}
-            </button>
-            {editingId !== null ? (
-              <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5" onClick={cancelEdit}>
-                取消
-              </button>
-            ) : null}
-          </div>
-        </form>
-
-        {items.length === 0 ? (
-          <p className="mt-5 text-[13px] leading-6 text-[var(--muted)]">还没有收藏。</p>
-        ) : (
-          <ul className="mt-5 divide-y divide-[var(--line)]">
-            {items.map((item) => (
-              <li key={item.id} className="flex flex-wrap items-baseline justify-between gap-3 py-3 first:pt-0 last:pb-0">
-                <div className="min-w-0">
-                  <a href={item.url} target="_blank" rel="noreferrer" className="underline">
-                    {item.title}
+      {items.length === 0 ? (
+        <p className="text-[13px] leading-6 text-[var(--muted)]">还没有网站。点右上角添加。</p>
+      ) : (
+        <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {items.map((item) => {
+            const host = hostOf(item.url);
+            return (
+              <li key={item.id}>
+                <div className="group card relative px-5 py-5">
+                  <a href={item.url} target="_blank" rel="noreferrer" className="block pr-16">
+                    <div className="text-[15px] font-medium">{item.title}</div>
+                    <div className="mt-1.5 text-[13px] leading-6 text-[var(--muted)]">{item.remark || host || item.url}</div>
                   </a>
-                  <div className="mt-1 break-all text-[13px] text-[var(--muted)]">{item.url}</div>
-                  {item.remark ? <div className="mt-0.5 text-[13px] text-[var(--muted)]">{item.remark}</div> : null}
-                </div>
-                <div className="flex gap-3 text-[13px] text-[var(--muted)]">
-                  <button type="button" onClick={() => startEdit(item)}>
-                    编辑
-                  </button>
-                  <button type="button" onClick={() => onDelete(item.id)}>
-                    删除
-                  </button>
+                  <div className="absolute right-4 top-5 flex gap-3 text-[13px] text-[var(--muted)] opacity-50 group-hover:opacity-100">
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        startEdit(item);
+                      }}
+                    >
+                      编辑
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        setDeleteId(item.id);
+                      }}
+                    >
+                      删除
+                    </button>
+                  </div>
                 </div>
               </li>
-            ))}
-          </ul>
-        )}
-      </Card>
+            );
+          })}
+        </ul>
+      )}
+
+      {showForm ? (
+        <Modal title={editingId === null ? "添加网站" : "编辑网站"} onClose={cancelForm}>
+          {formError ? <p className="mb-3 text-[13px] text-[var(--err)]">{formError}</p> : null}
+          <form className="space-y-3" onSubmit={onSubmit}>
+            <label className="block">
+              <span className="mb-1 block text-[var(--muted)]">名称</span>
+              <input
+                className={inputClass}
+                value={form.title}
+                onChange={(e) => setForm({ ...form, title: e.target.value })}
+                required
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-[var(--muted)]">网址</span>
+              <input
+                className={inputClass}
+                value={form.url}
+                onChange={(e) => setForm({ ...form, url: e.target.value })}
+                placeholder="https://"
+                required
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-[var(--muted)]">备注（可选）</span>
+              <input
+                className={inputClass}
+                value={form.remark}
+                onChange={(e) => setForm({ ...form, remark: e.target.value })}
+              />
+            </label>
+            <div className="flex gap-3 pt-1">
+              <button type="submit" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy}>
+                {editingId === null ? "添加" : "保存"}
+              </button>
+              <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5" onClick={cancelForm}>
+                取消
+              </button>
+            </div>
+          </form>
+        </Modal>
+      ) : null}
+
+      {deleteId !== null ? (
+        <Modal title="删除收藏" onClose={() => setDeleteId(null)}>
+          <p className="text-[13px] leading-6 text-[var(--muted)]">删掉后不能恢复。确定删除？</p>
+          <div className="mt-4 flex gap-3">
+            <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy} onClick={() => void confirmDelete()}>
+              删除
+            </button>
+            <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5" onClick={() => setDeleteId(null)}>
+              取消
+            </button>
+          </div>
+        </Modal>
+      ) : null}
+
+      {notice ? (
+        <Modal title="提示" onClose={() => setNotice("")}>
+          <p className="text-[13px] leading-6 text-[var(--muted)]">{notice}</p>
+          <button type="button" className="mt-4 border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5" onClick={() => setNotice("")}>
+            知道了
+          </button>
+        </Modal>
+      ) : null}
     </>
   );
 }
