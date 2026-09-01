@@ -116,10 +116,14 @@ def _garment_prompt(item: dict[str, Any]) -> str:
     )
 
 
-def _style_line(name: str) -> str:
+def _style_line(name: str, image_no: int = 0) -> str:
     if not name:
         return ""
-    return f"整体气质、场景和光线要像{name}的品牌风格参考图，不要复制参考图里的人脸、衣服、logo 和文字。"
+    where = f"第{image_no}张" if image_no else "最后一张"
+    return (
+        f"只学习{where}「{name}」风格参考图的光线、拍摄场景和类似姿势（站姿、手的位置、看向哪里）。"
+        "不要复制风格图里的人脸、身材、衣服件数、衣服款式、logo 和文字。"
+    )
 
 
 def _single_shot() -> str:
@@ -128,25 +132,35 @@ def _single_shot() -> str:
 
 def _modeled_prompt(item: dict[str, Any], style_name: str = "") -> str:
     name = item.get("name") or "这件衣服"
-    extra = _style_line(style_name)
+    extra = _style_line(style_name, 3 if style_name else 0)
     return (
         "用第一张图的人，穿上第二张图那件衣服，拍一张真实的时尚照片。"
         f"人脸、发型、年龄、身材要像第一张；衣服要完全是第二张这件{name}，颜色和细节不能改。"
         f"{extra}"
         f"{_single_shot()}"
-        "衣服要完整露出来，配简单的其它衣服，自然光，真实场景。不要文字、水印。"
+        "衣服要完整露出来。不要文字、水印。"
     )
 
 
-def _outfit_prompt(names: list[str], style_name: str = "") -> str:
-    joined = "、".join(names)
-    extra = _style_line(style_name)
+def _outfit_prompt(clothes: list[dict[str, Any]], style_name: str = "") -> str:
+    lines = []
+    tops = 0
+    for index, item in enumerate(clothes, start=2):
+        part = PART_LABELS.get(item.get("part") or "", "衣服")
+        name = item.get("name") or "衣服"
+        lines.append(f"第{index}张图是{part}「{name}」，必须按这张图原样穿上，颜色和细节不能改。")
+        if item.get("part") in ("upperbody", "wholebody_up"):
+            tops += 1
+    extra = _style_line(style_name, 2 + len(clothes) if style_name else 0)
+    layer = "上装有两件或以上时必须叠穿，内搭和外衣都要看得见，禁止合成一件。" if tops >= 2 else ""
     return (
-        "用第一张图的人，穿上后面几张图里的衣服，拍一套完整造型。"
-        f"衣服是：{joined}。人脸要像第一张，衣服颜色和细节按参考图，不要乱改。"
-        f"{extra}"
-        f"{_single_shot()}"
-        "全身能看清搭配，真实场景，自然光。不要文字、水印。"
+        "用第一张图的人，同时穿上后面每张衣服图里的衣服，拍一套完整造型。"
+        + "".join(lines)
+        + "选了几件就要穿几件，一件都不能少，也不能把两件合成一件。"
+        + layer
+        + extra
+        + _single_shot()
+        + "人脸要像第一张。全身能看清搭配。不要文字、水印、logo。"
     )
 
 
@@ -171,7 +185,7 @@ def _style_refs(db: Session) -> tuple[str, list[bytes]]:
     row = _active_style(db)
     if row is None:
         return "", []
-    files = list_style_files(row.id)[:2]
+    files = list_style_files(row.id)[:1]
     return row.name or "", [path.read_bytes() for path in files]
 
 
@@ -326,7 +340,7 @@ def remake_modeled(item_id: int, db: Session = Depends(get_db)):
         modeled = image_edit(
             _modeled_prompt({"name": row.name}),
             [ref.read_bytes(), cutout.read_bytes()],
-            size="1024x1536",
+            size="1024x1024",
         )
     except ValueError:
         try:
@@ -356,23 +370,20 @@ def make_look(body: LookIn, db: Session = Depends(get_db)):
         return fail("有衣服找不到了")
     style_name, style_bytes = _style_refs(db)
     images = [ref.read_bytes()]
-    names = []
-    clothes_limit = 3 if style_bytes else 4
-    for row in rows[:clothes_limit]:
+    clothes: list[dict[str, Any]] = []
+    for row in rows[:3]:
         cutout = item_dir(row.id) / "cutout.png"
         if not cutout.is_file():
             return fail(f"{row.name} 还没有单件图")
         images.append(cutout.read_bytes())
-        names.append(row.name)
-    images.extend(style_bytes)
-    prompt = _modeled_prompt({"name": names[0]}, style_name) if len(names) == 1 else _outfit_prompt(names, style_name)
+        clothes.append({"name": row.name, "part": row.part})
+    images.extend(style_bytes[:1])
+    names = [item["name"] for item in clothes]
+    prompt = _modeled_prompt({"name": names[0]}, style_name) if len(clothes) == 1 else _outfit_prompt(clothes, style_name)
     try:
-        picture = image_edit(prompt, images[:5], size="1024x1536")
-    except ValueError:
-        try:
-            picture = image_edit(prompt, images[:5])
-        except ValueError as exc:
-            return fail(str(exc))
+        picture = image_edit(prompt, images, size="1024x1024", timeout=180)
+    except ValueError as exc:
+        return fail(str(exc))
     title = body.title.strip() or "、".join(names)
     if style_name and style_name not in title:
         title = f"{title} · {style_name}"

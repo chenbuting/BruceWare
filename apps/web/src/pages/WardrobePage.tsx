@@ -220,7 +220,7 @@ export function WardrobePage() {
     }
     setBusy(true);
     setError("");
-    setHint("正在生成效果图，完成后会放到搭配");
+    setHint("正在生成效果图，大约一两分钟，请不要重复点");
     try {
       await createWardrobeLook(ids, "");
       const data = await fetchWardrobeLooks();
@@ -250,7 +250,7 @@ export function WardrobePage() {
           )}
           <div className="min-w-0 flex-1 text-[13px] text-[var(--muted)]">
             先放一张自己的照片，试穿才会像你。
-            {activeStyleName ? ` 当前风格：${activeStyleName}。` : " 去「风格」上传品牌图，试穿会跟着学。"}
+            {activeStyleName ? ` 当前风格：${activeStyleName}（学光线、场景、姿势）。` : " 去「风格」上传品牌图，试穿会学它的光线、场景和姿势。"}
             单件图可以直接加入。
           </div>
           <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy} onClick={() => selfRef.current?.click()}>
@@ -352,7 +352,7 @@ export function WardrobePage() {
       {tab === "styles" ? (
         <div className="space-y-4">
           <Card title="学一个品牌风格" className="px-5 py-4">
-            <p className="text-[13px] text-[var(--muted)]">上传 1～4 张品牌图（海报、lookbook 都行）。生成试穿时会跟着当前选中的风格走。</p>
+            <p className="text-[13px] text-[var(--muted)]">上传 1～4 张品牌图。试穿只学它的光线、场景和类似姿势，衣服还是用你在衣橱里选的。</p>
             <label className="mt-3 block text-[13px]">
               <span className="mb-1 block text-[var(--muted)]">品牌名</span>
               <input className="w-full max-w-xs border border-[var(--line)] bg-[var(--paper)] px-2 py-1.5" value={styleName} onChange={(e) => setStyleName(e.target.value)} placeholder="比如 COS、优衣库" />
@@ -470,7 +470,7 @@ export function WardrobePage() {
           <Card className="mb-4 px-5 py-4">
             <p className="text-[13px] text-[var(--muted)]">
               在衣橱里点「选来搭配」，一件就能试穿，多件就是整套。
-              {activeStyleName ? ` 会按「${activeStyleName}」的风格来。` : ""}
+              {activeStyleName ? ` 会学「${activeStyleName}」的光线、场景和姿势，衣服用你选的。` : ""}
             </p>
             <div className="mt-3 text-[13px]">已选 {picked.length} 件</div>
             <button type="button" className="mt-3 border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy || picked.length < 1} onClick={() => void onTryOn(picked)}>

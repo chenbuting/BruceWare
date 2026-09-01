@@ -57,15 +57,13 @@ def _post(
     raise ValueError(f"AI 请求失败：{last}") from last
 
 
-def _shrink_image(data: bytes, max_side: int = 1280) -> bytes:
-    """缩小参考图，减少中转站传大图时 SSL 被掐断。"""
+def _shrink_image(data: bytes, max_side: int = 768) -> bytes:
+    """压成较小 JPEG，生图少超时。"""
     try:
-        image = Image.open(BytesIO(data))
+        image = Image.open(BytesIO(data)).convert("RGB")
         image.thumbnail((max_side, max_side))
-        if image.mode not in ("RGB", "RGBA"):
-            image = image.convert("RGBA" if "A" in image.getbands() else "RGB")
         buf = BytesIO()
-        image.save(buf, format="PNG", optimize=True)
+        image.save(buf, format="JPEG", quality=78)
         return buf.getvalue()
     except Exception:
         return data
@@ -156,21 +154,24 @@ def _images_root(base_url: str) -> str:
     return f"{url}/v1"
 
 
-def image_edit(prompt: str, images: list[bytes], size: str = "1024x1024", timeout: float = 120) -> bytes:
+def image_edit(prompt: str, images: list[bytes], size: str = "1024x1024", timeout: float = 180) -> bytes:
     """按参考图改图 / 生图，走兼容 OpenAI 的 images 接口。"""
 
     base_url, api_key, model = _image_auth()
     root = _images_root(base_url)
     headers = {"Authorization": f"Bearer {api_key}"}
     files: list[tuple[str, tuple[str, bytes, str]]] = []
-    for index, raw in enumerate(images):
-        files.append(("image[]", (f"ref-{index + 1}.png", _shrink_image(raw), "image/png")))
-    data = {"model": model, "prompt": prompt, "size": size, "response_format": "b64_json"}
+    for index, raw in enumerate(images[:4]):
+        files.append(("image[]", (f"ref-{index + 1}.jpg", _shrink_image(raw), "image/jpeg")))
+    sizes: list[str] = []
+    for item in (size, "1024x1024"):
+        if item and item not in sizes:
+            sizes.append(item)
     last_error = ""
-    for extra in ({}, {"quality": "high"}):
-        payload = {**data, **extra}
+    for current in sizes:
+        data = {"model": model, "prompt": prompt, "size": current, "response_format": "b64_json"}
         try:
-            res = _post(f"{root}/images/edits", timeout=timeout, data=payload, files=files, headers=headers)
+            res = _post(f"{root}/images/edits", timeout=timeout, data=data, files=files, headers=headers)
         except Exception as exc:
             last_error = str(exc)
             continue
@@ -180,6 +181,7 @@ def image_edit(prompt: str, images: list[bytes], size: str = "1024x1024", timeou
         if res.status_code != 400:
             break
     files_single = [("image", (name, blob, mime)) for _, (name, blob, mime) in files]
+    data = {"model": model, "prompt": prompt, "size": "1024x1024", "response_format": "b64_json"}
     try:
         res = _post(f"{root}/images/edits", timeout=timeout, data=data, files=files_single, headers=headers)
         if res.status_code < 400:
@@ -187,7 +189,7 @@ def image_edit(prompt: str, images: list[bytes], size: str = "1024x1024", timeou
         last_error = res.text[:300]
     except Exception as exc:
         last_error = str(exc)
-    raise ValueError(f"生图失败：{last_error or '接口不可用'}。请在设置里确认生图模型。")
+    raise ValueError(f"生图失败：{last_error or '接口不可用'}。请再试一次，或先关掉风格少传几张图。")
 
 
 def image_generate(prompt: str, size: str = "1024x1024", timeout: float = 120) -> bytes:
