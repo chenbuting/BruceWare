@@ -161,7 +161,7 @@ def image_edit(prompt: str, images: list[bytes], size: str = "1024x1024", timeou
     root = _images_root(base_url)
     headers = {"Authorization": f"Bearer {api_key}"}
     files: list[tuple[str, tuple[str, bytes, str]]] = []
-    for index, raw in enumerate(images[:4]):
+    for index, raw in enumerate(images[:5]):
         files.append(("image[]", (f"ref-{index + 1}.jpg", _shrink_image(raw), "image/jpeg")))
     sizes: list[str] = []
     for item in (size, "1024x1024"):

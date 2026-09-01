@@ -116,10 +116,9 @@ def _garment_prompt(item: dict[str, Any]) -> str:
     )
 
 
-def _style_line(name: str, image_no: int = 0, desc: dict[str, str] | None = None) -> str:
-    if not name:
+def _style_line(name: str, desc: dict[str, str] | None = None) -> str:
+    if not name and not desc:
         return ""
-    where = f"第{image_no}张" if image_no else "第2张"
     bits = []
     if desc:
         if desc.get("lighting"):
@@ -131,12 +130,13 @@ def _style_line(name: str, image_no: int = 0, desc: dict[str, str] | None = None
         if desc.get("framing"):
             bits.append(f"构图要{desc['framing']}")
     detail = "；".join(bits)
+    label = f"「{name}」" if name else ""
     return (
-        f"{where}是拍摄风格参考，只学光线、场景、姿势和构图。"
+        f"拍摄风格按{label}只学光线、场景、姿势和构图。"
         + (detail + "。" if detail else "")
-        + "必须和风格图一样：白棚就白棚，平光就平光，半身就半身。"
-        "禁止自己加房间、窗影、家具、书架、地面装饰。"
-        "不要复制风格图里的人脸、衣服、logo 和文字。"
+        + "白棚就白棚，平光就平光，半身就半身。"
+        "禁止自己加房间、窗影、家具、书架。"
+        "不要出现 logo 和文字。"
     )
 
 
@@ -146,11 +146,10 @@ def _single_shot() -> str:
 
 def _modeled_prompt(item: dict[str, Any], style_name: str = "", desc: dict[str, str] | None = None) -> str:
     name = item.get("name") or "这件衣服"
-    start = 3 if style_name else 2
-    extra = _style_line(style_name, 2, desc) if style_name else ""
+    extra = _style_line(style_name, desc)
     return (
-        "用第一张图的人，穿上后面衣服图那件衣服，拍一张真实的时尚照片。"
-        f"人脸、发型、年龄、身材要像第一张；衣服要完全是第{start}张这件{name}，颜色和细节不能改。"
+        "用第一张图的人，穿上第二张图那件衣服，拍一张真实的时尚照片。"
+        f"人脸、发型、年龄、身材要像第一张；衣服要完全是第二张这件{name}，颜色和细节不能改。"
         f"{extra}"
         f"{_single_shot()}"
         "衣服要完整露出来。不要文字、水印。"
@@ -158,17 +157,16 @@ def _modeled_prompt(item: dict[str, Any], style_name: str = "", desc: dict[str, 
 
 
 def _outfit_prompt(clothes: list[dict[str, Any]], style_name: str = "", desc: dict[str, str] | None = None) -> str:
-    start = 3 if style_name else 2
     lines = []
     tops = 0
     for offset, item in enumerate(clothes):
         part = PART_LABELS.get(item.get("part") or "", "衣服")
         name = item.get("name") or "衣服"
-        lines.append(f"第{start + offset}张图是{part}「{name}」，必须按这张图原样穿上，颜色和细节不能改。")
+        lines.append(f"第{2 + offset}张图是{part}「{name}」，必须按这张图原样穿上，颜色和细节不能改。")
         if item.get("part") in ("upperbody", "wholebody_up"):
             tops += 1
-    extra = _style_line(style_name, 2, desc) if style_name else ""
-    layer = "上装有两件或以上时必须叠穿，内搭和外衣都要看得见，禁止合成一件。" if tops >= 2 else ""
+    extra = _style_line(style_name, desc)
+    layer = "上装有两件或以上时必须叠穿，内搭和外衣都要看得见，禁止合成一件，也不能只留一件。" if tops >= 2 else ""
     return (
         "用第一张图的人，同时穿上每张衣服图里的衣服，拍一套完整造型。"
         + "".join(lines)
@@ -386,15 +384,14 @@ def make_look(body: LookIn, db: Session = Depends(get_db)):
         return fail("有衣服找不到了")
     style_name, style_bytes = _style_refs(db)
     style_desc: dict[str, str] = {}
-    images = [ref.read_bytes()]
     if style_bytes:
-        images.append(style_bytes[0])
         try:
             style_desc = describe_style(style_bytes[0])
         except Exception:
             style_desc = {}
+    images = [ref.read_bytes()]
     clothes: list[dict[str, Any]] = []
-    for row in rows[: 2 if style_bytes else 3]:
+    for row in rows[:3]:
         cutout = item_dir(row.id) / "cutout.png"
         if not cutout.is_file():
             return fail(f"{row.name} 还没有单件图")
