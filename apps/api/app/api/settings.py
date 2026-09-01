@@ -5,6 +5,7 @@ from typing import Any, Literal
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
+from app.core.ai import chat_complete, llm_public
 from app.core.config import describe_database, get_settings
 from app.core.local_settings import (
     build_database_url,
@@ -47,6 +48,7 @@ def _settings_payload() -> dict[str, Any]:
             "error": error,
             "form": parse_database_form(url, stored if isinstance(stored, dict) else {}),
         },
+        "llm": llm_public(),
     }
 
 
@@ -113,3 +115,40 @@ def save_database(form: DatabaseForm):
     save_local_settings(settings.repo_root, existing)
     connect_database(resolved)
     return ok(_settings_payload())
+
+
+class LlmForm(BaseModel):
+    base_url: str = "https://api.openai.com/v1"
+    model: str = "gpt-4o-mini"
+    api_key: str = Field(default="", description="留空表示不改原 Key")
+
+
+@router.put("/settings/llm")
+def save_llm(form: LlmForm):
+    """保存 AI 接口，Key 留空则沿用原来的。"""
+
+    settings = get_settings()
+    existing = load_local_settings(settings.repo_root)
+    old = existing.get("llm") if isinstance(existing.get("llm"), dict) else {}
+    key = form.api_key.strip() or str(old.get("api_key") or "")
+    existing["llm"] = {
+        "base_url": form.base_url.strip() or "https://api.openai.com/v1",
+        "model": form.model.strip() or "gpt-4o-mini",
+        "api_key": key,
+    }
+    save_local_settings(settings.repo_root, existing)
+    return ok(_settings_payload())
+
+
+@router.post("/settings/test-llm")
+def test_llm():
+    """发一句测试，看 AI 能不能用。"""
+
+    try:
+        text = chat_complete(
+            [{"role": "user", "content": "只回复两个字：成功"}],
+            timeout=30,
+        )
+    except ValueError as exc:
+        return fail(str(exc))
+    return ok({"reply": text})

@@ -1,4 +1,13 @@
-import type { ApiResult, DatabaseWrite, ModuleList, PortalLink, SettingsInfo } from "./types";
+import type {
+  ApiResult,
+  DatabaseWrite,
+  InterviewSession,
+  LlmWrite,
+  ModuleList,
+  PortalLink,
+  ResumeDoc,
+  SettingsInfo,
+} from "./types";
 
 /** 请求后端，失败时抛出中文错误 */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -31,6 +40,19 @@ export function saveDatabase(payload: DatabaseWrite) {
   return request<SettingsInfo>("/api/v1/settings/database", {
     method: "PUT",
     body: JSON.stringify(payload),
+  });
+}
+
+export function saveLlm(payload: LlmWrite) {
+  return request<SettingsInfo>("/api/v1/settings/llm", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function testLlm() {
+  return request<{ reply: string }>("/api/v1/settings/test-llm", {
+    method: "POST",
   });
 }
 
@@ -80,5 +102,55 @@ export function updatePortalLink(id: number, payload: { title: string; url: stri
 export function deletePortalLink(id: number) {
   return request<boolean>(`/api/v1/portal/links/${id}`, {
     method: "DELETE",
+  });
+}
+
+export function fetchResumeDocs() {
+  return request<{ items: ResumeDoc[] }>("/api/v1/resume/docs");
+}
+
+export function createResumeDoc(payload: { title: string; target_job: string; content: string }) {
+  return request<ResumeDoc>("/api/v1/resume/docs", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateResumeDoc(
+  id: number,
+  payload: { title: string; target_job: string; content: string },
+) {
+  return request<ResumeDoc>(`/api/v1/resume/docs/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteResumeDoc(id: number) {
+  return request<boolean>(`/api/v1/resume/docs/${id}`, {
+    method: "DELETE",
+  });
+}
+
+export function analyzeResumeDoc(id: number) {
+  return request<ResumeDoc>(`/api/v1/resume/docs/${id}/analyze`, {
+    method: "POST",
+  });
+}
+
+export function fetchInterview(id: number) {
+  return request<InterviewSession>(`/api/v1/resume/docs/${id}/interview`);
+}
+
+export function startInterview(id: number) {
+  return request<InterviewSession>(`/api/v1/resume/docs/${id}/interview/start`, {
+    method: "POST",
+  });
+}
+
+export function replyInterview(id: number, content: string) {
+  return request<InterviewSession>(`/api/v1/resume/docs/${id}/interview/reply`, {
+    method: "POST",
+    body: JSON.stringify({ content }),
   });
 }

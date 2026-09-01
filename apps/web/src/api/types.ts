@@ -25,11 +25,24 @@ export type DatabaseInfo = {
   form: DatabaseForm;
 };
 
+export type LlmInfo = {
+  base_url: string;
+  model: string;
+  has_key: boolean;
+};
+
 export type SettingsInfo = {
   app_name: string;
   api_host: string;
   api_port: number;
   database: DatabaseInfo;
+  llm: LlmInfo;
+};
+
+export type LlmWrite = {
+  base_url: string;
+  model: string;
+  api_key: string;
 };
 
 export type DatabaseWrite = {
@@ -65,4 +78,25 @@ export type PortalLink = {
   url: string;
   remark: string;
   created_at: string;
+};
+
+export type ResumeDoc = {
+  id: number;
+  title: string;
+  target_job: string;
+  content: string;
+  analysis: string;
+  updated_at: string;
+};
+
+export type InterviewMessage = {
+  id: number;
+  role: "user" | "assistant" | "system";
+  content: string;
+};
+
+export type InterviewSession = {
+  id: number | null;
+  resume_id: number;
+  messages: InterviewMessage[];
 };

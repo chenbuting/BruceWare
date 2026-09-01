@@ -16,7 +16,7 @@ export function HelpPage() {
       </Card>
       <Card title="设置" className="px-5 py-4">
         <p className="text-[13px] leading-6 text-[var(--muted)]">
-          设置在侧栏最下面，单独放，只管数据源。模块开关不在这里。
+          设置在侧栏最下面，单独放，管数据源和 AI。模块开关不在这里。
         </p>
       </Card>
       <Card title="功能模块" className="px-5 py-4">

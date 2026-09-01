@@ -36,6 +36,7 @@ def connect_database(url: str) -> None:
     _Db.engine = create_engine(url, **_engine_kwargs(url))
     _Db.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_Db.engine)
     from app.portal.models import PortalLink  # noqa: F401
+    from app.resume.models import ResumeDoc, ResumeInterview, ResumeInterviewMessage  # noqa: F401
 
     Base.metadata.create_all(bind=_Db.engine)
 

@@ -1,0 +1,8 @@
+id: resume
+name: 简历
+kind: app
+description: 保存简历，用 AI 分析和打字模拟面试
+version: 0.1.0
+web:
+  route_prefix: /m/resume
+  nav_label: 简历

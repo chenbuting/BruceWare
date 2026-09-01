@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { fetchSettings, saveDatabase, testDatabase } from "@/api/client";
+import { fetchSettings, saveDatabase, saveLlm, testDatabase, testLlm } from "@/api/client";
 import type { DatabaseWrite, SettingsInfo } from "@/api/types";
 import { Card } from "@/components/Card";
 import { PageFrame } from "@/components/PageFrame";
@@ -18,6 +18,10 @@ export function SettingsPage() {
   const [user, setUser] = useState("");
   const [password, setPassword] = useState("");
   const [hasPassword, setHasPassword] = useState(false);
+  const [llmBase, setLlmBase] = useState("https://api.openai.com/v1");
+  const [llmModel, setLlmModel] = useState("gpt-4o-mini");
+  const [llmKey, setLlmKey] = useState("");
+  const [hasLlmKey, setHasLlmKey] = useState(false);
   const [error, setError] = useState("");
   const [hint, setHint] = useState("");
   const [busy, setBusy] = useState(false);
@@ -41,6 +45,12 @@ export function SettingsPage() {
     setUser(form.user);
     setHasPassword(form.has_password);
     setPassword("");
+    if (data.llm) {
+      setLlmBase(data.llm.base_url || "https://api.openai.com/v1");
+      setLlmModel(data.llm.model || "gpt-4o-mini");
+      setHasLlmKey(data.llm.has_key);
+      setLlmKey("");
+    }
   }
 
   function payload(): DatabaseWrite {
@@ -95,7 +105,7 @@ export function SettingsPage() {
     : [];
 
   return (
-    <PageFrame title="设置" desc="这里改数据源。模块开关和侧栏固定去公共里的「模块」。" wide>
+    <PageFrame title="设置" desc="这里改数据源和 AI。模块开关去公共里的「模块」。" wide>
       {error ? <p className="mb-4 text-[var(--err)]">{error}</p> : null}
       {hint ? <p className="mb-4 text-[var(--ok)]">{hint}</p> : null}
 
@@ -192,6 +202,64 @@ export function SettingsPage() {
         </div>
       </Card>
       </div>
+
+      <Card title="AI" className="mt-4 px-5 py-4">
+        <p className="text-[13px] leading-6 text-[var(--muted)]">
+          兼容 OpenAI 的接口。简历分析和模拟面试会用这里。Key 不回显，不改请留空。
+        </p>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <label className="sm:col-span-2">
+            <span className="mb-1 block text-[var(--muted)]">接口地址</span>
+            <input className={inputClass} value={llmBase} onChange={(e) => setLlmBase(e.target.value)} />
+          </label>
+          <label>
+            <span className="mb-1 block text-[var(--muted)]">模型</span>
+            <input className={inputClass} value={llmModel} onChange={(e) => setLlmModel(e.target.value)} />
+          </label>
+          <label>
+            <span className="mb-1 block text-[var(--muted)]">Key{hasLlmKey ? "（已保存，不改请留空）" : ""}</span>
+            <input className={inputClass} type="password" value={llmKey} onChange={(e) => setLlmKey(e.target.value)} />
+          </label>
+        </div>
+        <div className="mt-5 flex gap-3">
+          <button
+            type="button"
+            className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50"
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              setError("");
+              setHint("");
+              saveLlm({ base_url: llmBase, model: llmModel, api_key: llmKey })
+                .then((data) => {
+                  setInfo(data);
+                  applyForm(data);
+                  setHint("AI 已保存");
+                })
+                .catch((err: Error) => setError(err.message))
+                .finally(() => setBusy(false));
+            }}
+          >
+            保存 AI
+          </button>
+          <button
+            type="button"
+            className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50"
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              setError("");
+              setHint("");
+              testLlm()
+                .then((data) => setHint(`测试通过：${data.reply}`))
+                .catch((err: Error) => setError(err.message))
+                .finally(() => setBusy(false));
+            }}
+          >
+            测试 AI
+          </button>
+        </div>
+      </Card>
     </PageFrame>
   );
 }

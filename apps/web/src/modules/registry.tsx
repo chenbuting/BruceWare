@@ -3,6 +3,7 @@ import type { ComponentType } from "react";
 import { HelpPage } from "@/pages/HelpPage";
 import { ModulesPage } from "@/pages/ModulesPage";
 import { PortalPage } from "@/pages/PortalPage";
+import { ResumePage } from "@/pages/ResumePage";
 
 /** 模块页面注册表：侧栏点开后嵌进工作区，不另开窗口 */
 export type ModulePageEntry = {
@@ -30,6 +31,12 @@ export const MODULE_PAGES: Record<string, ModulePageEntry> = {
     desc: "收藏常用网站，点名称在新标签打开。",
     wide: true,
     page: PortalPage,
+  },
+  resume: {
+    title: "简历",
+    desc: "保存简历，用 AI 分析和打字模拟面试。先在设置里配好 AI。",
+    wide: true,
+    page: ResumePage,
   },
 };
 
