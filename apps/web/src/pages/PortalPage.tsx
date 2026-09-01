@@ -74,79 +74,73 @@ export function PortalPage() {
     <>
       {error ? <p className="mb-4 text-[var(--err)]">{error}</p> : null}
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(240px,320px)_minmax(0,1fr)]">
-        <Card title={editingId === null ? "添加" : "编辑"} className="px-5 py-4">
-          <form className="space-y-3" onSubmit={onSubmit}>
-            <label className="block">
-              <span className="mb-1 block text-[var(--muted)]">名称</span>
-              <input
-                className={inputClass}
-                value={form.title}
-                onChange={(e) => setForm({ ...form, title: e.target.value })}
-                required
-              />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-[var(--muted)]">网址</span>
-              <input
-                className={inputClass}
-                value={form.url}
-                onChange={(e) => setForm({ ...form, url: e.target.value })}
-                placeholder="https://"
-                required
-              />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-[var(--muted)]">备注</span>
-              <input
-                className={inputClass}
-                value={form.remark}
-                onChange={(e) => setForm({ ...form, remark: e.target.value })}
-              />
-            </label>
-            <div className="flex gap-3">
-              <button type="submit" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy}>
-                {editingId === null ? "添加" : "保存修改"}
+      <Card title={editingId === null ? "收藏" : "编辑收藏"} className="px-5 py-4">
+        <form className="grid gap-3 sm:grid-cols-[1fr_1.4fr_1fr_auto] sm:items-end" onSubmit={onSubmit}>
+          <label>
+            <span className="mb-1 block text-[var(--muted)]">名称</span>
+            <input
+              className={inputClass}
+              value={form.title}
+              onChange={(e) => setForm({ ...form, title: e.target.value })}
+              required
+            />
+          </label>
+          <label>
+            <span className="mb-1 block text-[var(--muted)]">网址</span>
+            <input
+              className={inputClass}
+              value={form.url}
+              onChange={(e) => setForm({ ...form, url: e.target.value })}
+              placeholder="https://"
+              required
+            />
+          </label>
+          <label>
+            <span className="mb-1 block text-[var(--muted)]">备注</span>
+            <input
+              className={inputClass}
+              value={form.remark}
+              onChange={(e) => setForm({ ...form, remark: e.target.value })}
+            />
+          </label>
+          <div className="flex gap-3">
+            <button type="submit" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy}>
+              {editingId === null ? "添加" : "保存"}
+            </button>
+            {editingId !== null ? (
+              <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5" onClick={cancelEdit}>
+                取消
               </button>
-              {editingId !== null ? (
-                <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5" onClick={cancelEdit}>
-                  取消
-                </button>
-              ) : null}
-            </div>
-          </form>
-        </Card>
+            ) : null}
+          </div>
+        </form>
 
         {items.length === 0 ? (
-          <Card className="px-5 py-4">
-            <p className="text-[13px] leading-6 text-[var(--muted)]">还没有收藏。</p>
-          </Card>
+          <p className="mt-5 text-[13px] leading-6 text-[var(--muted)]">还没有收藏。</p>
         ) : (
-          <ul className="grid gap-3 sm:grid-cols-2">
+          <ul className="mt-5 divide-y divide-[var(--line)]">
             {items.map((item) => (
-              <li key={item.id}>
-                <Card className="px-5 py-4">
-                  <div className="flex flex-wrap items-baseline justify-between gap-3">
-                    <a href={item.url} target="_blank" rel="noreferrer" className="underline">
-                      {item.title}
-                    </a>
-                    <div className="flex gap-3 text-[13px] text-[var(--muted)]">
-                      <button type="button" onClick={() => startEdit(item)}>
-                        编辑
-                      </button>
-                      <button type="button" onClick={() => onDelete(item.id)}>
-                        删除
-                      </button>
-                    </div>
-                  </div>
-                  <div className="mt-2 break-all text-[13px] text-[var(--muted)]">{item.url}</div>
-                  {item.remark ? <div className="mt-1 text-[13px] text-[var(--muted)]">{item.remark}</div> : null}
-                </Card>
+              <li key={item.id} className="flex flex-wrap items-baseline justify-between gap-3 py-3 first:pt-0 last:pb-0">
+                <div className="min-w-0">
+                  <a href={item.url} target="_blank" rel="noreferrer" className="underline">
+                    {item.title}
+                  </a>
+                  <div className="mt-1 break-all text-[13px] text-[var(--muted)]">{item.url}</div>
+                  {item.remark ? <div className="mt-0.5 text-[13px] text-[var(--muted)]">{item.remark}</div> : null}
+                </div>
+                <div className="flex gap-3 text-[13px] text-[var(--muted)]">
+                  <button type="button" onClick={() => startEdit(item)}>
+                    编辑
+                  </button>
+                  <button type="button" onClick={() => onDelete(item.id)}>
+                    删除
+                  </button>
+                </div>
               </li>
             ))}
           </ul>
         )}
-      </div>
+      </Card>
     </>
   );
 }
