@@ -1,0 +1,8 @@
+id: portal
+name: 网站入口
+kind: app
+description: 收藏常用网站
+version: 0.1.0
+web:
+  route_prefix: /m/portal
+  nav_label: 网站入口

@@ -1,0 +1,37 @@
+# 环境变量（含连接串，勿提交）
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.pytest_cache/
+*.log
+
+# 本地数据
+data/
+*.db
+*.sqlite3
+
+# Node / 前端
+node_modules/
+dist-ssr/
+.vite/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 系统
+Thumbs.db
+.DS_Store

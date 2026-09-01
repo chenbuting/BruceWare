@@ -1,0 +1,8 @@
+id: hub
+name: 模块
+kind: common
+description: 开关功能模块，并固定或取消固定到侧栏
+version: 0.1.0
+web:
+  route_prefix: /m/hub
+  nav_label: 模块

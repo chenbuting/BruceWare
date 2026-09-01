@@ -1,0 +1,8 @@
+id: help
+name: 帮助
+kind: common
+description: 底座和模块的使用说明
+version: 0.1.0
+web:
+  route_prefix: /m/help
+  nav_label: 帮助
