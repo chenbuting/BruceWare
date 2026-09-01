@@ -76,6 +76,14 @@ export type WardrobeLook = {
   created_at: string;
 };
 
+export type WardrobeStyle = {
+  id: number;
+  name: string;
+  active: boolean;
+  image_urls: string[];
+  created_at: string;
+};
+
 export type WardrobeDetected = {
   name: string;
   part: string;

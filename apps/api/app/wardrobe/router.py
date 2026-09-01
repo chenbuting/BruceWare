@@ -17,8 +17,18 @@ from sqlalchemy.orm import Session
 from app.core.ai import image_edit, image_generate
 from app.core.response import fail, ok
 from app.db.session import get_db
-from app.wardrobe.models import WardrobeItem, WardrobeLook
-from app.wardrobe.store import item_dir, look_dir, read_item_file, reference_path, tmp_dir, write_bytes
+from app.wardrobe.models import WardrobeItem, WardrobeLook, WardrobeStyle
+from app.wardrobe.store import (
+    item_dir,
+    list_style_files,
+    look_dir,
+    read_item_file,
+    read_style_file,
+    reference_path,
+    style_dir,
+    tmp_dir,
+    write_bytes,
+)
 from app.wardrobe.vision import analyze_photo, crop_box, remove_chroma, to_png
 
 router = APIRouter()
@@ -48,6 +58,10 @@ class ImportIn(BaseModel):
 class LookIn(BaseModel):
     item_ids: list[int]
     title: str = ""
+
+
+class StyleActiveIn(BaseModel):
+    active: bool = True
 
 
 def _file_url(path: Path, url: str) -> str:
@@ -102,31 +116,69 @@ def _garment_prompt(item: dict[str, Any]) -> str:
     )
 
 
-def _modeled_prompt(item: dict[str, Any]) -> str:
+def _style_line(name: str) -> str:
+    if not name:
+        return ""
+    return f"整体气质、场景和光线要像{name}的品牌风格参考图，不要复制参考图里的人脸和衣服。"
+
+
+def _modeled_prompt(item: dict[str, Any], style_name: str = "") -> str:
     name = item.get("name") or "这件衣服"
+    extra = _style_line(style_name)
     return (
         "用第一张图的人，穿上第二张图那件衣服，拍一张真实的时尚照片。"
         f"人脸、发型、年龄、身材要像第一张；衣服要完全是第二张这件{name}，颜色和细节不能改。"
+        f"{extra}"
         "衣服要完整露出来，配简单的其它衣服，自然光，真实场景。不要文字、水印。"
     )
 
 
-def _outfit_prompt(names: list[str]) -> str:
+def _outfit_prompt(names: list[str], style_name: str = "") -> str:
     joined = "、".join(names)
+    extra = _style_line(style_name)
     return (
         "用第一张图的人，穿上后面几张图里的衣服，拍一套完整造型。"
         f"衣服是：{joined}。人脸要像第一张，衣服颜色和细节按参考图，不要乱改。"
+        f"{extra}"
         "全身能看清搭配，真实场景，自然光。不要文字、水印。"
     )
 
 
+def _style_dict(row: WardrobeStyle) -> dict[str, Any]:
+    files = list_style_files(row.id)
+    return {
+        "id": row.id,
+        "name": row.name or "",
+        "active": bool(row.active),
+        "image_urls": [
+            _file_url(path, f"/api/v1/wardrobe/files/styles/{row.id}/{path.name}") for path in files
+        ],
+        "created_at": row.created_at.isoformat() if row.created_at else "",
+    }
+
+
+def _active_style(db: Session) -> WardrobeStyle | None:
+    return db.scalars(select(WardrobeStyle).where(WardrobeStyle.active == 1)).first()
+
+
+def _style_refs(db: Session) -> tuple[str, list[bytes]]:
+    row = _active_style(db)
+    if row is None:
+        return "", []
+    files = list_style_files(row.id)[:2]
+    return row.name or "", [path.read_bytes() for path in files]
+
+
 @router.get("/wardrobe/status")
-def wardrobe_status():
+def wardrobe_status(db: Session = Depends(get_db)):
     ref = reference_path()
+    style = _active_style(db)
     return ok(
         {
             "has_reference": ref.is_file(),
             "reference_url": _file_url(ref, "/api/v1/wardrobe/files/reference/model-reference.png"),
+            "active_style_id": style.id if style else 0,
+            "active_style_name": style.name if style else "",
         }
     )
 
@@ -296,15 +348,18 @@ def make_look(body: LookIn, db: Session = Depends(get_db)):
     rows = [db.get(WardrobeItem, item_id) for item_id in ids]
     if any(row is None for row in rows):
         return fail("有衣服找不到了")
+    style_name, style_bytes = _style_refs(db)
     images = [ref.read_bytes()]
     names = []
-    for row in rows:
+    clothes_limit = 3 if style_bytes else 4
+    for row in rows[:clothes_limit]:
         cutout = item_dir(row.id) / "cutout.png"
         if not cutout.is_file():
             return fail(f"{row.name} 还没有单件图")
         images.append(cutout.read_bytes())
         names.append(row.name)
-    prompt = _modeled_prompt({"name": names[0]}) if len(names) == 1 else _outfit_prompt(names)
+    images.extend(style_bytes)
+    prompt = _modeled_prompt({"name": names[0]}, style_name) if len(names) == 1 else _outfit_prompt(names, style_name)
     try:
         picture = image_edit(prompt, images[:5], size="1536x1024")
     except ValueError:
@@ -312,8 +367,11 @@ def make_look(body: LookIn, db: Session = Depends(get_db)):
             picture = image_edit(prompt, images[:5])
         except ValueError as exc:
             return fail(str(exc))
+    title = body.title.strip() or "、".join(names)
+    if style_name and style_name not in title:
+        title = f"{title} · {style_name}"
     row = WardrobeLook(
-        title=(body.title.strip() or "、".join(names))[:200],
+        title=title[:200],
         item_ids=json.dumps(ids),
         created_at=datetime.utcnow(),
     )
@@ -323,6 +381,68 @@ def make_look(body: LookIn, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(row)
     return ok(_look_dict(row))
+
+
+@router.get("/wardrobe/styles")
+def list_styles(db: Session = Depends(get_db)):
+    rows = db.scalars(select(WardrobeStyle).order_by(WardrobeStyle.id.desc())).all()
+    active = _active_style(db)
+    return ok({"items": [_style_dict(row) for row in rows], "active_id": active.id if active else 0})
+
+
+@router.post("/wardrobe/styles")
+async def add_style(
+    name: str = Form(""),
+    files: list[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+):
+    title = name.strip() or "未命名风格"
+    pictures: list[bytes] = []
+    for item in files[:4]:
+        raw = await item.read()
+        if not raw:
+            continue
+        try:
+            pictures.append(to_png(raw))
+        except Exception:
+            return fail("有一张风格图打不开")
+    if not pictures:
+        return fail("请上传至少一张品牌图")
+    has_active = _active_style(db) is not None
+    row = WardrobeStyle(name=title[:200], active=0 if has_active else 1, created_at=datetime.utcnow())
+    db.add(row)
+    db.flush()
+    for index, picture in enumerate(pictures, start=1):
+        write_bytes(style_dir(row.id) / f"{index}.png", picture)
+    db.commit()
+    db.refresh(row)
+    return ok(_style_dict(row))
+
+
+@router.put("/wardrobe/styles/{style_id}/active")
+def set_style_active(style_id: int, body: StyleActiveIn, db: Session = Depends(get_db)):
+    row = db.get(WardrobeStyle, style_id)
+    if row is None:
+        return fail("没有这个风格")
+    for item in db.scalars(select(WardrobeStyle)).all():
+        item.active = 0
+    row.active = 1 if body.active else 0
+    db.commit()
+    rows = db.scalars(select(WardrobeStyle).order_by(WardrobeStyle.id.desc())).all()
+    return ok({"items": [_style_dict(item) for item in rows], "active_id": row.id if body.active else 0})
+
+
+@router.delete("/wardrobe/styles/{style_id}")
+def delete_style(style_id: int, db: Session = Depends(get_db)):
+    row = db.get(WardrobeStyle, style_id)
+    if row is None:
+        return fail("没有这个风格")
+    folder = style_dir(style_id)
+    for child in folder.glob("*"):
+        child.unlink()
+    db.delete(row)
+    db.commit()
+    return ok(True)
 
 
 @router.delete("/wardrobe/looks/{look_id}")
@@ -362,5 +482,13 @@ def file_look(look_id: int, name: str):
         return fail("没有这张图")
     path = look_dir(look_id) / name
     if not path.is_file():
+        return fail("没有这张图")
+    return FileResponse(path)
+
+
+@router.get("/wardrobe/files/styles/{style_id}/{name}")
+def file_style(style_id: int, name: str):
+    path = read_style_file(style_id, name)
+    if path is None:
         return fail("没有这张图")
     return FileResponse(path)

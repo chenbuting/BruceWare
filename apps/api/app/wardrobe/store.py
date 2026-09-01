@@ -35,6 +35,23 @@ def reference_path() -> Path:
     return wardrobe_root() / "model-reference.png"
 
 
+def style_dir(style_id: int) -> Path:
+    path = wardrobe_root() / "styles" / str(style_id)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def list_style_files(style_id: int) -> list[Path]:
+    return sorted(p for p in style_dir(style_id).glob("*.png") if p.stem.isdigit())
+
+
+def read_style_file(style_id: int, name: str) -> Path | None:
+    if not name.endswith(".png") or not name[:-4].isdigit():
+        return None
+    path = style_dir(style_id) / name
+    return path if path.is_file() else None
+
+
 def write_bytes(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)

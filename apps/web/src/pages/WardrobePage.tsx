@@ -2,21 +2,25 @@ import { useEffect, useRef, useState } from "react";
 
 import {
   addWardrobeItem,
+  addWardrobeStyle,
   analyzeWardrobePhoto,
   createWardrobeLook,
   deleteWardrobeItem,
   deleteWardrobeLook,
+  deleteWardrobeStyle,
   fetchWardrobeItems,
   fetchWardrobeLooks,
   fetchWardrobeStatus,
+  fetchWardrobeStyles,
   importWardrobeItems,
   saveWardrobeReference,
+  setWardrobeStyleActive,
 } from "@/api/client";
-import type { WardrobeDetected, WardrobeItem, WardrobeLook } from "@/api/types";
+import type { WardrobeDetected, WardrobeItem, WardrobeLook, WardrobeStyle } from "@/api/types";
 import { Card } from "@/components/Card";
 import { ConfirmModal } from "@/components/Modal";
 
-type Tab = "closet" | "import" | "looks";
+type Tab = "closet" | "import" | "looks" | "styles";
 
 const PARTS = [
   { id: "", label: "全部" },
@@ -35,6 +39,10 @@ export function WardrobePage() {
   const [tab, setTab] = useState<Tab>("closet");
   const [items, setItems] = useState<WardrobeItem[]>([]);
   const [looks, setLooks] = useState<WardrobeLook[]>([]);
+  const [styles, setStyles] = useState<WardrobeStyle[]>([]);
+  const [styleName, setStyleName] = useState("");
+  const [styleDrafts, setStyleDrafts] = useState<{ file: File; preview: string }[]>([]);
+  const [activeStyleName, setActiveStyleName] = useState("");
   const [part, setPart] = useState("");
   const [picked, setPicked] = useState<number[]>([]);
   const [referenceUrl, setReferenceUrl] = useState("");
@@ -45,16 +53,25 @@ export function WardrobePage() {
   const [hint, setHint] = useState("");
   const [busy, setBusy] = useState(false);
   const [askId, setAskId] = useState<number | null>(null);
+  const [askStyleId, setAskStyleId] = useState<number | null>(null);
   const [drafts, setDrafts] = useState<DirectDraft[]>([]);
   const importRef = useRef<HTMLInputElement>(null);
   const directRef = useRef<HTMLInputElement>(null);
   const selfRef = useRef<HTMLInputElement>(null);
+  const styleRef = useRef<HTMLInputElement>(null);
 
   async function reload() {
-    const [status, closet, looksData] = await Promise.all([fetchWardrobeStatus(), fetchWardrobeItems(), fetchWardrobeLooks()]);
+    const [status, closet, looksData, stylesData] = await Promise.all([
+      fetchWardrobeStatus(),
+      fetchWardrobeItems(),
+      fetchWardrobeLooks(),
+      fetchWardrobeStyles(),
+    ]);
     setReferenceUrl(status.reference_url);
+    setActiveStyleName(status.active_style_name || "");
     setItems(closet.items);
     setLooks(looksData.items);
+    setStyles(stylesData.items);
   }
 
   useEffect(() => {
@@ -68,7 +85,7 @@ export function WardrobePage() {
     try {
       const data = await saveWardrobeReference(file);
       setReferenceUrl(data.reference_url);
-      setHint("已保存你的照片，试穿会用它");
+      setHint(activeStyleName ? `已保存你的照片。当前风格：${activeStyleName}` : "已保存你的照片，试穿会用它");
     } catch (err) {
       setError(err instanceof Error ? err.message : "保存失败");
     } finally {
@@ -165,6 +182,37 @@ export function WardrobePage() {
     }
   }
 
+  function onPickStyle(files: FileList | null) {
+    if (!files?.length) return;
+    const next = Array.from(files).slice(0, 4).map((file) => ({ file, preview: URL.createObjectURL(file) }));
+    setStyleDrafts((prev) => {
+      prev.forEach((item) => URL.revokeObjectURL(item.preview));
+      return next;
+    });
+    if (styleRef.current) styleRef.current.value = "";
+  }
+
+  async function onSaveStyle() {
+    if (styleDrafts.length === 0) {
+      setError("请先选几张品牌图");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await addWardrobeStyle(styleName.trim() || "未命名风格", styleDrafts.map((item) => item.file));
+      styleDrafts.forEach((item) => URL.revokeObjectURL(item.preview));
+      setStyleDrafts([]);
+      setStyleName("");
+      await reload();
+      setHint("风格已保存，点「使用」就能切换");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function onTryOn(ids: number[]) {
     if (ids.length < 1) {
       setError("请先选一件衣服");
@@ -201,7 +249,9 @@ export function WardrobePage() {
             <div className="flex h-16 w-16 items-center justify-center rounded-md border border-[var(--line)] text-[12px] text-[var(--muted)]">无照片</div>
           )}
           <div className="min-w-0 flex-1 text-[13px] text-[var(--muted)]">
-            先放一张自己的照片，试穿和搭配才会长得像你。单件图可以直接加入；一张图里有好几件，再用识别。
+            先放一张自己的照片，试穿才会像你。
+            {activeStyleName ? ` 当前风格：${activeStyleName}。` : " 去「风格」上传品牌图，试穿会跟着学。"}
+            单件图可以直接加入。
           </div>
           <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy} onClick={() => selfRef.current?.click()}>
             {referenceUrl ? "换我的照片" : "上传我的照片"}
@@ -215,6 +265,7 @@ export function WardrobePage() {
           [
             ["closet", "衣橱"],
             ["import", "导入"],
+            ["styles", "风格"],
             ["looks", "搭配"],
           ] as const
         ).map(([id, label]) => (
@@ -298,6 +349,73 @@ export function WardrobePage() {
         </div>
       ) : null}
 
+      {tab === "styles" ? (
+        <div className="space-y-4">
+          <Card title="学一个品牌风格" className="px-5 py-4">
+            <p className="text-[13px] text-[var(--muted)]">上传 1～4 张品牌图（海报、lookbook 都行）。生成试穿时会跟着当前选中的风格走。</p>
+            <label className="mt-3 block text-[13px]">
+              <span className="mb-1 block text-[var(--muted)]">品牌名</span>
+              <input className="w-full max-w-xs border border-[var(--line)] bg-[var(--paper)] px-2 py-1.5" value={styleName} onChange={(e) => setStyleName(e.target.value)} placeholder="比如 COS、优衣库" />
+            </label>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy} onClick={() => styleRef.current?.click()}>
+                选品牌图
+              </button>
+              <input ref={styleRef} type="file" accept="image/*" multiple className="hidden" onChange={(e) => onPickStyle(e.target.files)} />
+              {styleDrafts.length > 0 ? (
+                <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy} onClick={() => void onSaveStyle()}>
+                  {busy ? "保存中…" : "保存风格"}
+                </button>
+              ) : null}
+            </div>
+            {styleDrafts.length > 0 ? (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {styleDrafts.map((item) => (
+                  <img key={item.preview} src={item.preview} alt="" className="h-16 w-16 rounded-md object-cover" />
+                ))}
+              </div>
+            ) : null}
+          </Card>
+          {styles.length === 0 ? (
+            <p className="text-[13px] text-[var(--muted)]">还没有风格。先保存一套，再点「使用」。</p>
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2">
+              {styles.map((item) => (
+                <Card key={item.id} className="px-4 py-3">
+                  <div className="flex flex-wrap gap-2">
+                    {item.image_urls.map((url) => (
+                      <img key={url} src={url} alt="" className="h-16 w-16 rounded-md object-cover" />
+                    ))}
+                  </div>
+                  <div className="mt-3 text-[13px] font-medium">{item.name}</div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className={`border px-2 py-1 text-[13px] ${item.active ? "border-[var(--text)] bg-[var(--bg)]" : "border-[var(--line)] bg-[var(--paper)]"}`}
+                      disabled={busy}
+                      onClick={() =>
+                        setWardrobeStyleActive(item.id, !item.active)
+                          .then((data) => {
+                            setStyles(data.items);
+                            setActiveStyleName(data.items.find((row) => row.active)?.name || "");
+                            setHint(data.active_id ? `已改用 ${item.name}` : "已取消风格");
+                          })
+                          .catch((err: Error) => setError(err.message))
+                      }
+                    >
+                      {item.active ? "使用中" : "使用"}
+                    </button>
+                    <button type="button" className="text-[13px] text-[var(--muted)]" onClick={() => setAskStyleId(item.id)}>
+                      删除
+                    </button>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : null}
+
       {tab === "closet" ? (
         <div>
           <div className="mb-3 flex flex-wrap gap-1">
@@ -350,7 +468,10 @@ export function WardrobePage() {
       {tab === "looks" ? (
         <div>
           <Card className="mb-4 px-5 py-4">
-            <p className="text-[13px] text-[var(--muted)]">在衣橱里点「选来搭配」，一件就能试穿，多件就是整套。</p>
+            <p className="text-[13px] text-[var(--muted)]">
+              在衣橱里点「选来搭配」，一件就能试穿，多件就是整套。
+              {activeStyleName ? ` 会按「${activeStyleName}」的风格来。` : ""}
+            </p>
             <div className="mt-3 text-[13px]">已选 {picked.length} 件</div>
             <button type="button" className="mt-3 border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy || picked.length < 1} onClick={() => void onTryOn(picked)}>
               生成搭配
@@ -401,6 +522,26 @@ export function WardrobePage() {
               });
           }}
           onClose={() => setAskId(null)}
+        />
+      ) : null}
+
+      {askStyleId !== null ? (
+        <ConfirmModal
+          title="删除风格"
+          message="删掉这个品牌风格？"
+          onConfirm={() => {
+            deleteWardrobeStyle(askStyleId)
+              .then(() => {
+                setStyles((prev) => prev.filter((item) => item.id !== askStyleId));
+                setAskStyleId(null);
+                return reload();
+              })
+              .catch((err: Error) => {
+                setError(err.message);
+                setAskStyleId(null);
+              });
+          }}
+          onClose={() => setAskStyleId(null)}
         />
       ) : null}
     </>

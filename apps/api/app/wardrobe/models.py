@@ -31,3 +31,14 @@ class WardrobeLook(Base):
     title = Column(String(200), nullable=False, default="")
     item_ids = Column(Text, nullable=False, default="[]")
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class WardrobeStyle(Base):
+    """一个品牌风格，用几张参考图来学。"""
+
+    __tablename__ = "wardrobe_styles"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(200), nullable=False, default="")
+    active = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)

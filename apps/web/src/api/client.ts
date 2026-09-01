@@ -10,6 +10,7 @@ import type {
   WardrobeDetected,
   WardrobeItem,
   WardrobeLook,
+  WardrobeStyle,
 } from "./types";
 
 /** 请求后端，失败时抛出中文错误 */
@@ -249,7 +250,9 @@ export async function downloadResumeDoc(id: number, filename: string) {
 }
 
 export function fetchWardrobeStatus() {
-  return request<{ has_reference: boolean; reference_url: string }>("/api/v1/wardrobe/status");
+  return request<{ has_reference: boolean; reference_url: string; active_style_id: number; active_style_name: string }>(
+    "/api/v1/wardrobe/status",
+  );
 }
 
 export function saveWardrobeReference(file: File) {
@@ -310,4 +313,26 @@ export function createWardrobeLook(itemIds: number[], title: string) {
 
 export function deleteWardrobeLook(id: number) {
   return request<boolean>(`/api/v1/wardrobe/looks/${id}`, { method: "DELETE" });
+}
+
+export function fetchWardrobeStyles() {
+  return request<{ items: WardrobeStyle[]; active_id: number }>("/api/v1/wardrobe/styles");
+}
+
+export function addWardrobeStyle(name: string, files: File[]) {
+  const body = new FormData();
+  body.append("name", name);
+  files.forEach((file) => body.append("files", file));
+  return request<WardrobeStyle>("/api/v1/wardrobe/styles", { method: "POST", body });
+}
+
+export function setWardrobeStyleActive(id: number, active: boolean) {
+  return request<{ items: WardrobeStyle[]; active_id: number }>(`/api/v1/wardrobe/styles/${id}/active`, {
+    method: "PUT",
+    body: JSON.stringify({ active }),
+  });
+}
+
+export function deleteWardrobeStyle(id: number) {
+  return request<boolean>(`/api/v1/wardrobe/styles/${id}`, { method: "DELETE" });
 }
