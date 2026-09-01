@@ -146,7 +146,7 @@ function TabPane({ tab }: { tab: Tab }) {
     const entry = getModulePage(tab.moduleId);
     if (!entry) {
       return (
-        <PageFrame title={tab.label}>
+        <PageFrame hideHeader wide>
           <Card className="px-5 py-4">
             <p className="text-[13px] leading-6 text-[var(--muted)]">这个模块还没有接入页面。</p>
           </Card>
@@ -155,7 +155,7 @@ function TabPane({ tab }: { tab: Tab }) {
     }
     const Page = entry.page;
     return (
-      <PageFrame title={entry.title} desc={entry.desc} wide={entry.wide}>
+      <PageFrame hideHeader wide={entry.wide}>
         <Page />
       </PageFrame>
     );
