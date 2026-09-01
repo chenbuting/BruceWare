@@ -119,7 +119,11 @@ def _garment_prompt(item: dict[str, Any]) -> str:
 def _style_line(name: str) -> str:
     if not name:
         return ""
-    return f"整体气质、场景和光线要像{name}的品牌风格参考图，不要复制参考图里的人脸和衣服。"
+    return f"整体气质、场景和光线要像{name}的品牌风格参考图，不要复制参考图里的人脸、衣服、logo 和文字。"
+
+
+def _single_shot() -> str:
+    return "只输出一张完整照片，一个人，一个场景。不要三连图、分栏、拼图、网格、四宫格。"
 
 
 def _modeled_prompt(item: dict[str, Any], style_name: str = "") -> str:
@@ -129,6 +133,7 @@ def _modeled_prompt(item: dict[str, Any], style_name: str = "") -> str:
         "用第一张图的人，穿上第二张图那件衣服，拍一张真实的时尚照片。"
         f"人脸、发型、年龄、身材要像第一张；衣服要完全是第二张这件{name}，颜色和细节不能改。"
         f"{extra}"
+        f"{_single_shot()}"
         "衣服要完整露出来，配简单的其它衣服，自然光，真实场景。不要文字、水印。"
     )
 
@@ -140,6 +145,7 @@ def _outfit_prompt(names: list[str], style_name: str = "") -> str:
         "用第一张图的人，穿上后面几张图里的衣服，拍一套完整造型。"
         f"衣服是：{joined}。人脸要像第一张，衣服颜色和细节按参考图，不要乱改。"
         f"{extra}"
+        f"{_single_shot()}"
         "全身能看清搭配，真实场景，自然光。不要文字、水印。"
     )
 
@@ -320,7 +326,7 @@ def remake_modeled(item_id: int, db: Session = Depends(get_db)):
         modeled = image_edit(
             _modeled_prompt({"name": row.name}),
             [ref.read_bytes(), cutout.read_bytes()],
-            size="1536x1024",
+            size="1024x1536",
         )
     except ValueError:
         try:
@@ -361,7 +367,7 @@ def make_look(body: LookIn, db: Session = Depends(get_db)):
     images.extend(style_bytes)
     prompt = _modeled_prompt({"name": names[0]}, style_name) if len(names) == 1 else _outfit_prompt(names, style_name)
     try:
-        picture = image_edit(prompt, images[:5], size="1536x1024")
+        picture = image_edit(prompt, images[:5], size="1024x1536")
     except ValueError:
         try:
             picture = image_edit(prompt, images[:5])
