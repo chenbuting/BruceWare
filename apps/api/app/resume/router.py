@@ -31,6 +31,20 @@ class InterviewReplyIn(BaseModel):
     content: str = Field(min_length=1)
 
 
+class IntroIn(BaseModel):
+    style: str = Field(default="formal", max_length=20)
+
+
+INTRO_STYLES = {
+    "formal": "风格：稳重正式。大约1分钟，语气沉稳，适合常规面试。",
+    "concise": "风格：简洁干练。大约30秒，少铺垫，尽快点明能力和求职意向。",
+    "warm": "风格：亲和自然。像聊天一样说，不要太书面，但仍要专业。",
+    "project": "风格：项目亮点。多用一两个具体项目说明你做了什么、结果如何。",
+    "result": "风格：成果导向。尽量带出可感知的结果、效率或落地情况，少讲空话。",
+    "funny": "风格：轻松搞笑。口语、有一点幽默，但内容仍要真实、能用在面试里，不要段子和冒犯。",
+}
+
+
 def _doc_dict(row: ResumeDoc) -> dict:
     return {
         "id": row.id,
@@ -173,7 +187,7 @@ def analyze_doc(doc_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/resume/docs/{doc_id}/intro")
-def generate_intro(doc_id: int, db: Session = Depends(get_db)):
+def generate_intro(doc_id: int, body: IntroIn = IntroIn(), db: Session = Depends(get_db)):
     row = db.get(ResumeDoc, doc_id)
     if row is None:
         return fail("没有这份简历")
@@ -181,10 +195,13 @@ def generate_intro(doc_id: int, db: Session = Depends(get_db)):
     if not body_text.strip():
         return fail("请先填写简历内容")
     job = row.target_job.strip() or "未指定岗位"
+    style_key = (body.style or "formal").strip()
+    style_hint = INTRO_STYLES.get(style_key) or INTRO_STYLES["formal"]
     prompt = (
-        "根据简历写一段中文口头自我介绍，大约1分钟，像面试开场时说出来。"
+        "根据简历写一段中文口头自我介绍，像面试开场时说出来。"
         "用第一人称，连贯成段，不要条目、不要标题、不要括号提示。"
-        "先讲身份和求职意向，再挑一两段能证明能力的经历，最后收一句为什么适合这个岗位。\n"
+        "先讲身份和求职意向，再挑能证明能力的经历，最后收一句为什么适合这个岗位。\n"
+        f"{style_hint}\n"
         f"目标岗位：{job}\n\n简历：\n{body_text}"
     )
     try:

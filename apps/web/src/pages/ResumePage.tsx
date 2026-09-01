@@ -34,6 +34,15 @@ const lineClass = `${inputClass} min-h-[72px]`;
 
 type ResumeSection = "basic" | "summary" | "jobs" | "skills" | "projects" | "intro" | "analyze" | "interview";
 
+const INTRO_STYLES: { id: string; label: string }[] = [
+  { id: "formal", label: "稳重正式" },
+  { id: "concise", label: "简洁干练" },
+  { id: "warm", label: "亲和自然" },
+  { id: "project", label: "项目亮点" },
+  { id: "result", label: "成果导向" },
+  { id: "funny", label: "轻松搞笑" },
+];
+
 const SECTIONS: { id: ResumeSection; label: string }[] = [
   { id: "basic", label: "基本信息" },
   { id: "summary", label: "自我评价" },
@@ -53,6 +62,7 @@ export function ResumePage() {
   const [draft, setDraft] = useState<ResumeForm>(emptyResume);
   const [analysis, setAnalysis] = useState("");
   const [intro, setIntro] = useState("");
+  const [introStyle, setIntroStyle] = useState("formal");
   const [messages, setMessages] = useState<InterviewMessage[]>([]);
   const [reply, setReply] = useState("");
   const [error, setError] = useState("");
@@ -213,7 +223,7 @@ export function ResumePage() {
 
   async function onIntro() {
     await persistThen(async (id) => {
-      const saved = await generateResumeIntro(id);
+      const saved = await generateResumeIntro(id, introStyle);
       setItems((prev) => prev.map((item) => (item.id === saved.id ? saved : item)));
       setIntro(saved.intro || "");
       setHint("自我介绍已生成");
@@ -589,6 +599,20 @@ export function ResumePage() {
 
             {section === "intro" ? (
               <div>
+                <div className="mb-3 flex flex-wrap gap-1">
+                  {INTRO_STYLES.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={`rounded-md px-2.5 py-1.5 text-[13px] ${
+                        introStyle === item.id ? "bg-[var(--bg)]" : "text-[var(--muted)] hover:bg-[var(--hover)]"
+                      }`}
+                      onClick={() => setIntroStyle(item.id)}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
                 <div className="flex flex-wrap gap-2">
                   <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy} onClick={() => void onIntro()}>
                     {intro ? "再生成" : "生成自我介绍"}
@@ -602,7 +626,7 @@ export function ResumePage() {
                 {intro ? (
                   <pre className="mt-3 max-h-[420px] overflow-auto whitespace-pre-wrap text-[13px] leading-6 text-[var(--muted)]">{intro}</pre>
                 ) : (
-                  <p className="mt-3 text-[13px] text-[var(--muted)]">按简历生成一段大约1分钟的面试开场自我介绍。先保存简历，并在设置里配好 AI。</p>
+                  <p className="mt-3 text-[13px] text-[var(--muted)]">先选风格，再生成一段面试开场自我介绍。先保存简历，并在设置里配好 AI。</p>
                 )}
               </div>
             ) : null}

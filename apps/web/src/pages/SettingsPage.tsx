@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { fetchSettings, saveDatabase, saveLlm, testDatabase, testLlm } from "@/api/client";
+import { downloadBackup, fetchSettings, importBackup, saveDatabase, saveLlm, testDatabase, testLlm } from "@/api/client";
 import type { DatabaseWrite, SettingsInfo } from "@/api/types";
 import { Card } from "@/components/Card";
 import { ConfirmModal } from "@/components/Modal";
@@ -38,6 +38,9 @@ export function SettingsPage() {
   const [error, setError] = useState("");
   const [hint, setHint] = useState("");
   const [busy, setBusy] = useState(false);
+  const [importMode, setImportMode] = useState<"replace" | "merge" | null>(null);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const backupRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     fetchSettings()
@@ -89,6 +92,44 @@ export function SettingsPage() {
       setError(err instanceof Error ? err.message : "测试失败");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function onExportBackup() {
+    setBusy(true);
+    setError("");
+    setHint("");
+    try {
+      await downloadBackup();
+      setHint("已导出备份");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "导出失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function pickImport(mode: "replace" | "merge") {
+    setImportMode(mode);
+    setPendingFile(null);
+    if (backupRef.current) backupRef.current.value = "";
+    backupRef.current?.click();
+  }
+
+  async function runImport(file: File, mode: "replace" | "merge") {
+    setBusy(true);
+    setError("");
+    setHint("");
+    try {
+      const result = await importBackup(file, mode);
+      setHint(`已导入：网站入口 ${result.portal} 条，简历 ${result.resume} 份`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "导入失败");
+    } finally {
+      setBusy(false);
+      setPendingFile(null);
+      setImportMode(null);
+      if (backupRef.current) backupRef.current.value = "";
     }
   }
 
@@ -375,6 +416,40 @@ export function SettingsPage() {
             </Card>
           ) : null}
 
+          {!managing && visibleIds.includes("backup") ? (
+            <Card title="备份" className="px-5 py-4">
+              <p className="text-[13px] leading-6 text-[var(--muted)]">
+                换电脑或换数据库时，先导出再导入。会带上网站入口、简历和模块开关，不含 AI Key 和数据库密码。
+              </p>
+              <div className="mt-5 flex flex-wrap gap-3">
+                <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy} onClick={() => void onExportBackup()}>
+                  导出数据
+                </button>
+                <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy} onClick={() => pickImport("replace")}>
+                  导入并覆盖
+                </button>
+                <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy} onClick={() => pickImport("merge")}>
+                  导入并合并
+                </button>
+                <input
+                  ref={backupRef}
+                  type="file"
+                  accept=".json"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (!file || !importMode) return;
+                    if (importMode === "replace") {
+                      setPendingFile(file);
+                      return;
+                    }
+                    void runImport(file, "merge");
+                  }}
+                />
+              </div>
+            </Card>
+          ) : null}
+
           {!managing && visibleIds.includes("ai") ? (
             <Card title="AI" className="px-5 py-4">
               <p className="text-[13px] leading-6 text-[var(--muted)]">
@@ -452,6 +527,21 @@ export function SettingsPage() {
             setDeleteCategoryId(null);
           }}
           onClose={() => setDeleteCategoryId(null)}
+        />
+      ) : null}
+
+      {pendingFile && importMode === "replace" ? (
+        <ConfirmModal
+          title="导入并覆盖"
+          message="会覆盖当前网站入口和简历，确定导入？"
+          confirmLabel="导入"
+          busy={busy}
+          onConfirm={() => void runImport(pendingFile, "replace")}
+          onClose={() => {
+            setPendingFile(null);
+            setImportMode(null);
+            if (backupRef.current) backupRef.current.value = "";
+          }}
         />
       ) : null}
     </PageFrame>

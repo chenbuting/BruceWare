@@ -1,6 +1,6 @@
 /** 设置内容归类：分类是文件夹，设置项可以自己挪。存在本机。 */
 
-export type SettingItemId = "overview" | "database" | "ai";
+export type SettingItemId = "overview" | "database" | "ai" | "backup";
 
 export type SettingsCategory = {
   id: string;
@@ -20,6 +20,7 @@ export type SettingsLayout = {
 export const SETTING_ITEMS: { id: SettingItemId; label: string }[] = [
   { id: "overview", label: "当前" },
   { id: "database", label: "数据源" },
+  { id: "backup", label: "备份" },
   { id: "ai", label: "AI" },
 ];
 
@@ -36,6 +37,7 @@ function defaultLayout(): SettingsLayout {
     items: [
       { id: "overview", categoryId: "cat-overview" },
       { id: "database", categoryId: "cat-database" },
+      { id: "backup", categoryId: "cat-database" },
       { id: "ai", categoryId: "cat-ai" },
     ],
   };
@@ -56,7 +58,12 @@ function normalize(layout: SettingsLayout): SettingsLayout {
     });
   }
   for (const row of SETTING_ITEMS) {
-    if (!seen.has(row.id)) items.push({ id: row.id, categoryId: fallback });
+    if (seen.has(row.id)) continue;
+    const prefer = row.id === "backup" ? "cat-database" : fallback;
+    items.push({
+      id: row.id,
+      categoryId: safeCats.some((cat) => cat.id === prefer) ? prefer : fallback,
+    });
   }
   return { categories: safeCats, items };
 }

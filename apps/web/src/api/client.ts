@@ -140,9 +140,10 @@ export function analyzeResumeDoc(id: number) {
   });
 }
 
-export function generateResumeIntro(id: number) {
+export function generateResumeIntro(id: number, style: string) {
   return request<ResumeDoc>(`/api/v1/resume/docs/${id}/intro`, {
     method: "POST",
+    body: JSON.stringify({ style }),
   });
 }
 
@@ -184,7 +185,41 @@ function filenameFrom(res: Response, fallback: string) {
   }
   const plain = /filename="?([^";]+)"?/i.exec(header);
   if (plain?.[1] && plain[1] !== "resume.docx") return plain[1];
-  return fallback.endsWith(".docx") ? fallback : `${fallback}.docx`;
+  if (fallback.includes(".")) return fallback;
+  return `${fallback}.docx`;
+}
+
+export async function downloadBackup() {
+  const res = await fetch("/api/v1/settings/export");
+  if (!res.ok) {
+    let message = "导出失败";
+    try {
+      const body = (await res.json()) as ApiResult<null>;
+      message = body.message || message;
+    } catch {
+      /* 不是 JSON */
+    }
+    throw new Error(message);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filenameFrom(res, "bruceware-backup.json");
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+export function importBackup(file: File, mode: "replace" | "merge") {
+  const body = new FormData();
+  body.append("file", file);
+  body.append("mode", mode);
+  return request<{ mode: string; portal: number; resume: number; interview: number }>("/api/v1/settings/import", {
+    method: "POST",
+    body,
+  });
 }
 
 export async function downloadResumeDoc(id: number, filename: string) {
