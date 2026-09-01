@@ -13,6 +13,11 @@ from PIL import Image
 from app.core.ai import chat_complete
 
 PARTS = ("upperbody", "wholebody_up", "lowerbody", "accessories_up", "shoes")
+STYLE_PROMPT = """只看这张时尚照片怎么拍的，不要写衣服款式。
+只返回 JSON，不要其它文字：
+{"lighting":"光线怎么打，几个字","scene":"什么背景和场景","pose":"站姿、手在哪、看向哪里","framing":"全身还是半身"}"""
+
+
 ANALYZE_PROMPT = """看这张照片，找出每一件真正能进衣橱的衣服（上衣、外套、裤子/裙子、鞋、配饰）。
 不要身体、背景、家具。
 只返回 JSON，不要其它文字：
@@ -49,6 +54,36 @@ def analyze_photo(data: bytes, mime: str = "image/jpeg") -> list[dict[str, Any]]
     if not isinstance(items, list):
         raise ValueError("没有识别出衣服")
     return [_normalize(item) for item in items if isinstance(item, dict)][:8]
+
+
+def describe_style(data: bytes) -> dict[str, str]:
+    """读出风格图的光线、场景、姿势，给生图用。"""
+    preview, preview_mime = _for_vision(data)
+    encoded = base64.b64encode(preview).decode("ascii")
+    try:
+        text = chat_complete(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": STYLE_PROMPT},
+                        {"type": "image_url", "image_url": {"url": f"data:{preview_mime};base64,{encoded}"}},
+                    ],
+                }
+            ],
+            timeout=45,
+        )
+        payload = _parse_json(text)
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    out: dict[str, str] = {}
+    for key in ("lighting", "scene", "pose", "framing"):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            out[key] = value[:80]
+    return out
 
 
 def crop_box(data: bytes, box: dict[str, Any]) -> bytes:

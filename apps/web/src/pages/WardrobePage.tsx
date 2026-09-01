@@ -220,7 +220,7 @@ export function WardrobePage() {
     }
     setBusy(true);
     setError("");
-    setHint("正在生成效果图，大约一两分钟，请不要重复点");
+    setHint("正在对照风格图的光线、场景和姿势生成，大约一两分钟，请不要重复点");
     try {
       await createWardrobeLook(ids, "");
       const data = await fetchWardrobeLooks();
