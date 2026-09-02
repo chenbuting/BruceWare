@@ -38,17 +38,10 @@ type Preview =
   | { kind: "look"; look: WardrobeLook }
   | { kind: "photo"; src: string; title: string };
 
-/** 从搭配标题里找出当时用的风格 */
-function styleForLook(look: WardrobeLook, styles: WardrobeStyle[]): WardrobeStyle | undefined {
-  const named = styles.filter((item) => item.name && look.title.endsWith(` · ${item.name}`));
-  return named.find((item) => item.active) || named[0];
-}
-
-/** 搭配放大：效果图、这套衣服、当时用的风格图 */
+/** 搭配放大：效果图、这套衣服、生成时记下的风格图 */
 function LookPreview({
   look,
   items,
-  styles,
   focusId,
   styleFocusSrc,
   onFocus,
@@ -56,18 +49,18 @@ function LookPreview({
 }: {
   look: WardrobeLook;
   items: WardrobeItem[];
-  styles: WardrobeStyle[];
   focusId: number | null;
   styleFocusSrc: string;
   onFocus: (id: number | null) => void;
   onFocusStyle: (src: string) => void;
 }) {
   const focusItem = focusId ? items.find((row) => row.id === focusId) : null;
-  const style = styleForLook(look, styles);
+  const styleName = look.style_name || "";
+  const styleUrls = look.style_image_urls || [];
   const mainSrc = focusItem
     ? focusItem.cutout_url || focusItem.original_url
     : styleFocusSrc || look.image_url;
-  const mainAlt = focusItem ? focusItem.name : styleFocusSrc ? style?.name || "风格参考" : look.title;
+  const mainAlt = focusItem ? focusItem.name : styleFocusSrc ? styleName || "风格参考" : look.title;
 
   return (
     <div>
@@ -86,7 +79,7 @@ function LookPreview({
         </div>
       ) : styleFocusSrc ? (
         <div className="mt-2 flex flex-wrap items-center gap-3 text-[13px] text-[var(--muted)]">
-          <span>风格参考{style?.name ? ` · ${style.name}` : ""}</span>
+          <span>风格参考{styleName ? ` · ${styleName}` : ""}</span>
           <button type="button" className="text-[var(--text)]" onClick={() => onFocusStyle("")}>
             看整套
           </button>
@@ -130,14 +123,14 @@ function LookPreview({
           })}
         </div>
       )}
-      {style ? (
+      {styleName || styleUrls.length > 0 ? (
         <>
-          <div className="mt-4 text-[13px] font-medium">风格参考 · {style.name}</div>
-          {style.image_urls.length === 0 ? (
-            <p className="mt-2 text-[13px] text-[var(--muted)]">这套风格还没有参考图。</p>
+          <div className="mt-4 text-[13px] font-medium">风格参考{styleName ? ` · ${styleName}` : ""}</div>
+          {styleUrls.length === 0 ? (
+            <p className="mt-2 text-[13px] text-[var(--muted)]">当时没有存下风格图。</p>
           ) : (
             <div className="mt-2 flex flex-wrap gap-2">
-              {style.image_urls.map((url) => (
+              {styleUrls.map((url) => (
                 <button
                   key={url}
                   type="button"
@@ -147,7 +140,7 @@ function LookPreview({
                     onFocusStyle(styleFocusSrc === url ? "" : url);
                   }}
                 >
-                  <img src={url} alt={style.name} className="h-full w-full object-cover" />
+                  <img src={url} alt={styleName || "风格参考"} className="h-full w-full object-cover" />
                 </button>
               ))}
             </div>
@@ -615,7 +608,7 @@ export function WardrobePage() {
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
               {looks.map((look) => {
-                const style = styleForLook(look, styles);
+                const styleUrls = look.style_image_urls || [];
                 return (
                 <Card key={look.id} className="px-3 py-3">
                   {look.image_url ? (
@@ -631,17 +624,17 @@ export function WardrobePage() {
                       <img src={look.image_url} alt={look.title} className="max-h-full max-w-full object-contain" />
                     </button>
                   ) : null}
-                  {style && style.image_urls.length > 0 ? (
+                  {styleUrls.length > 0 ? (
                     <div className="mt-2 flex flex-wrap items-center gap-2">
                       <span className="text-[12px] text-[var(--muted)]">风格</span>
-                      {style.image_urls.slice(0, 4).map((url) => (
+                      {styleUrls.slice(0, 4).map((url) => (
                         <button
                           key={url}
                           type="button"
                           className="h-10 w-10 overflow-hidden rounded-md border border-[var(--line)] bg-[var(--bg)]"
-                          onClick={() => setPreview({ kind: "photo", src: url, title: style.name })}
+                          onClick={() => setPreview({ kind: "photo", src: url, title: look.style_name || "风格参考" })}
                         >
-                          <img src={url} alt={style.name} className="h-full w-full object-cover" />
+                          <img src={url} alt={look.style_name || "风格参考"} className="h-full w-full object-cover" />
                         </button>
                       ))}
                     </div>
@@ -708,7 +701,6 @@ export function WardrobePage() {
             <LookPreview
               look={preview.look}
               items={items}
-              styles={styles}
               focusId={lookFocusId}
               styleFocusSrc={styleFocusSrc}
               onFocus={setLookFocusId}

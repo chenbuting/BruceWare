@@ -19,10 +19,14 @@ from app.core.response import fail, ok
 from app.db.session import get_db
 from app.wardrobe.models import WardrobeItem, WardrobeLook, WardrobeStyle
 from app.wardrobe.store import (
+    copy_style_into_look,
     item_dir,
+    list_look_style_files,
     list_style_files,
     look_dir,
+    look_style_name,
     read_item_file,
+    read_look_file,
     read_style_file,
     reference_path,
     style_dir,
@@ -93,13 +97,32 @@ def _item_dict(row: WardrobeItem) -> dict[str, Any]:
 
 def _look_dict(row: WardrobeLook) -> dict[str, Any]:
     path = look_dir(row.id) / "look.png"
+    style_files = list_look_style_files(row.id)
+    name = look_style_name(row.id, row.title or "")
     return {
         "id": row.id,
         "title": row.title or "",
         "item_ids": json.loads(row.item_ids or "[]"),
         "image_url": _file_url(path, f"/api/v1/wardrobe/files/looks/{row.id}/look.png"),
+        "style_name": name,
+        "style_image_urls": [
+            _file_url(item, f"/api/v1/wardrobe/files/looks/{row.id}/{item.name}") for item in style_files
+        ],
         "created_at": row.created_at.isoformat() if row.created_at else "",
     }
+
+
+def _backfill_look_style(row: WardrobeLook, db: Session) -> None:
+    """旧搭配还没存风格图时，按标题补一份，补完就不再跟着风格库变。"""
+
+    if list_look_style_files(row.id):
+        return
+    title = row.title or ""
+    matched = [item for item in db.scalars(select(WardrobeStyle)).all() if item.name and title.endswith(f" · {item.name}")]
+    if not matched:
+        return
+    matched.sort(key=lambda item: item.id)
+    copy_style_into_look(row.id, matched[0].id, matched[0].name or "")
 
 
 def _garment_prompt(item: dict[str, Any]) -> str:
@@ -368,6 +391,8 @@ def remake_modeled(item_id: int, db: Session = Depends(get_db)):
 @router.get("/wardrobe/looks")
 def list_looks(db: Session = Depends(get_db)):
     rows = db.scalars(select(WardrobeLook).order_by(WardrobeLook.id.desc())).all()
+    for row in rows:
+        _backfill_look_style(row, db)
     return ok({"items": [_look_dict(row) for row in rows]})
 
 
@@ -417,6 +442,9 @@ def make_look(body: LookIn, db: Session = Depends(get_db)):
     db.add(row)
     db.flush()
     write_bytes(look_dir(row.id) / "look.png", picture)
+    active = _active_style(db)
+    if active is not None:
+        copy_style_into_look(row.id, active.id, style_name or active.name or "")
     db.commit()
     db.refresh(row)
     return ok(_look_dict(row))
@@ -489,9 +517,10 @@ def delete_look(look_id: int, db: Session = Depends(get_db)):
     row = db.get(WardrobeLook, look_id)
     if row is None:
         return fail("没有这套搭配")
-    path = look_dir(look_id) / "look.png"
-    if path.is_file():
-        path.unlink()
+    folder = look_dir(look_id)
+    for child in folder.glob("*"):
+        if child.is_file():
+            child.unlink()
     db.delete(row)
     db.commit()
     return ok(True)
@@ -517,10 +546,8 @@ def file_item(item_id: int, name: str):
 
 @router.get("/wardrobe/files/looks/{look_id}/{name}")
 def file_look(look_id: int, name: str):
-    if name != "look.png":
-        return fail("没有这张图")
-    path = look_dir(look_id) / name
-    if not path.is_file():
+    path = read_look_file(look_id, name)
+    if path is None:
         return fail("没有这张图")
     return FileResponse(path)
 
