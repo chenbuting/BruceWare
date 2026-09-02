@@ -19,6 +19,7 @@ from app.core.response import fail, ok
 from app.db.session import get_db
 from app.wardrobe.models import WardrobeItem, WardrobeLook, WardrobeStyle
 from app.wardrobe.store import (
+    copy_look_style,
     copy_style_into_look,
     item_dir,
     list_look_style_files,
@@ -165,6 +166,23 @@ def _style_line(name: str, desc: dict[str, str] | None = None) -> str:
 
 def _single_shot() -> str:
     return "只输出一张完整照片，一个人，一个场景。不要三连图、分栏、拼图、网格、四宫格。"
+
+
+POSE_VARIANTS = [
+    "换成站立姿势：正面或微侧，一只手自然垂下或轻轻插口袋。姿势必须和原图明显不同。",
+    "换成走动或回眸姿势：迈一小步，或身体转向一侧看向别处。姿势必须和原图明显不同。",
+]
+
+
+def _pose_vary_prompt(pose: str) -> str:
+    return (
+        "以这张图为唯一参考，拍一张真实时尚照片。"
+        "同一个人、同一张脸、同一发型、同一套衣服、同一光线和同一场景。"
+        "只改姿势，不要改衣服颜色、版型和细节，不要换人。"
+        f"{pose}"
+        + _single_shot()
+        + "不要文字、水印、logo。"
+    )
 
 
 def _modeled_prompt(item: dict[str, Any], style_name: str = "", desc: dict[str, str] | None = None) -> str:
@@ -448,6 +466,65 @@ def make_look(body: LookIn, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(row)
     return ok(_look_dict(row))
+
+
+def _write_look(db: Session, picture: bytes, title: str, item_ids: list[int], source_id: int = 0) -> WardrobeLook:
+    row = WardrobeLook(title=title[:200], item_ids=json.dumps(item_ids), created_at=datetime.utcnow())
+    db.add(row)
+    db.flush()
+    write_bytes(look_dir(row.id) / "look.png", picture)
+    if source_id:
+        copy_look_style(source_id, row.id)
+    return row
+
+
+@router.post("/wardrobe/looks/vary")
+async def vary_look(
+    look_id: int = Form(0),
+    file: UploadFile | None = File(None),
+    db: Session = Depends(get_db),
+):
+    """从现有搭配或上传图做姿势裂变，固定出 2 张。"""
+
+    source: WardrobeLook | None = None
+    raw = b""
+    if look_id:
+        source = db.get(WardrobeLook, look_id)
+        if source is None:
+            return fail("没有这套搭配")
+        path = look_dir(look_id) / "look.png"
+        if not path.is_file():
+            return fail("这套搭配没有效果图")
+        raw = path.read_bytes()
+    elif file is not None:
+        raw = await file.read()
+        if not raw:
+            return fail("请先选一张图")
+        try:
+            raw = to_png(raw)
+        except Exception:
+            return fail("这张图打不开")
+    else:
+        return fail("请先选一套搭配，或上传一张图")
+
+    base = (source.title if source else "姿势裂变").split(" · 姿势裂变")[0].strip() or "姿势裂变"
+    title = f"{base} · 姿势裂变"
+    ids = json.loads(source.item_ids or "[]") if source else []
+    created: list[WardrobeLook] = []
+    last_error = ""
+    for pose in POSE_VARIANTS:
+        try:
+            picture = image_edit(_pose_vary_prompt(pose), [raw], size="1024x1024", timeout=180)
+        except ValueError as exc:
+            last_error = str(exc)
+            continue
+        created.append(_write_look(db, picture, title, ids, source.id if source else 0))
+    if not created:
+        return fail(last_error or "姿势裂变失败")
+    db.commit()
+    for row in created:
+        db.refresh(row)
+    return ok({"items": [_look_dict(row) for row in created]})
 
 
 @router.get("/wardrobe/styles")

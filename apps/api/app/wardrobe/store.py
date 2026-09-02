@@ -83,6 +83,16 @@ def save_look_style_name(look_id: int, name: str) -> None:
     write_bytes(look_dir(look_id) / "style-name.txt", name.encode("utf-8"))
 
 
+def copy_look_style(src_id: int, dst_id: int) -> None:
+    """把一套搭配记下的风格图拷到新搭配，裂变时沿用原来的参考。"""
+
+    name = look_style_name(src_id)
+    if name:
+        save_look_style_name(dst_id, name)
+    for index, path in enumerate(list_look_style_files(src_id), start=1):
+        write_bytes(look_dir(dst_id) / f"style-{index}.png", path.read_bytes())
+
+
 def copy_style_into_look(look_id: int, style_id: int, style_name: str) -> None:
     """把当时的风格图复制进搭配目录，之后改风格不会动到旧搭配。"""
 

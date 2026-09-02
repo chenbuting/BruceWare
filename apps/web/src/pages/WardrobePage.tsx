@@ -15,6 +15,7 @@ import {
   importWardrobeItems,
   saveWardrobeReference,
   setWardrobeStyleActive,
+  varyWardrobeLook,
 } from "@/api/client";
 import type { WardrobeDetected, WardrobeItem, WardrobeLook, WardrobeStyle } from "@/api/types";
 import { Card } from "@/components/Card";
@@ -44,15 +45,19 @@ function LookPreview({
   items,
   focusId,
   styleFocusSrc,
+  busy,
   onFocus,
   onFocusStyle,
+  onVary,
 }: {
   look: WardrobeLook;
   items: WardrobeItem[];
   focusId: number | null;
   styleFocusSrc: string;
+  busy: boolean;
   onFocus: (id: number | null) => void;
   onFocusStyle: (src: string) => void;
+  onVary: () => void;
 }) {
   const focusItem = focusId ? items.find((row) => row.id === focusId) : null;
   const styleName = look.style_name || "";
@@ -87,6 +92,9 @@ function LookPreview({
       ) : (
         <p className="mt-2 text-[13px] text-[var(--muted)]">点下面单件或风格图，看细节。</p>
       )}
+      <button type="button" className="mt-3 border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px] disabled:opacity-50" disabled={busy} onClick={onVary}>
+        {busy ? "裂变中…" : "姿势裂变"}
+      </button>
       <div className="mt-4 text-[13px] font-medium">这套用了 {look.item_ids.length} 件</div>
       {look.item_ids.length === 0 ? (
         <p className="mt-2 text-[13px] text-[var(--muted)]">没有记下衣服明细。</p>
@@ -179,6 +187,7 @@ export function WardrobePage() {
   const directRef = useRef<HTMLInputElement>(null);
   const selfRef = useRef<HTMLInputElement>(null);
   const styleRef = useRef<HTMLInputElement>(null);
+  const varyRef = useRef<HTMLInputElement>(null);
 
   async function reload() {
     const [status, closet, looksData, stylesData] = await Promise.all([
@@ -330,6 +339,28 @@ export function WardrobePage() {
       setError(err instanceof Error ? err.message : "保存失败");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function onVary(lookId?: number, file?: File) {
+    if (!lookId && !file) {
+      setError("请先选一套搭配，或上传一张图");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setHint("正在做姿势裂变，一次 2 张，大约一两分钟，请不要重复点");
+    try {
+      const data = await varyWardrobeLook(lookId, file);
+      await reload();
+      setTab("looks");
+      setPreview(null);
+      setHint(data.items.length >= 2 ? "姿势裂变好了，新图已放到搭配" : "只做出 1 张，可以再试一次");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "裂变失败");
+    } finally {
+      setBusy(false);
+      if (varyRef.current) varyRef.current.value = "";
     }
   }
 
@@ -595,13 +626,19 @@ export function WardrobePage() {
         <div>
           <Card className="mb-4 px-5 py-4">
             <p className="text-[13px] text-[var(--muted)]">
-              在衣橱里点「选来搭配」，一件就能试穿，多件就是整套。
+              在衣橱里点「选来搭配」，一件就能试穿，多件就是整套。点「姿势裂变」会按这张图再出 2 个不同姿势。也可以自己上传一张图来裂变。
               {activeStyleName ? ` 会学「${activeStyleName}」的光线、场景和姿势，衣服用你选的。` : ""}
             </p>
             <div className="mt-3 text-[13px]">已选 {picked.length} 件</div>
-            <button type="button" className="mt-3 border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy || picked.length < 1} onClick={() => void onTryOn(picked)}>
-              生成搭配
-            </button>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy || picked.length < 1} onClick={() => void onTryOn(picked)}>
+                生成搭配
+              </button>
+              <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy} onClick={() => varyRef.current?.click()}>
+                {busy ? "裂变中…" : "上传图片做姿势裂变"}
+              </button>
+              <input ref={varyRef} type="file" accept="image/*" className="hidden" onChange={(e) => void onVary(undefined, e.target.files?.[0])} />
+            </div>
           </Card>
           {looks.length === 0 ? (
             <p className="text-[13px] text-[var(--muted)]">还没有搭配图。</p>
@@ -641,17 +678,22 @@ export function WardrobePage() {
                   ) : null}
                   <div className="mt-2 flex items-center justify-between gap-3">
                     <div className="text-[13px]">{look.title}</div>
-                    <button
-                      type="button"
-                      className="text-[13px] text-[var(--muted)]"
-                      onClick={() =>
-                        deleteWardrobeLook(look.id)
-                          .then(() => setLooks((prev) => prev.filter((item) => item.id !== look.id)))
-                          .catch((err: Error) => setError(err.message))
-                      }
-                    >
-                      删除
-                    </button>
+                    <div className="flex shrink-0 gap-2">
+                      <button type="button" className="text-[13px] text-[var(--muted)] disabled:opacity-50" disabled={busy} onClick={() => void onVary(look.id)}>
+                        姿势裂变
+                      </button>
+                      <button
+                        type="button"
+                        className="text-[13px] text-[var(--muted)]"
+                        onClick={() =>
+                          deleteWardrobeLook(look.id)
+                            .then(() => setLooks((prev) => prev.filter((item) => item.id !== look.id)))
+                            .catch((err: Error) => setError(err.message))
+                        }
+                      >
+                        删除
+                      </button>
+                    </div>
                   </div>
                 </Card>
                 );
@@ -703,8 +745,10 @@ export function WardrobePage() {
               items={items}
               focusId={lookFocusId}
               styleFocusSrc={styleFocusSrc}
+              busy={busy}
               onFocus={setLookFocusId}
               onFocusStyle={setStyleFocusSrc}
+              onVary={() => void onVary(preview.look.id)}
             />
           ) : null}
           {preview.kind === "photo" ? (
