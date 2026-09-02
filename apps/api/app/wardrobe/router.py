@@ -25,7 +25,9 @@ from app.wardrobe.store import (
     list_look_style_files,
     list_style_files,
     look_dir,
+    look_prompt,
     look_style_name,
+    save_look_prompt,
     read_item_file,
     read_look_file,
     read_style_file,
@@ -107,6 +109,7 @@ def _look_dict(row: WardrobeLook) -> dict[str, Any]:
         "item_ids": json.loads(row.item_ids or "[]"),
         "image_url": _file_url(path, f"/api/v1/wardrobe/files/looks/{row.id}/look.png"),
         "source_image_url": _file_url(before, f"/api/v1/wardrobe/files/looks/{row.id}/source.png"),
+        "prompt": look_prompt(row.id),
         "style_name": name,
         "style_image_urls": [
             _file_url(item, f"/api/v1/wardrobe/files/looks/{row.id}/{item.name}") for item in style_files
@@ -488,6 +491,7 @@ def make_look(body: LookIn, db: Session = Depends(get_db)):
     db.add(row)
     db.flush()
     write_bytes(look_dir(row.id) / "look.png", picture)
+    save_look_prompt(row.id, prompt)
     active = _active_style(db)
     if active is not None:
         copy_style_into_look(row.id, active.id, style_name or active.name or "")
@@ -503,6 +507,7 @@ def _write_look(
     item_ids: list[int],
     source_id: int = 0,
     source_bytes: bytes = b"",
+    prompt: str = "",
 ) -> WardrobeLook:
     row = WardrobeLook(title=title[:200], item_ids=json.dumps(item_ids), created_at=datetime.utcnow())
     db.add(row)
@@ -510,6 +515,7 @@ def _write_look(
     write_bytes(look_dir(row.id) / "look.png", picture)
     if source_bytes:
         write_bytes(look_dir(row.id) / "source.png", source_bytes)
+    save_look_prompt(row.id, prompt)
     if source_id:
         copy_look_style(source_id, row.id)
     return row
@@ -552,12 +558,13 @@ async def vary_look(
     last_error = ""
     times = max(1, min(3, int(count or 2)))
     for pose in POSE_VARIANTS[:times]:
+        prompt = _pose_vary_prompt(pose)
         try:
-            picture = image_edit(_pose_vary_prompt(pose), [raw], size="1024x1024", timeout=180)
+            picture = image_edit(prompt, [raw], size="1024x1024", timeout=180)
         except ValueError as exc:
             last_error = str(exc)
             continue
-        created.append(_write_look(db, picture, title, ids, source.id if source else 0, raw))
+        created.append(_write_look(db, picture, title, ids, source.id if source else 0, raw, prompt))
     if not created:
         return fail(last_error or "姿势裂变失败")
     db.commit()

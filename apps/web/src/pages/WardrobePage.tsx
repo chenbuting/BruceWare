@@ -116,6 +116,12 @@ function LookPreview({
       <button type="button" className="mt-3 border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px] disabled:opacity-50" disabled={busy} onClick={onVary}>
         {busy ? "裂变中…" : "姿势裂变"}
       </button>
+      {look.prompt ? (
+        <div className="mt-4">
+          <div className="text-[13px] font-medium">提示词</div>
+          <p className="mt-2 whitespace-pre-wrap text-[13px] leading-6 text-[var(--muted)]">{look.prompt}</p>
+        </div>
+      ) : null}
       <div className="mt-4 text-[13px] font-medium">这套用了 {look.item_ids.length} 件</div>
       {look.item_ids.length === 0 ? (
         <p className="mt-2 text-[13px] text-[var(--muted)]">没有记下衣服明细。</p>

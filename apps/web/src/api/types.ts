@@ -74,6 +74,7 @@ export type WardrobeLook = {
   item_ids: number[];
   image_url: string;
   source_image_url: string;
+  prompt: string;
   style_name: string;
   style_image_urls: string[];
   created_at: string;

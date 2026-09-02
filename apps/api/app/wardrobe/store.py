@@ -77,6 +77,21 @@ def look_style_name(look_id: int, title: str = "") -> str:
     return ""
 
 
+def look_prompt(look_id: int) -> str:
+    """读这套搭配生成时用的提示词。"""
+
+    path = look_dir(look_id) / "prompt.txt"
+    if not path.is_file():
+        return ""
+    return path.read_text(encoding="utf-8").strip()
+
+
+def save_look_prompt(look_id: int, prompt: str) -> None:
+    if not prompt:
+        return
+    write_bytes(look_dir(look_id) / "prompt.txt", prompt.encode("utf-8"))
+
+
 def save_look_style_name(look_id: int, name: str) -> None:
     if not name:
         return
