@@ -315,6 +315,14 @@ export function deleteWardrobeLook(id: number) {
   return request<boolean>(`/api/v1/wardrobe/looks/${id}`, { method: "DELETE" });
 }
 
+/** 按改过的提示词重做这一套搭配 */
+export function remakeWardrobeLook(lookId: number, prompt: string) {
+  return request<WardrobeLook>(`/api/v1/wardrobe/looks/${lookId}/remake`, {
+    method: "POST",
+    body: JSON.stringify({ prompt }),
+  });
+}
+
 /** 从现有搭配或上传图做姿势裂变，张数 1～3 */
 export function varyWardrobeLook(lookId?: number, file?: File, count = 2) {
   const body = new FormData();

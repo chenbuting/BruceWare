@@ -67,6 +67,10 @@ class LookIn(BaseModel):
     title: str = ""
 
 
+class LookPromptIn(BaseModel):
+    prompt: str = ""
+
+
 class StyleActiveIn(BaseModel):
     active: bool = True
 
@@ -571,6 +575,47 @@ async def vary_look(
     for row in created:
         db.refresh(row)
     return ok({"items": [_look_dict(row) for row in created]})
+
+
+@router.post("/wardrobe/looks/{look_id}/remake")
+def remake_look(look_id: int, body: LookPromptIn, db: Session = Depends(get_db)):
+    """按改过的提示词重做这一套，原图留下来做对比。"""
+
+    prompt = (body.prompt or "").strip()
+    if not prompt:
+        return fail("请先写提示词")
+    row = db.get(WardrobeLook, look_id)
+    if row is None:
+        return fail("没有这套搭配")
+    folder = look_dir(look_id)
+    current = folder / "look.png"
+    source = folder / "source.png"
+    images: list[bytes] = []
+    if source.is_file():
+        images = [source.read_bytes()]
+    else:
+        ids = [int(item) for item in json.loads(row.item_ids or "[]")]
+        ref = reference_path()
+        if ids and ref.is_file():
+            images = [ref.read_bytes()]
+            for item_id in ids[:3]:
+                cutout = item_dir(item_id) / "cutout.png"
+                if not cutout.is_file():
+                    return fail("有衣服还没有单件图")
+                images.append(cutout.read_bytes())
+        elif current.is_file():
+            images = [current.read_bytes()]
+        else:
+            return fail("没有参考图，没法重做")
+    if current.is_file() and not source.is_file():
+        write_bytes(source, current.read_bytes())
+    try:
+        picture = image_edit(prompt, images, size="1024x1024", timeout=180)
+    except ValueError as exc:
+        return fail(str(exc))
+    write_bytes(current, picture)
+    save_look_prompt(look_id, prompt)
+    return ok(_look_dict(row))
 
 
 @router.get("/wardrobe/styles")

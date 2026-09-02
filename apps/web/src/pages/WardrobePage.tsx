@@ -14,6 +14,7 @@ import {
   fetchWardrobeStyles,
   importWardrobeItems,
   saveWardrobeReference,
+  remakeWardrobeLook,
   setWardrobeStyleActive,
   varyWardrobeLook,
 } from "@/api/client";
@@ -49,6 +50,7 @@ function LookPreview({
   onFocus,
   onFocusStyle,
   onVary,
+  onRemake,
 }: {
   look: WardrobeLook;
   items: WardrobeItem[];
@@ -58,7 +60,12 @@ function LookPreview({
   onFocus: (id: number | null) => void;
   onFocusStyle: (src: string) => void;
   onVary: () => void;
+  onRemake: (prompt: string) => void;
 }) {
+  const [draft, setDraft] = useState(look.prompt || "");
+  useEffect(() => {
+    setDraft(look.prompt || "");
+  }, [look.id, look.prompt]);
   const focusItem = focusId ? items.find((row) => row.id === focusId) : null;
   const styleName = look.style_name || "";
   const styleUrls = look.style_image_urls || [];
@@ -116,12 +123,24 @@ function LookPreview({
       <button type="button" className="mt-3 border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px] disabled:opacity-50" disabled={busy} onClick={onVary}>
         {busy ? "裂变中…" : "姿势裂变"}
       </button>
-      {look.prompt ? (
-        <div className="mt-4">
-          <div className="text-[13px] font-medium">提示词</div>
-          <p className="mt-2 whitespace-pre-wrap text-[13px] leading-6 text-[var(--muted)]">{look.prompt}</p>
-        </div>
-      ) : null}
+      <div className="mt-4">
+        <div className="text-[13px] font-medium">提示词</div>
+        <p className="mt-1 text-[12px] text-[var(--muted)]">可以改几句再点重做，人、衣服尽量按原图走。</p>
+        <textarea
+          className="mt-2 min-h-28 w-full border border-[var(--line)] bg-[var(--paper)] px-2 py-1.5 text-[13px] leading-6"
+          value={draft}
+          disabled={busy}
+          onChange={(e) => setDraft(e.target.value)}
+        />
+        <button
+          type="button"
+          className="mt-2 border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px] disabled:opacity-50"
+          disabled={busy || !draft.trim()}
+          onClick={() => onRemake(draft.trim())}
+        >
+          {busy ? "重做中…" : "按提示词重做"}
+        </button>
+      </div>
       <div className="mt-4 text-[13px] font-medium">这套用了 {look.item_ids.length} 件</div>
       {look.item_ids.length === 0 ? (
         <p className="mt-2 text-[13px] text-[var(--muted)]">没有记下衣服明细。</p>
@@ -389,6 +408,26 @@ export function WardrobePage() {
     } finally {
       setBusy(false);
       if (varyRef.current) varyRef.current.value = "";
+    }
+  }
+
+  async function onRemake(lookId: number, prompt: string) {
+    if (!prompt.trim()) {
+      setError("请先写提示词");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setHint("正在按你改过的提示词重做，大约一两分钟");
+    try {
+      const updated = await remakeWardrobeLook(lookId, prompt.trim());
+      setLooks((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+      setPreview({ kind: "look", look: updated });
+      setHint("已按新提示词重做");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "重做失败");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -772,6 +811,7 @@ export function WardrobePage() {
               onFocus={setLookFocusId}
               onFocusStyle={setStyleFocusSrc}
               onVary={() => void onVary(preview.look.id)}
+              onRemake={(prompt) => void onRemake(preview.look.id, prompt)}
             />
           ) : null}
           {preview.kind === "photo" ? (
