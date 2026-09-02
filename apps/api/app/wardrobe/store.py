@@ -1,5 +1,6 @@
 """衣橱图片存在本机 data/wardrobe。"""
 
+import json
 from pathlib import Path
 
 from app.core.config import get_settings
@@ -90,6 +91,28 @@ def save_look_prompt(look_id: int, prompt: str) -> None:
     if not prompt:
         return
     write_bytes(look_dir(look_id) / "prompt.txt", prompt.encode("utf-8"))
+
+
+def look_image_opts(look_id: int) -> dict[str, str]:
+    """读这套搭配上次出图用的比例和质量。"""
+
+    path = look_dir(look_id) / "image-opts.json"
+    if not path.is_file():
+        return {"ratio": "", "quality": ""}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"ratio": "", "quality": ""}
+    if not isinstance(data, dict):
+        return {"ratio": "", "quality": ""}
+    return {"ratio": str(data.get("ratio") or ""), "quality": str(data.get("quality") or "")}
+
+
+def save_look_image_opts(look_id: int, ratio: str, quality: str) -> None:
+    write_bytes(
+        look_dir(look_id) / "image-opts.json",
+        json.dumps({"ratio": ratio, "quality": quality}, ensure_ascii=False).encode("utf-8"),
+    )
 
 
 def save_look_style_name(look_id: int, name: str) -> None:

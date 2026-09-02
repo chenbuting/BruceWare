@@ -77,6 +77,8 @@ export type WardrobeLook = {
   prompt: string;
   style_name: string;
   style_image_urls: string[];
+  image_ratio: string;
+  image_quality: string;
   created_at: string;
 };
 

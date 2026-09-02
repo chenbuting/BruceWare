@@ -25,8 +25,10 @@ from app.wardrobe.store import (
     list_look_style_files,
     list_style_files,
     look_dir,
+    look_image_opts,
     look_prompt,
     look_style_name,
+    save_look_image_opts,
     save_look_prompt,
     read_item_file,
     read_look_file,
@@ -70,15 +72,21 @@ class ItemPatchIn(BaseModel):
 class LookIn(BaseModel):
     item_ids: list[int]
     title: str = ""
+    ratio: str = ""
+    quality: str = ""
 
 
 class LookPromptIn(BaseModel):
     prompt: str = ""
+    ratio: str = ""
+    quality: str = ""
 
 
 class SceneIn(BaseModel):
     look_id: int = 0
     scene: str = ""
+    ratio: str = ""
+    quality: str = ""
 
 
 class StyleActiveIn(BaseModel):
@@ -117,6 +125,7 @@ def _look_dict(row: WardrobeLook) -> dict[str, Any]:
     before = look_dir(row.id) / "source.png"
     style_files = list_look_style_files(row.id)
     name = look_style_name(row.id, row.title or "")
+    opts = look_image_opts(row.id)
     return {
         "id": row.id,
         "title": row.title or "",
@@ -128,8 +137,53 @@ def _look_dict(row: WardrobeLook) -> dict[str, Any]:
         "style_image_urls": [
             _file_url(item, f"/api/v1/wardrobe/files/looks/{row.id}/{item.name}") for item in style_files
         ],
+        "image_ratio": opts["ratio"],
+        "image_quality": opts["quality"],
         "created_at": row.created_at.isoformat() if row.created_at else "",
     }
+
+
+RATIO_SIZES = {
+    "1:1": ["1024x1024"],
+    "3:4": ["1024x1536", "1024x1024"],
+    "2:3": ["1024x1536", "1024x1024"],
+    "9:16": ["1024x1792", "1024x1536", "1024x1024"],
+    "4:3": ["1536x1024", "1024x1024"],
+    "3:2": ["1536x1024", "1024x1024"],
+    "16:9": ["1792x1024", "1536x1024", "1024x1024"],
+}
+QUALITY_VALUES = {
+    "standard": ["medium", "standard"],
+    "high": ["high", "hd"],
+    "low": ["low"],
+}
+
+
+def _normalize_image_opts(ratio: str, quality: str) -> tuple[str, str, list[str], list[str]]:
+    """把用户选的比例、质量收成接口能认的值。"""
+
+    ratio = (ratio or "3:4").strip()
+    if ratio not in RATIO_SIZES:
+        ratio = "3:4"
+    quality = (quality or "standard").strip()
+    if quality not in QUALITY_VALUES:
+        quality = "standard"
+    return ratio, quality, RATIO_SIZES[ratio], QUALITY_VALUES[quality]
+
+
+def _resolve_image_opts(ratio: str, quality: str, look_id: int = 0) -> tuple[str, str, list[str], list[str]]:
+    """改旧图时沿用上次的比例和质量，新图用当前选择。"""
+
+    saved = look_image_opts(look_id) if look_id else {"ratio": "", "quality": ""}
+    return _normalize_image_opts(ratio or saved["ratio"], quality or saved["quality"])
+
+
+def _edit_look(prompt: str, images: list[bytes], ratio: str = "", quality: str = "", look_id: int = 0) -> tuple[bytes, str, str]:
+    """按选定或上次记下的比例、质量出图。"""
+
+    ratio, quality, sizes, qualities = _resolve_image_opts(ratio, quality, look_id)
+    picture = image_edit(prompt, images, size=sizes[0], timeout=180, sizes=sizes, qualities=qualities)
+    return picture, ratio, quality
 
 
 def _backfill_look_style(row: WardrobeLook, db: Session) -> None:
@@ -569,7 +623,7 @@ def make_look(body: LookIn, db: Session = Depends(get_db)):
     else:
         prompt = _outfit_prompt(clothes, style_name, style_desc)
     try:
-        picture = image_edit(prompt, images, size="1024x1024", timeout=180)
+        picture, ratio, quality = _edit_look(prompt, images, body.ratio, body.quality)
     except ValueError as exc:
         return fail(str(exc))
     title = body.title.strip() or "、".join(names)
@@ -584,6 +638,7 @@ def make_look(body: LookIn, db: Session = Depends(get_db)):
     db.flush()
     write_bytes(look_dir(row.id) / "look.png", picture)
     save_look_prompt(row.id, prompt)
+    save_look_image_opts(row.id, ratio, quality)
     active = _active_style(db)
     if active is not None:
         copy_style_into_look(row.id, active.id, style_name or active.name or "")
@@ -600,6 +655,8 @@ def _write_look(
     source_id: int = 0,
     source_bytes: bytes = b"",
     prompt: str = "",
+    ratio: str = "",
+    quality: str = "",
 ) -> WardrobeLook:
     row = WardrobeLook(title=title[:200], item_ids=json.dumps(item_ids), created_at=datetime.utcnow())
     db.add(row)
@@ -608,6 +665,8 @@ def _write_look(
     if source_bytes:
         write_bytes(look_dir(row.id) / "source.png", source_bytes)
     save_look_prompt(row.id, prompt)
+    if ratio or quality:
+        save_look_image_opts(row.id, ratio, quality)
     if source_id:
         copy_look_style(source_id, row.id)
     return row
@@ -617,6 +676,8 @@ def _write_look(
 async def vary_look(
     look_id: int = Form(0),
     count: int = Form(2),
+    ratio: str = Form(""),
+    quality: str = Form(""),
     file: UploadFile | None = File(None),
     db: Session = Depends(get_db),
 ):
@@ -652,11 +713,13 @@ async def vary_look(
     for pose in POSE_VARIANTS[:times]:
         prompt = _pose_vary_prompt(pose)
         try:
-            picture = image_edit(prompt, [raw], size="1024x1024", timeout=180)
+            picture, used_ratio, used_quality = _edit_look(prompt, [raw], ratio, quality, look_id)
         except ValueError as exc:
             last_error = str(exc)
             continue
-        created.append(_write_look(db, picture, title, ids, source.id if source else 0, raw, prompt))
+        created.append(
+            _write_look(db, picture, title, ids, source.id if source else 0, raw, prompt, used_ratio, used_quality)
+        )
     if not created:
         return fail(last_error or "姿势裂变失败")
     db.commit()
@@ -698,11 +761,12 @@ def remake_look(look_id: int, body: LookPromptIn, db: Session = Depends(get_db))
     if current.is_file() and not source.is_file():
         write_bytes(source, current.read_bytes())
     try:
-        picture = image_edit(prompt, images, size="1024x1024", timeout=180)
+        picture, ratio, quality = _edit_look(prompt, images, body.ratio, body.quality, look_id)
     except ValueError as exc:
         return fail(str(exc))
     write_bytes(current, picture)
     save_look_prompt(look_id, prompt)
+    save_look_image_opts(look_id, ratio, quality)
     return ok(_look_dict(row))
 
 
@@ -722,13 +786,13 @@ def change_scene(body: SceneIn, db: Session = Depends(get_db)):
     raw = path.read_bytes()
     prompt = _scene_prompt(scene)
     try:
-        picture = image_edit(prompt, [raw], size="1024x1024", timeout=180)
+        picture, ratio, quality = _edit_look(prompt, [raw], body.ratio, body.quality, source.id)
     except ValueError as exc:
         return fail(str(exc))
     base = (source.title or "搭配").split(" · 换场景")[0].strip() or "搭配"
     title = f"{base} · {scene}"[:200]
     ids = json.loads(source.item_ids or "[]")
-    row = _write_look(db, picture, title, ids, source.id, raw, prompt)
+    row = _write_look(db, picture, title, ids, source.id, raw, prompt, ratio, quality)
     db.commit()
     db.refresh(row)
     return ok(_look_dict(row))

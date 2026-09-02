@@ -37,6 +37,72 @@ const PARTS = [
 ];
 const ITEM_PARTS = PARTS.filter((item) => item.id);
 const SCENE_PRESETS = ["白棚", "城市街道", "室内客厅"];
+const DEFAULT_RATIO = "3:4";
+const DEFAULT_QUALITY = "standard";
+const IMAGE_RATIOS = [
+  { id: "1:1", label: "1:1 正方形" },
+  { id: "3:4", label: "3:4 竖图" },
+  { id: "2:3", label: "2:3 竖图" },
+  { id: "9:16", label: "9:16 手机" },
+  { id: "4:3", label: "4:3 横图" },
+  { id: "3:2", label: "3:2 横图" },
+  { id: "16:9", label: "16:9 宽屏" },
+];
+const IMAGE_QUALITIES = [
+  { id: "standard", label: "标准" },
+  { id: "high", label: "高清" },
+  { id: "low", label: "低" },
+];
+
+/** 出图比例和质量两个下拉 */
+function ImageOptSelects({
+  ratio,
+  quality,
+  busy,
+  onRatio,
+  onQuality,
+}: {
+  ratio: string;
+  quality: string;
+  busy: boolean;
+  onRatio: (value: string) => void;
+  onQuality: (value: string) => void;
+}) {
+  return (
+    <>
+      <label className="flex items-center gap-2 text-[13px] text-[var(--muted)]">
+        比例
+        <select
+          className="border border-[var(--line)] bg-[var(--paper)] px-2 py-1.5 text-[var(--text)]"
+          value={ratio}
+          disabled={busy}
+          onChange={(e) => onRatio(e.target.value)}
+        >
+          {IMAGE_RATIOS.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="flex items-center gap-2 text-[13px] text-[var(--muted)]">
+        质量
+        <select
+          className="border border-[var(--line)] bg-[var(--paper)] px-2 py-1.5 text-[var(--text)]"
+          value={quality}
+          disabled={busy}
+          onChange={(e) => onQuality(e.target.value)}
+        >
+          {IMAGE_QUALITIES.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.label}
+            </option>
+          ))}
+        </select>
+      </label>
+    </>
+  );
+}
 
 type DirectDraft = { file: File; preview: string; name: string; part: string };
 type Preview =
@@ -73,6 +139,10 @@ function LookPreview({
   onRemake,
   onScene,
   onDownload,
+  ratio,
+  quality,
+  onRatio,
+  onQuality,
 }: {
   look: WardrobeLook;
   items: WardrobeItem[];
@@ -85,6 +155,10 @@ function LookPreview({
   onRemake: (prompt: string) => void;
   onScene: (scene: string) => void;
   onDownload: () => void;
+  ratio: string;
+  quality: string;
+  onRatio: (value: string) => void;
+  onQuality: (value: string) => void;
 }) {
   const [draft, setDraft] = useState(look.prompt || "");
   const [scene, setScene] = useState("");
@@ -150,6 +224,7 @@ function LookPreview({
         <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px] disabled:opacity-50" disabled={!look.image_url} onClick={onDownload}>
           下载
         </button>
+        <ImageOptSelects ratio={ratio} quality={quality} busy={busy} onRatio={onRatio} onQuality={onQuality} />
         <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px] disabled:opacity-50" disabled={busy} onClick={onVary}>
           {busy ? "裂变中…" : "姿势裂变"}
         </button>
@@ -292,7 +367,19 @@ export function WardrobePage() {
   const styleRef = useRef<HTMLInputElement>(null);
   const varyRef = useRef<HTMLInputElement>(null);
   const [varyCount, setVaryCount] = useState(2);
+  const [imageRatio, setImageRatio] = useState(DEFAULT_RATIO);
+  const [imageQuality, setImageQuality] = useState(DEFAULT_QUALITY);
   const [suggested, setSuggested] = useState<WardrobeSuggest[]>([]);
+
+  function resetImageOpts() {
+    setImageRatio(DEFAULT_RATIO);
+    setImageQuality(DEFAULT_QUALITY);
+  }
+
+  function applyLookOpts(look: WardrobeLook) {
+    setImageRatio(look.image_ratio || DEFAULT_RATIO);
+    setImageQuality(look.image_quality || DEFAULT_QUALITY);
+  }
 
   async function reload() {
     const [status, closet, looksData, stylesData] = await Promise.all([
@@ -456,10 +543,15 @@ export function WardrobePage() {
     setError("");
     setHint(`正在做姿势裂变，一次 ${varyCount} 张，大约一两分钟，请不要重复点`);
     try {
-      const data = await varyWardrobeLook(lookId, file, varyCount);
+      const fromPreview = preview?.kind === "look" && preview.look.id === lookId;
+      const look = lookId ? looks.find((item) => item.id === lookId) : undefined;
+      const ratio = fromPreview ? imageRatio : look?.image_ratio || imageRatio;
+      const quality = fromPreview ? imageQuality : look?.image_quality || imageQuality;
+      const data = await varyWardrobeLook(lookId, file, varyCount, ratio, quality);
       await reload();
       setTab("looks");
       setPreview(null);
+      resetImageOpts();
       setHint(data.items.length >= varyCount ? "姿势裂变好了，新图已放到搭配" : `只做出 ${data.items.length} 张，可以再试一次`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "裂变失败");
@@ -478,7 +570,7 @@ export function WardrobePage() {
     setError("");
     setHint("正在按你改过的提示词重做，大约一两分钟");
     try {
-      const updated = await remakeWardrobeLook(lookId, prompt.trim());
+      const updated = await remakeWardrobeLook(lookId, prompt.trim(), imageRatio, imageQuality);
       setLooks((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
       setPreview({ kind: "look", look: updated });
       setHint("已按新提示词重做");
@@ -513,9 +605,10 @@ export function WardrobePage() {
     setError("");
     setHint("正在换场景，人、衣服和姿势尽量不变");
     try {
-      await changeWardrobeScene(lookId, scene.trim());
+      await changeWardrobeScene(lookId, scene.trim(), imageRatio, imageQuality);
       await reload();
       setPreview(null);
+      resetImageOpts();
       setHint("换场景好了，新图已放到搭配");
     } catch (err) {
       setError(err instanceof Error ? err.message : "换场景失败");
@@ -533,10 +626,11 @@ export function WardrobePage() {
     setError("");
     setHint("正在对照风格图的光线、场景和姿势生成，大约一两分钟，请不要重复点");
     try {
-      await createWardrobeLook(ids, "");
+      await createWardrobeLook(ids, "", imageRatio, imageQuality);
       const data = await fetchWardrobeLooks();
       setLooks(data.items);
       setTab("looks");
+      resetImageOpts();
       setHint("效果图已放到搭配，衣橱里的原衣服还在");
     } catch (err) {
       setError(err instanceof Error ? err.message : "生成失败");
@@ -692,16 +786,23 @@ export function WardrobePage() {
           {styles.length === 0 ? (
             <p className="text-[13px] text-[var(--muted)]">还没有风格。先保存一套，再点「使用」。</p>
           ) : (
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
               {styles.map((item) => (
-                <Card key={item.id} className="px-4 py-3">
-                  <div className="flex flex-wrap gap-2">
-                    {item.image_urls.map((url) => (
-                      <button key={url} type="button" onClick={() => setPreview({ kind: "photo", src: url, title: item.name })}>
-                        <img src={url} alt="" className="h-20 w-20 rounded-md object-cover" />
-                      </button>
-                    ))}
-                  </div>
+                <Card key={item.id} className="px-3 py-3">
+                  {item.image_urls.length > 0 ? (
+                    <div className={item.image_urls.length > 1 ? "grid grid-cols-2 gap-2" : ""}>
+                      {item.image_urls.map((url) => (
+                        <button
+                          key={url}
+                          type="button"
+                          className="block w-full overflow-hidden rounded-md bg-[var(--bg)]"
+                          onClick={() => setPreview({ kind: "photo", src: url, title: item.name })}
+                        >
+                          <img src={url} alt="" className="aspect-[3/4] w-full object-cover" />
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
                   <div className="mt-3 text-[13px] font-medium">{item.name}</div>
                   <div className="mt-2 flex flex-wrap gap-2">
                     <button
@@ -818,6 +919,13 @@ export function WardrobePage() {
               <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy} onClick={() => void onSuggest()}>
                 {busy ? "搭配中…" : "智能搭配"}
               </button>
+              <ImageOptSelects
+                ratio={imageRatio}
+                quality={imageQuality}
+                busy={busy}
+                onRatio={setImageRatio}
+                onQuality={setImageQuality}
+              />
               <label className="flex items-center gap-2 text-[13px] text-[var(--muted)]">
                 裂变张数
                 <select
@@ -865,25 +973,26 @@ export function WardrobePage() {
           {looks.length === 0 ? (
             <p className="text-[13px] text-[var(--muted)]">还没有搭配图。</p>
           ) : (
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
               {looks.map((look) => (
                 <Card key={look.id} className="px-3 py-3">
                   {look.image_url ? (
                     <button
                       type="button"
-                      className="flex h-52 w-full items-center justify-center overflow-hidden rounded-md bg-[var(--bg)]"
+                      className="block w-full overflow-hidden rounded-md bg-[var(--bg)]"
                       onClick={() => {
                         setLookFocusId(null);
                         setStyleFocusSrc("");
+                        applyLookOpts(look);
                         setPreview({ kind: "look", look });
                       }}
                     >
-                      <img src={look.image_url} alt={look.title} className="max-h-full max-w-full object-contain" />
+                      <img src={look.image_url} alt={look.title} className="aspect-[3/4] w-full object-cover" />
                     </button>
                   ) : null}
-                  <div className="mt-2 flex items-center justify-between gap-3">
-                    <div className="text-[13px]">{look.title}</div>
-                    <div className="flex shrink-0 gap-2">
+                  <div className="mt-2">
+                    <div className="truncate text-[13px]">{look.title}</div>
+                    <div className="mt-1 flex flex-wrap gap-2">
                       <button
                         type="button"
                         className="text-[13px] text-[var(--muted)] disabled:opacity-50"
@@ -938,7 +1047,14 @@ export function WardrobePage() {
       ) : null}
 
       {preview ? (
-        <Modal title={preview.kind === "item" ? preview.item.name : preview.kind === "look" ? preview.look.title : preview.title} wide={preview.kind === "look"} onClose={() => setPreview(null)}>
+        <Modal
+          title={preview.kind === "item" ? preview.item.name : preview.kind === "look" ? preview.look.title : preview.title}
+          wide={preview.kind === "look"}
+          onClose={() => {
+            if (preview.kind === "look") resetImageOpts();
+            setPreview(null);
+          }}
+        >
           {preview.kind === "item" ? (
             <div>
               <div className="flex max-h-[70vh] items-center justify-center overflow-hidden rounded-md bg-[var(--bg)]">
@@ -968,6 +1084,10 @@ export function WardrobePage() {
               onDownload={() =>
                 void downloadImage(preview.look.image_url, preview.look.title).catch((err: Error) => setError(err.message))
               }
+              ratio={imageRatio}
+              quality={imageQuality}
+              onRatio={setImageRatio}
+              onQuality={setImageQuality}
             />
           ) : null}
           {preview.kind === "photo" ? (

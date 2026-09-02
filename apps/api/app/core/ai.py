@@ -154,7 +154,14 @@ def _images_root(base_url: str) -> str:
     return f"{url}/v1"
 
 
-def image_edit(prompt: str, images: list[bytes], size: str = "1024x1024", timeout: float = 180) -> bytes:
+def image_edit(
+    prompt: str,
+    images: list[bytes],
+    size: str = "1024x1024",
+    timeout: float = 180,
+    sizes: list[str] | None = None,
+    qualities: list[str] | None = None,
+) -> bytes:
     """按参考图改图 / 生图，走兼容 OpenAI 的 images 接口。"""
 
     base_url, api_key, model = _image_auth()
@@ -163,22 +170,30 @@ def image_edit(prompt: str, images: list[bytes], size: str = "1024x1024", timeou
     files: list[tuple[str, tuple[str, bytes, str]]] = []
     for index, raw in enumerate(images[:5]):
         files.append(("image[]", (f"ref-{index + 1}.jpg", _shrink_image(raw), "image/jpeg")))
-    sizes: list[str] = []
-    for item in (size, "1024x1024"):
-        if item and item not in sizes:
-            sizes.append(item)
+    size_list: list[str] = []
+    for item in (*(sizes or []), size, "1024x1024"):
+        if item and item not in size_list:
+            size_list.append(item)
+    quality_list = [item for item in (qualities or []) if item] + [""]
     last_error = ""
-    for current in sizes:
-        data = {"model": model, "prompt": prompt, "size": current, "response_format": "b64_json"}
-        try:
-            res = _post(f"{root}/images/edits", timeout=timeout, data=data, files=files, headers=headers)
-        except Exception as exc:
-            last_error = str(exc)
-            continue
-        if res.status_code < 400:
-            return _read_image_bytes(res.json())
-        last_error = res.text[:300]
-        if res.status_code != 400:
+    for current in size_list:
+        stop_sizes = False
+        for quality in quality_list:
+            data = {"model": model, "prompt": prompt, "size": current, "response_format": "b64_json"}
+            if quality:
+                data["quality"] = quality
+            try:
+                res = _post(f"{root}/images/edits", timeout=timeout, data=data, files=files, headers=headers)
+            except Exception as exc:
+                last_error = str(exc)
+                continue
+            if res.status_code < 400:
+                return _read_image_bytes(res.json())
+            last_error = res.text[:300]
+            if res.status_code != 400:
+                stop_sizes = True
+                break
+        if stop_sizes:
             break
     files_single = [("image", (name, blob, mime)) for _, (name, blob, mime) in files]
     data = {"model": model, "prompt": prompt, "size": "1024x1024", "response_format": "b64_json"}

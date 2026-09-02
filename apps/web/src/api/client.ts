@@ -313,10 +313,10 @@ export function fetchWardrobeLooks() {
   return request<{ items: WardrobeLook[] }>("/api/v1/wardrobe/looks");
 }
 
-export function createWardrobeLook(itemIds: number[], title: string) {
+export function createWardrobeLook(itemIds: number[], title: string, ratio = "", quality = "") {
   return request<WardrobeLook>("/api/v1/wardrobe/looks", {
     method: "POST",
-    body: JSON.stringify({ item_ids: itemIds, title }),
+    body: JSON.stringify({ item_ids: itemIds, title, ratio, quality }),
   });
 }
 
@@ -325,10 +325,10 @@ export function deleteWardrobeLook(id: number) {
 }
 
 /** 按改过的提示词重做这一套搭配 */
-export function remakeWardrobeLook(lookId: number, prompt: string) {
+export function remakeWardrobeLook(lookId: number, prompt: string, ratio = "", quality = "") {
   return request<WardrobeLook>(`/api/v1/wardrobe/looks/${lookId}/remake`, {
     method: "POST",
-    body: JSON.stringify({ prompt }),
+    body: JSON.stringify({ prompt, ratio, quality }),
   });
 }
 
@@ -338,19 +338,21 @@ export function suggestWardrobeLooks() {
 }
 
 /** 人、衣服、姿势不变，只换场景 */
-export function changeWardrobeScene(lookId: number, scene: string) {
+export function changeWardrobeScene(lookId: number, scene: string, ratio = "", quality = "") {
   return request<WardrobeLook>("/api/v1/wardrobe/looks/scene", {
     method: "POST",
-    body: JSON.stringify({ look_id: lookId, scene }),
+    body: JSON.stringify({ look_id: lookId, scene, ratio, quality }),
   });
 }
 
 /** 从现有搭配或上传图做姿势裂变，张数 1～3 */
-export function varyWardrobeLook(lookId?: number, file?: File, count = 2) {
+export function varyWardrobeLook(lookId?: number, file?: File, count = 2, ratio = "", quality = "") {
   const body = new FormData();
   if (lookId) body.append("look_id", String(lookId));
   if (file) body.append("file", file);
   body.append("count", String(Math.max(1, Math.min(3, count))));
+  if (ratio) body.append("ratio", ratio);
+  if (quality) body.append("quality", quality);
   return request<{ items: WardrobeLook[] }>("/api/v1/wardrobe/looks/vary", { method: "POST", body });
 }
 
