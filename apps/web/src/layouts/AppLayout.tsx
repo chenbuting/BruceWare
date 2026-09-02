@@ -1,4 +1,4 @@
-import { Boxes, CircleHelp, FileText, Globe, GripVertical, Home, PanelLeftClose, PanelLeftOpen, Settings, Shirt } from "lucide-react";
+import { Boxes, CircleHelp, FileText, Folder, Globe, GripVertical, Home, PanelLeftClose, PanelLeftOpen, Settings, Shirt } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import { useEffect, useRef, useState, type ElementType } from "react";
 
@@ -13,6 +13,7 @@ const MODULE_ICONS: Record<string, ElementType> = {
   portal: Globe,
   resume: FileText,
   wardrobe: Shirt,
+  files: Folder,
 };
 
 const SIDEBAR_KEY = "bruceware.sidebar-collapsed";

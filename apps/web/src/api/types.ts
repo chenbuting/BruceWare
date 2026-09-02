@@ -34,12 +34,41 @@ export type LlmInfo = {
   has_image_key: boolean;
 };
 
+export type FilesSettings = {
+  root: string;
+  ready: boolean;
+};
+
 export type SettingsInfo = {
   app_name: string;
   api_host: string;
   api_port: number;
   database: DatabaseInfo;
   llm: LlmInfo;
+  files: FilesSettings;
+};
+
+export type FilesStatus = {
+  configured: boolean;
+  ready: boolean;
+  root: string;
+  message: string;
+};
+
+export type FilesEntry = {
+  name: string;
+  path: string;
+  kind: "dir" | "file";
+  size: number;
+  mtime: string;
+  preview: string;
+};
+
+export type FilesList = {
+  root: string;
+  path: string;
+  crumbs: { name: string; path: string }[];
+  items: FilesEntry[];
 };
 
 export type LlmWrite = {

@@ -1,0 +1,8 @@
+id: files
+name: 文件
+kind: app
+description: 管理电脑上指定文件夹里的文件，方便换电脑时带走自己的习惯
+version: 0.1.0
+web:
+  route_prefix: /m/files
+  nav_label: 文件

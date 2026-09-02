@@ -1,5 +1,6 @@
 import type { ComponentType } from "react";
 
+import { FilesPage } from "@/pages/FilesPage";
 import { HelpPage } from "@/pages/HelpPage";
 import { ModulesPage } from "@/pages/ModulesPage";
 import { PortalPage } from "@/pages/PortalPage";
@@ -44,6 +45,12 @@ export const MODULE_PAGES: Record<string, ModulePageEntry> = {
     desc: "上传衣服照片，AI 抠单件、试穿和搭配。先在设置里配好 AI。",
     wide: true,
     page: WardrobePage,
+  },
+  files: {
+    title: "文件",
+    desc: "管理电脑上指定文件夹里的文件。先在设置里指定根目录。",
+    wide: true,
+    page: FilesPage,
   },
 };
 

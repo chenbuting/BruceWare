@@ -1,6 +1,9 @@
 import type {
   ApiResult,
   DatabaseWrite,
+  FilesEntry,
+  FilesList,
+  FilesStatus,
   InterviewSession,
   LlmWrite,
   ModuleList,
@@ -61,6 +64,85 @@ export function testLlm() {
   return request<{ reply: string }>("/api/v1/settings/test-llm", {
     method: "POST",
   });
+}
+
+export function saveFilesRoot(root: string) {
+  return request<SettingsInfo>("/api/v1/settings/files", {
+    method: "PUT",
+    body: JSON.stringify({ root }),
+  });
+}
+
+export function fetchFilesStatus() {
+  return request<FilesStatus>("/api/v1/files/status");
+}
+
+export function fetchFilesList(path = "") {
+  return request<FilesList>(`/api/v1/files/list?path=${encodeURIComponent(path)}`);
+}
+
+export function searchFiles(query: string, path = "") {
+  return request<{ query: string; path: string; items: FilesEntry[] }>(
+    `/api/v1/files/search?q=${encodeURIComponent(query)}&path=${encodeURIComponent(path)}`,
+  );
+}
+
+export function makeFilesDir(path: string, name: string) {
+  return request<FilesEntry>("/api/v1/files/mkdir", {
+    method: "POST",
+    body: JSON.stringify({ path, name }),
+  });
+}
+
+export function uploadFiles(path: string, files: File[]) {
+  const body = new FormData();
+  body.append("path", path);
+  files.forEach((file) => body.append("files", file));
+  return request<{ items: FilesEntry[] }>("/api/v1/files/upload", { method: "POST", body });
+}
+
+export function renameFilesEntry(path: string, name: string) {
+  return request<FilesEntry>("/api/v1/files/rename", {
+    method: "POST",
+    body: JSON.stringify({ path, name }),
+  });
+}
+
+export function moveFilesEntry(path: string, dest: string) {
+  return request<FilesEntry>("/api/v1/files/move", {
+    method: "POST",
+    body: JSON.stringify({ path, dest }),
+  });
+}
+
+export function deleteFilesEntry(path: string) {
+  return request<boolean>("/api/v1/files/delete", {
+    method: "POST",
+    body: JSON.stringify({ path }),
+  });
+}
+
+export async function downloadFilesEntry(path: string, filename: string) {
+  const res = await fetch(`/api/v1/files/download?path=${encodeURIComponent(path)}`);
+  if (!res.ok) {
+    let message = "下载失败";
+    try {
+      const body = (await res.json()) as ApiResult<null>;
+      message = body.message || message;
+    } catch {
+      /* 不是 JSON */
+    }
+    throw new Error(message);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filenameFrom(res, filename);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 export function fetchModules() {

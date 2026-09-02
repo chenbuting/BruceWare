@@ -1,5 +1,6 @@
 """设置：查看并切换本地 / 远程数据源。"""
 
+from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter
@@ -36,7 +37,10 @@ def _settings_payload() -> dict[str, Any]:
     settings = get_settings()
     url = get_database_url() or get_effective_database_url(settings.database_url, settings.repo_root)
     connected, error = ping_database()
-    stored = load_local_settings(settings.repo_root).get("database") or {}
+    stored = load_local_settings(settings.repo_root)
+    db_stored = stored.get("database") or {}
+    files_stored = stored.get("files") if isinstance(stored.get("files"), dict) else {}
+    files_root = str(files_stored.get("root") or "").strip()
     db = describe_database(url)
     return {
         "app_name": settings.app_name,
@@ -46,9 +50,13 @@ def _settings_payload() -> dict[str, Any]:
             **db,
             "connected": connected,
             "error": error,
-            "form": parse_database_form(url, stored if isinstance(stored, dict) else {}),
+            "form": parse_database_form(url, db_stored if isinstance(db_stored, dict) else {}),
         },
         "llm": llm_public(),
+        "files": {
+            "root": files_root,
+            "ready": bool(files_root) and Path(files_root).expanduser().is_dir(),
+        },
     }
 
 
@@ -159,3 +167,26 @@ def test_llm():
     except ValueError as exc:
         return fail(str(exc))
     return ok({"reply": text})
+
+
+class FilesForm(BaseModel):
+    root: str = ""
+
+
+@router.put("/settings/files")
+def save_files(form: FilesForm):
+    """保存文件柜根目录，文件夹必须已经存在。"""
+
+    raw = form.root.strip()
+    if not raw:
+        return fail("请填写根目录")
+    path = Path(raw).expanduser()
+    if not path.exists():
+        return fail("这个文件夹不存在")
+    if not path.is_dir():
+        return fail("必须是文件夹")
+    settings = get_settings()
+    existing = load_local_settings(settings.repo_root)
+    existing["files"] = {"root": str(path)}
+    save_local_settings(settings.repo_root, existing)
+    return ok(_settings_payload())

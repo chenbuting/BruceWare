@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { downloadBackup, fetchSettings, importBackup, saveDatabase, saveLlm, testDatabase, testLlm } from "@/api/client";
+import { downloadBackup, fetchSettings, importBackup, saveDatabase, saveFilesRoot, saveLlm, testDatabase, testLlm } from "@/api/client";
 import type { DatabaseWrite, SettingsInfo } from "@/api/types";
 import { Card } from "@/components/Card";
 import { ConfirmModal } from "@/components/Modal";
@@ -39,6 +39,7 @@ export function SettingsPage() {
   const [llmImageKey, setLlmImageKey] = useState("");
   const [hasLlmKey, setHasLlmKey] = useState(false);
   const [hasImageKey, setHasImageKey] = useState(false);
+  const [filesRoot, setFilesRoot] = useState("");
   const [error, setError] = useState("");
   const [hint, setHint] = useState("");
   const [busy, setBusy] = useState(false);
@@ -75,6 +76,7 @@ export function SettingsPage() {
       setLlmKey("");
       setLlmImageKey("");
     }
+    setFilesRoot(data.files?.root || "");
   }
 
   function payload(): DatabaseWrite {
@@ -163,6 +165,7 @@ export function SettingsPage() {
         { label: "后端", value: `${info.api_host}:${info.api_port}` },
         { label: "当前", value: `${info.database.label} · ${info.database.connected ? "正常" : "失败"}` },
         { label: "位置", value: info.database.target },
+        { label: "文件", value: info.files?.root || "还没指定根目录" },
       ]
     : [];
 
@@ -454,6 +457,40 @@ export function SettingsPage() {
                     void runImport(file, "merge");
                   }}
                 />
+              </div>
+            </Card>
+          ) : null}
+
+          {!managing && visibleIds.includes("files") ? (
+            <Card title="文件" className="px-5 py-4">
+              <p className="text-[13px] leading-6 text-[var(--muted)]">
+                自己指定一个电脑上的文件夹当文件柜。没指定就用不了。换电脑时把这个文件夹拷走，再在这里指过去。
+              </p>
+              <label className="mt-4 block">
+                <span className="mb-1 block text-[var(--muted)]">根目录</span>
+                <input className={inputClass} value={filesRoot} onChange={(e) => setFilesRoot(e.target.value)} placeholder="比如 D:\我的文件柜" />
+              </label>
+              <div className="mt-5">
+                <button
+                  type="button"
+                  className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50"
+                  disabled={busy}
+                  onClick={() => {
+                    setBusy(true);
+                    setError("");
+                    setHint("");
+                    saveFilesRoot(filesRoot.trim())
+                      .then((data) => {
+                        setInfo(data);
+                        applyForm(data);
+                        setHint("文件根目录已保存");
+                      })
+                      .catch((err: Error) => setError(err.message))
+                      .finally(() => setBusy(false));
+                  }}
+                >
+                  保存根目录
+                </button>
               </div>
             </Card>
           ) : null}

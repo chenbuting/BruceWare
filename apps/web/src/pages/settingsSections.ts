@@ -1,6 +1,6 @@
 /** 设置内容归类：分类是文件夹，设置项可以自己挪。存在本机。 */
 
-export type SettingItemId = "overview" | "database" | "ai" | "backup";
+export type SettingItemId = "overview" | "database" | "ai" | "backup" | "files";
 
 export type SettingsCategory = {
   id: string;
@@ -21,6 +21,7 @@ export const SETTING_ITEMS: { id: SettingItemId; label: string }[] = [
   { id: "overview", label: "当前" },
   { id: "database", label: "数据源" },
   { id: "backup", label: "备份" },
+  { id: "files", label: "文件" },
   { id: "ai", label: "AI" },
 ];
 
@@ -32,12 +33,14 @@ function defaultLayout(): SettingsLayout {
     categories: [
       { id: "cat-overview", label: "概览" },
       { id: "cat-database", label: "数据源" },
+      { id: "cat-files", label: "文件" },
       { id: "cat-ai", label: "AI" },
     ],
     items: [
       { id: "overview", categoryId: "cat-overview" },
       { id: "database", categoryId: "cat-database" },
       { id: "backup", categoryId: "cat-database" },
+      { id: "files", categoryId: "cat-files" },
       { id: "ai", categoryId: "cat-ai" },
     ],
   };
@@ -45,7 +48,7 @@ function defaultLayout(): SettingsLayout {
 
 function normalize(layout: SettingsLayout): SettingsLayout {
   const categories = layout.categories.filter((item) => item && item.id && item.label !== undefined);
-  const safeCats = categories.length > 0 ? categories : defaultLayout().categories;
+  const safeCats = categories.length > 0 ? [...categories] : defaultLayout().categories;
   const fallback = safeCats[0].id;
   const seen = new Set<SettingItemId>();
   const items: SettingsItemPlace[] = [];
@@ -59,7 +62,14 @@ function normalize(layout: SettingsLayout): SettingsLayout {
   }
   for (const row of SETTING_ITEMS) {
     if (seen.has(row.id)) continue;
-    const prefer = row.id === "backup" ? "cat-database" : fallback;
+    let prefer = fallback;
+    if (row.id === "backup") prefer = "cat-database";
+    if (row.id === "files") {
+      if (!safeCats.some((cat) => cat.id === "cat-files")) {
+        safeCats.push({ id: "cat-files", label: "文件" });
+      }
+      prefer = "cat-files";
+    }
     items.push({
       id: row.id,
       categoryId: safeCats.some((cat) => cat.id === prefer) ? prefer : fallback,
