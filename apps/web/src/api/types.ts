@@ -73,6 +73,7 @@ export type WardrobeLook = {
   title: string;
   item_ids: number[];
   image_url: string;
+  source_image_url: string;
   style_name: string;
   style_image_urls: string[];
   created_at: string;

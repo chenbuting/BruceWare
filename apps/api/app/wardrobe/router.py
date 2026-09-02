@@ -98,6 +98,7 @@ def _item_dict(row: WardrobeItem) -> dict[str, Any]:
 
 def _look_dict(row: WardrobeLook) -> dict[str, Any]:
     path = look_dir(row.id) / "look.png"
+    before = look_dir(row.id) / "source.png"
     style_files = list_look_style_files(row.id)
     name = look_style_name(row.id, row.title or "")
     return {
@@ -105,6 +106,7 @@ def _look_dict(row: WardrobeLook) -> dict[str, Any]:
         "title": row.title or "",
         "item_ids": json.loads(row.item_ids or "[]"),
         "image_url": _file_url(path, f"/api/v1/wardrobe/files/looks/{row.id}/look.png"),
+        "source_image_url": _file_url(before, f"/api/v1/wardrobe/files/looks/{row.id}/source.png"),
         "style_name": name,
         "style_image_urls": [
             _file_url(item, f"/api/v1/wardrobe/files/looks/{row.id}/{item.name}") for item in style_files
@@ -124,6 +126,30 @@ def _backfill_look_style(row: WardrobeLook, db: Session) -> None:
         return
     matched.sort(key=lambda item: item.id)
     copy_style_into_look(row.id, matched[0].id, matched[0].name or "")
+
+
+def _backfill_look_source(row: WardrobeLook, db: Session) -> None:
+    """旧裂变图补上原图，方便点开对比。"""
+
+    folder = look_dir(row.id)
+    if (folder / "source.png").is_file():
+        return
+    title = row.title or ""
+    if "姿势裂变" not in title:
+        return
+    base = title.split(" · 姿势裂变")[0].strip()
+    if not base:
+        return
+    others = [item for item in db.scalars(select(WardrobeLook)).all() if item.id != row.id]
+    matched = [item for item in others if (item.title or "") == base]
+    if not matched:
+        matched = [item for item in others if "姿势裂变" not in (item.title or "") and (item.title or "").startswith(base)]
+    matched.sort(key=lambda item: item.id)
+    if not matched:
+        return
+    src = look_dir(matched[-1].id) / "look.png"
+    if src.is_file():
+        write_bytes(folder / "source.png", src.read_bytes())
 
 
 def _garment_prompt(item: dict[str, Any]) -> str:
@@ -412,6 +438,7 @@ def list_looks(db: Session = Depends(get_db)):
     rows = db.scalars(select(WardrobeLook).order_by(WardrobeLook.id.desc())).all()
     for row in rows:
         _backfill_look_style(row, db)
+        _backfill_look_source(row, db)
     return ok({"items": [_look_dict(row) for row in rows]})
 
 
@@ -469,11 +496,20 @@ def make_look(body: LookIn, db: Session = Depends(get_db)):
     return ok(_look_dict(row))
 
 
-def _write_look(db: Session, picture: bytes, title: str, item_ids: list[int], source_id: int = 0) -> WardrobeLook:
+def _write_look(
+    db: Session,
+    picture: bytes,
+    title: str,
+    item_ids: list[int],
+    source_id: int = 0,
+    source_bytes: bytes = b"",
+) -> WardrobeLook:
     row = WardrobeLook(title=title[:200], item_ids=json.dumps(item_ids), created_at=datetime.utcnow())
     db.add(row)
     db.flush()
     write_bytes(look_dir(row.id) / "look.png", picture)
+    if source_bytes:
+        write_bytes(look_dir(row.id) / "source.png", source_bytes)
     if source_id:
         copy_look_style(source_id, row.id)
     return row
@@ -521,7 +557,7 @@ async def vary_look(
         except ValueError as exc:
             last_error = str(exc)
             continue
-        created.append(_write_look(db, picture, title, ids, source.id if source else 0))
+        created.append(_write_look(db, picture, title, ids, source.id if source else 0, raw))
     if not created:
         return fail(last_error or "姿势裂变失败")
     db.commit()

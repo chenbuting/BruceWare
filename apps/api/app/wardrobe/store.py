@@ -102,7 +102,7 @@ def copy_style_into_look(look_id: int, style_id: int, style_name: str) -> None:
 
 
 def read_look_file(look_id: int, name: str) -> Path | None:
-    if name != "look.png" and not _is_look_style_name(name):
+    if name not in ("look.png", "source.png") and not _is_look_style_name(name):
         return None
     path = look_dir(look_id) / name
     return path if path.is_file() else None

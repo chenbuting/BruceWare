@@ -62,6 +62,8 @@ function LookPreview({
   const focusItem = focusId ? items.find((row) => row.id === focusId) : null;
   const styleName = look.style_name || "";
   const styleUrls = look.style_image_urls || [];
+  const beforeSrc = look.source_image_url || "";
+  const comparing = Boolean(beforeSrc) && !focusItem && !styleFocusSrc;
   const mainSrc = focusItem
     ? focusItem.cutout_url || focusItem.original_url
     : styleFocusSrc || look.image_url;
@@ -69,9 +71,26 @@ function LookPreview({
 
   return (
     <div>
-      <div className="flex max-h-[48vh] items-center justify-center overflow-hidden rounded-md bg-[var(--bg)]">
-        {mainSrc ? <img src={mainSrc} alt={mainAlt} className="max-h-[48vh] max-w-full object-contain" /> : null}
-      </div>
+      {comparing ? (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <div className="mb-1 text-[12px] text-[var(--muted)]">裂变前</div>
+            <div className="flex max-h-[48vh] items-center justify-center overflow-hidden rounded-md bg-[var(--bg)]">
+              <img src={beforeSrc} alt="裂变前" className="max-h-[48vh] max-w-full object-contain" />
+            </div>
+          </div>
+          <div>
+            <div className="mb-1 text-[12px] text-[var(--muted)]">裂变后</div>
+            <div className="flex max-h-[48vh] items-center justify-center overflow-hidden rounded-md bg-[var(--bg)]">
+              {look.image_url ? <img src={look.image_url} alt="裂变后" className="max-h-[48vh] max-w-full object-contain" /> : null}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="flex max-h-[48vh] items-center justify-center overflow-hidden rounded-md bg-[var(--bg)]">
+          {mainSrc ? <img src={mainSrc} alt={mainAlt} className="max-h-[48vh] max-w-full object-contain" /> : null}
+        </div>
+      )}
       {focusItem ? (
         <div className="mt-2 flex flex-wrap items-center gap-3 text-[13px] text-[var(--muted)]">
           <span>
@@ -90,7 +109,9 @@ function LookPreview({
           </button>
         </div>
       ) : (
-        <p className="mt-2 text-[13px] text-[var(--muted)]">点下面单件或风格图，看细节。</p>
+        <p className="mt-2 text-[13px] text-[var(--muted)]">
+          {comparing ? "左右是裂变前后对比。点下面单件或风格图，看细节。" : "点下面单件或风格图，看细节。"}
+        </p>
       )}
       <button type="button" className="mt-3 border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px] disabled:opacity-50" disabled={busy} onClick={onVary}>
         {busy ? "裂变中…" : "姿势裂变"}
