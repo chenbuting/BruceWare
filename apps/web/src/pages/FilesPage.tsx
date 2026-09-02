@@ -1,3 +1,4 @@
+import { File, FileSpreadsheet, FileText, Folder, Image as ImageIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 
@@ -8,6 +9,7 @@ import {
   fetchFilesStatus,
   makeFilesDir,
   moveFilesEntry,
+  openFilesEntry,
   renameFilesEntry,
   searchFiles,
   uploadFiles,
@@ -15,6 +17,7 @@ import {
 import type { FilesEntry, FilesList, FilesStatus } from "@/api/types";
 import { Card } from "@/components/Card";
 import { ConfirmModal, Modal } from "@/components/Modal";
+import { PdfPreview } from "@/components/PdfPreview";
 
 const inputClass = "border border-[var(--line)] bg-[var(--paper)] px-2 py-1.5 text-[13px]";
 
@@ -22,6 +25,15 @@ function formatSize(size: number) {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function itemIcon(item: FilesEntry) {
+  if (item.kind === "dir") return { Icon: Folder, color: "text-amber-500" };
+  if (item.preview === "image") return { Icon: ImageIcon, color: "text-sky-500" };
+  if (item.preview === "text" || item.preview === "pdf") return { Icon: FileText, color: "text-slate-500" };
+  const ext = item.name.split(".").pop()?.toLowerCase() || "";
+  if (["xls", "xlsx", "csv"].includes(ext)) return { Icon: FileSpreadsheet, color: "text-emerald-600" };
+  return { Icon: File, color: "text-[var(--muted)]" };
 }
 
 /** 文件柜：只管理设置里指定的那个文件夹 */
@@ -150,11 +162,7 @@ export function FilesPage() {
       void openDir(item.path);
       return;
     }
-    if (item.preview) {
-      void openPreview(item);
-      return;
-    }
-    void downloadFilesEntry(item.path, item.name).catch((err: Error) => setError(err.message));
+    void openPreview(item);
   }
 
   if (!status) {
@@ -235,49 +243,54 @@ export function FilesPage() {
       {shown.length === 0 ? (
         <p className="text-[13px] text-[var(--muted)]">{searching ? "没有找到。" : "这个文件夹是空的。可以上传或新建文件夹。"}</p>
       ) : (
-        <div className="divide-y divide-[var(--line)] rounded-md border border-[var(--line)] bg-[var(--paper)]">
-          {shown.map((item) => (
-            <div key={item.path} className="flex flex-wrap items-center gap-3 px-4 py-3">
-              <button type="button" className="min-w-0 flex-1 text-left text-[13px]" onClick={() => clickItem(item)}>
-                <div className="truncate font-medium">{item.kind === "dir" ? `文件夹 · ${item.name}` : item.name}</div>
-                <div className="mt-1 text-[12px] text-[var(--muted)]">
-                  {searching ? `${item.path} · ` : ""}
-                  {item.kind === "file" ? formatSize(item.size) : "文件夹"}
-                  {item.mtime ? ` · ${item.mtime.replace("T", " ")}` : ""}
-                </div>
-              </button>
-              <div className="flex shrink-0 flex-wrap gap-2 text-[13px] text-[var(--muted)]">
-                {item.kind === "file" ? (
-                  <button type="button" disabled={busy} onClick={() => void downloadFilesEntry(item.path, item.name).catch((err: Error) => setError(err.message))}>
-                    下载
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
+          {shown.map((item) => {
+            const { Icon, color } = itemIcon(item);
+            return (
+              <div key={item.path} className="group rounded-md border border-transparent px-2 py-3 hover:border-[var(--line)] hover:bg-[var(--paper)]">
+                <button type="button" className="flex w-full flex-col items-center text-center" onClick={() => clickItem(item)}>
+                  <Icon className={`h-12 w-12 ${color}`} />
+                  <div className="mt-2 w-full truncate text-[13px]" title={item.name}>
+                    {item.name}
+                  </div>
+                  <div className="mt-1 w-full truncate text-[12px] text-[var(--muted)]">
+                    {item.kind === "dir" ? "文件夹" : formatSize(item.size)}
+                    {searching ? ` · ${item.path}` : ""}
+                  </div>
+                </button>
+                <div className="mt-2 flex flex-wrap justify-center gap-2 text-[12px] text-[var(--muted)] opacity-0 group-hover:opacity-100">
+                  {item.kind === "file" ? (
+                    <button type="button" disabled={busy} onClick={() => void downloadFilesEntry(item.path, item.name).catch((err: Error) => setError(err.message))}>
+                      下载
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      setRenameFrom(item);
+                      setRenameTo(item.name);
+                    }}
+                  >
+                    重命名
                   </button>
-                ) : null}
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => {
-                    setRenameFrom(item);
-                    setRenameTo(item.name);
-                  }}
-                >
-                  重命名
-                </button>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => {
-                    setMoveFrom(item);
-                    setMoveTo(path);
-                  }}
-                >
-                  移动
-                </button>
-                <button type="button" disabled={busy} onClick={() => setAsk(item)}>
-                  删除
-                </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      setMoveFrom(item);
+                      setMoveTo(path);
+                    }}
+                  >
+                    移动
+                  </button>
+                  <button type="button" disabled={busy} onClick={() => setAsk(item)}>
+                    删除
+                  </button>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -369,19 +382,39 @@ export function FilesPage() {
               <img src={`/api/v1/files/raw?path=${encodeURIComponent(preview.path)}`} alt={preview.name} className="max-h-[70vh] max-w-full object-contain" />
             </div>
           ) : null}
-          {preview.preview === "pdf" ? (
-            <iframe title={preview.name} src={`/api/v1/files/raw?path=${encodeURIComponent(preview.path)}`} className="h-[70vh] w-full rounded-md border border-[var(--line)]" />
-          ) : null}
+          {preview.preview === "pdf" ? <PdfPreview path={preview.path} /> : null}
           {preview.preview === "text" ? (
             <pre className="max-h-[70vh] overflow-auto whitespace-pre-wrap rounded-md bg-[var(--bg)] px-3 py-2 text-[13px] leading-6">{previewText || "正在读取…"}</pre>
           ) : null}
-          <button
-            type="button"
-            className="mt-3 border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px]"
-            onClick={() => void downloadFilesEntry(preview.path, preview.name).catch((err: Error) => setError(err.message))}
-          >
-            下载
-          </button>
+          {!preview.preview ? (
+            <p className="text-[13px] leading-6 text-[var(--muted)]">
+              这种文件不能在这里直接预览。可以下载，或用电脑默认程序打开。
+              <br />
+              {formatSize(preview.size)}
+              {preview.mtime ? ` · ${preview.mtime.replace("T", " ")}` : ""}
+            </p>
+          ) : null}
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px] disabled:opacity-50"
+              disabled={busy}
+              onClick={() =>
+                openFilesEntry(preview.path)
+                  .then(() => setHint("已用电脑打开"))
+                  .catch((err: Error) => setError(err.message))
+              }
+            >
+              用电脑打开
+            </button>
+            <button
+              type="button"
+              className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px]"
+              onClick={() => void downloadFilesEntry(preview.path, preview.name).catch((err: Error) => setError(err.message))}
+            >
+              下载
+            </button>
+          </div>
         </Modal>
       ) : null}
     </>

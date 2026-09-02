@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import mimetypes
 from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, UploadFile
@@ -107,6 +108,17 @@ def move_file(body: MoveIn):
         return _fail_or(exc)
 
 
+@router.post("/files/open")
+def open_file(body: PathIn):
+    if not (body.path or "").strip():
+        return fail("请先选一项")
+    try:
+        store.open_with_system(body.path)
+    except ValueError as exc:
+        return _fail_or(exc)
+    return ok(True)
+
+
 @router.post("/files/delete")
 def delete_file(body: PathIn):
     if not (body.path or "").strip():
@@ -125,10 +137,15 @@ def _file_or_fail(path: str, download: bool):
         return fail(str(exc))
     if not target.is_file():
         return fail("没有这个文件")
+    media = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+    if target.suffix.lower() == ".pdf":
+        media = "application/pdf"
     headers = {}
     if download:
         headers["Content-Disposition"] = f"attachment; filename*=UTF-8''{quote(target.name)}"
-    return FileResponse(target, filename=target.name, headers=headers)
+        return FileResponse(target, filename=target.name, media_type=media, headers=headers)
+    headers["Content-Disposition"] = "inline"
+    return FileResponse(target, media_type=media, headers=headers)
 
 
 @router.get("/files/download")

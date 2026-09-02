@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import shutil
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -215,3 +217,18 @@ def delete_entry(rel: str) -> None:
         path.unlink()
     else:
         raise ValueError("没有这个文件")
+
+
+def open_with_system(rel: str) -> None:
+    """用电脑默认程序打开，像资源管理器双击。"""
+
+    path = resolve_inside(rel)
+    if not path.exists():
+        raise ValueError("没有这个文件")
+    try:
+        if os.name == "nt":
+            os.startfile(path)  # type: ignore[attr-defined]
+        else:
+            subprocess.Popen(["xdg-open", str(path)])
+    except OSError as exc:
+        raise ValueError(f"打不开：{exc}") from exc

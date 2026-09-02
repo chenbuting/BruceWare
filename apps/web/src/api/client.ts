@@ -127,6 +127,13 @@ export function deleteFilesEntry(path: string) {
   });
 }
 
+export function openFilesEntry(path: string) {
+  return request<boolean>("/api/v1/files/open", {
+    method: "POST",
+    body: JSON.stringify({ path }),
+  });
+}
+
 export async function downloadFilesEntry(path: string, filename: string) {
   const res = await fetch(`/api/v1/files/download?path=${encodeURIComponent(path)}`);
   if (!res.ok) {
