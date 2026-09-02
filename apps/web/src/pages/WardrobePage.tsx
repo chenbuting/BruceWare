@@ -44,6 +44,22 @@ type Preview =
   | { kind: "look"; look: WardrobeLook }
   | { kind: "photo"; src: string; title: string };
 
+/** 把生成图拉下来存到本地 */
+async function downloadImage(src: string, title: string) {
+  const res = await fetch(src);
+  if (!res.ok) throw new Error("下载失败");
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  const name = title.replace(/[\\/:*?"<>|]+/g, "_").trim() || "搭配";
+  link.href = url;
+  link.download = name.toLowerCase().endsWith(".png") ? name : `${name}.png`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 /** 搭配放大：效果图、这套衣服、生成时记下的风格图 */
 function LookPreview({
   look,
@@ -56,6 +72,7 @@ function LookPreview({
   onVary,
   onRemake,
   onScene,
+  onDownload,
 }: {
   look: WardrobeLook;
   items: WardrobeItem[];
@@ -67,6 +84,7 @@ function LookPreview({
   onVary: () => void;
   onRemake: (prompt: string) => void;
   onScene: (scene: string) => void;
+  onDownload: () => void;
 }) {
   const [draft, setDraft] = useState(look.prompt || "");
   const [scene, setScene] = useState("");
@@ -129,6 +147,9 @@ function LookPreview({
         </p>
       )}
       <div className="mt-3 flex flex-wrap items-center gap-2">
+        <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px] disabled:opacity-50" disabled={!look.image_url} onClick={onDownload}>
+          下载
+        </button>
         <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px] disabled:opacity-50" disabled={busy} onClick={onVary}>
           {busy ? "裂变中…" : "姿势裂变"}
         </button>
@@ -863,6 +884,16 @@ export function WardrobePage() {
                   <div className="mt-2 flex items-center justify-between gap-3">
                     <div className="text-[13px]">{look.title}</div>
                     <div className="flex shrink-0 gap-2">
+                      <button
+                        type="button"
+                        className="text-[13px] text-[var(--muted)] disabled:opacity-50"
+                        disabled={!look.image_url}
+                        onClick={() =>
+                          void downloadImage(look.image_url, look.title).catch((err: Error) => setError(err.message))
+                        }
+                      >
+                        下载
+                      </button>
                       <button type="button" className="text-[13px] text-[var(--muted)] disabled:opacity-50" disabled={busy} onClick={() => void onVary(look.id)}>
                         姿势裂变
                       </button>
@@ -934,6 +965,9 @@ export function WardrobePage() {
               onVary={() => void onVary(preview.look.id)}
               onRemake={(prompt) => void onRemake(preview.look.id, prompt)}
               onScene={(scene) => void onScene(preview.look.id, scene)}
+              onDownload={() =>
+                void downloadImage(preview.look.image_url, preview.look.title).catch((err: Error) => setError(err.message))
+              }
             />
           ) : null}
           {preview.kind === "photo" ? (
