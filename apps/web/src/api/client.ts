@@ -280,6 +280,14 @@ export function deleteWardrobeItem(id: number) {
   return request<boolean>(`/api/v1/wardrobe/items/${id}`, { method: "DELETE" });
 }
 
+/** 改衣橱单件的分类或名称 */
+export function updateWardrobeItem(id: number, payload: { part?: string; name?: string }) {
+  return request<WardrobeItem>(`/api/v1/wardrobe/items/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function analyzeWardrobePhoto(file: File) {
   const body = new FormData();
   body.append("file", file);

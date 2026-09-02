@@ -6,6 +6,7 @@ import {
   analyzeWardrobePhoto,
   createWardrobeLook,
   deleteWardrobeItem,
+  updateWardrobeItem,
   deleteWardrobeLook,
   deleteWardrobeStyle,
   fetchWardrobeItems,
@@ -666,7 +667,26 @@ export function WardrobePage() {
                     ) : null}
                   </button>
                   <div className="mt-3 text-[13px] font-medium">{item.name}</div>
-                  <div className="text-[12px] text-[var(--muted)]">{item.part_label}</div>
+                  <select
+                    className="mt-1 w-full border border-[var(--line)] bg-[var(--paper)] px-2 py-1 text-[12px]"
+                    value={item.part}
+                    disabled={busy}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      updateWardrobeItem(item.id, { part: next })
+                        .then((updated) => {
+                          setItems((prev) => prev.map((row) => (row.id === updated.id ? updated : row)));
+                          setPreview((prev) => (prev?.kind === "item" && prev.item.id === updated.id ? { kind: "item", item: updated } : prev));
+                        })
+                        .catch((err: Error) => setError(err.message));
+                    }}
+                  >
+                    {ITEM_PARTS.map((row) => (
+                      <option key={row.id} value={row.id}>
+                        {row.label}
+                      </option>
+                    ))}
+                  </select>
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-2 py-1 text-[13px] disabled:opacity-50" disabled={busy} onClick={() => void onTryOn([item.id])}>
                       生成试穿

@@ -62,6 +62,11 @@ class ImportIn(BaseModel):
     items: list[DetectedIn]
 
 
+class ItemPatchIn(BaseModel):
+    part: str = ""
+    name: str = ""
+
+
 class LookIn(BaseModel):
     item_ids: list[int]
     title: str = ""
@@ -336,6 +341,25 @@ async def add_item(
     folder = item_dir(row.id)
     write_bytes(folder / "original.png", picture)
     write_bytes(folder / "cutout.png", picture)
+    db.commit()
+    db.refresh(row)
+    return ok(_item_dict(row))
+
+
+@router.put("/wardrobe/items/{item_id}")
+def update_item(item_id: int, body: ItemPatchIn, db: Session = Depends(get_db)):
+    """改衣服分类或名称，用来纠正识别错误。"""
+
+    row = db.get(WardrobeItem, item_id)
+    if row is None:
+        return fail("没有这件衣服")
+    if body.part:
+        if body.part not in PART_LABELS:
+            return fail("没有这个分类")
+        row.part = body.part
+    title = (body.name or "").strip()
+    if title:
+        row.name = title[:200]
     db.commit()
     db.refresh(row)
     return ok(_item_dict(row))
