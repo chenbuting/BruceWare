@@ -80,6 +80,12 @@ export type WardrobeLook = {
   created_at: string;
 };
 
+export type WardrobeSuggest = {
+  item_ids: number[];
+  reason: string;
+  items: WardrobeItem[];
+};
+
 export type WardrobeStyle = {
   id: number;
   name: string;

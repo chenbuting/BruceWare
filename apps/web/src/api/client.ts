@@ -10,6 +10,7 @@ import type {
   WardrobeDetected,
   WardrobeItem,
   WardrobeLook,
+  WardrobeSuggest,
   WardrobeStyle,
 } from "./types";
 
@@ -328,6 +329,19 @@ export function remakeWardrobeLook(lookId: number, prompt: string) {
   return request<WardrobeLook>(`/api/v1/wardrobe/looks/${lookId}/remake`, {
     method: "POST",
     body: JSON.stringify({ prompt }),
+  });
+}
+
+/** 看本人照片，从衣橱里出 2 套适合这个人的搭配方案 */
+export function suggestWardrobeLooks() {
+  return request<{ items: WardrobeSuggest[] }>("/api/v1/wardrobe/suggest", { method: "POST" });
+}
+
+/** 人、衣服、姿势不变，只换场景 */
+export function changeWardrobeScene(lookId: number, scene: string) {
+  return request<WardrobeLook>("/api/v1/wardrobe/looks/scene", {
+    method: "POST",
+    body: JSON.stringify({ look_id: lookId, scene }),
   });
 }
 

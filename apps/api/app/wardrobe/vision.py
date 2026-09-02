@@ -56,6 +56,63 @@ def analyze_photo(data: bytes, mime: str = "image/jpeg") -> list[dict[str, Any]]
     return [_normalize(item) for item in items if isinstance(item, dict)][:8]
 
 
+def suggest_outfits(person: bytes, closet: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """看本人照片，从衣橱文字清单里给这个人配 2 套。"""
+
+    if not closet:
+        raise ValueError("衣橱是空的")
+    lines = []
+    for item in closet:
+        tags = "、".join(item.get("tags") or []) or "无"
+        lines.append(
+            f"id={item['id']} 分类={item.get('part') or ''} 名称={item.get('name') or '衣服'} "
+            f"颜色={item.get('color') or '未知'} 标签={tags}"
+        )
+    prompt = (
+        "你是穿衣顾问。第一张图是这个人本人。"
+        "只能从下面衣橱里选衣服，不能编造 id，不能发明衣橱里没有的衣服。\n"
+        + "\n".join(lines)
+        + "\n给这个人配 2 套适合他日常穿的造型。"
+        "根据这个人的身材、气质、年龄感来选，不要只按颜色乱搭。"
+        "每套尽量有上装(upperbody或wholebody_up)和下装(lowerbody)，有鞋可以加鞋。"
+        "每套 2 到 3 件，两套不要完全相同。"
+        '只返回 JSON，不要其它文字：{"outfits":[{"item_ids":[1,2],"reason":"为什么适合这个人，一两句"}]}'
+    )
+    preview, preview_mime = _for_vision(person)
+    encoded = base64.b64encode(preview).decode("ascii")
+    text = chat_complete(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:{preview_mime};base64,{encoded}"}},
+                ],
+            }
+        ],
+        timeout=90,
+    )
+    payload = _parse_json(text)
+    outfits = payload.get("outfits") if isinstance(payload, dict) else None
+    if not isinstance(outfits, list):
+        raise ValueError("没有给出搭配方案")
+    out: list[dict[str, Any]] = []
+    for item in outfits:
+        if not isinstance(item, dict):
+            continue
+        ids: list[int] = []
+        for raw in item.get("item_ids") or []:
+            try:
+                ids.append(int(raw))
+            except Exception:
+                continue
+        if ids:
+            out.append({"item_ids": ids[:3], "reason": str(item.get("reason") or "").strip()[:120]})
+    if not out:
+        raise ValueError("没有给出能用的搭配")
+    return out[:2]
+
+
 def describe_style(data: bytes) -> dict[str, str]:
     """读出风格图的光线、场景、姿势，给生图用。"""
     preview, preview_mime = _for_vision(data)

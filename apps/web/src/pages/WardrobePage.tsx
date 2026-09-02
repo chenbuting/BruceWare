@@ -15,11 +15,13 @@ import {
   fetchWardrobeStyles,
   importWardrobeItems,
   saveWardrobeReference,
+  changeWardrobeScene,
   remakeWardrobeLook,
   setWardrobeStyleActive,
+  suggestWardrobeLooks,
   varyWardrobeLook,
 } from "@/api/client";
-import type { WardrobeDetected, WardrobeItem, WardrobeLook, WardrobeStyle } from "@/api/types";
+import type { WardrobeDetected, WardrobeItem, WardrobeLook, WardrobeSuggest, WardrobeStyle } from "@/api/types";
 import { Card } from "@/components/Card";
 import { ConfirmModal, Modal } from "@/components/Modal";
 
@@ -34,6 +36,7 @@ const PARTS = [
   { id: "shoes", label: "鞋" },
 ];
 const ITEM_PARTS = PARTS.filter((item) => item.id);
+const SCENE_PRESETS = ["白棚", "城市街道", "室内客厅"];
 
 type DirectDraft = { file: File; preview: string; name: string; part: string };
 type Preview =
@@ -52,6 +55,7 @@ function LookPreview({
   onFocusStyle,
   onVary,
   onRemake,
+  onScene,
 }: {
   look: WardrobeLook;
   items: WardrobeItem[];
@@ -62,10 +66,13 @@ function LookPreview({
   onFocusStyle: (src: string) => void;
   onVary: () => void;
   onRemake: (prompt: string) => void;
+  onScene: (scene: string) => void;
 }) {
   const [draft, setDraft] = useState(look.prompt || "");
+  const [scene, setScene] = useState("");
   useEffect(() => {
     setDraft(look.prompt || "");
+    setScene("");
   }, [look.id, look.prompt]);
   const focusItem = focusId ? items.find((row) => row.id === focusId) : null;
   const styleName = look.style_name || "";
@@ -121,9 +128,37 @@ function LookPreview({
           {comparing ? "左右是裂变前后对比。点下面单件或风格图，看细节。" : "点下面单件或风格图，看细节。"}
         </p>
       )}
-      <button type="button" className="mt-3 border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px] disabled:opacity-50" disabled={busy} onClick={onVary}>
-        {busy ? "裂变中…" : "姿势裂变"}
-      </button>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px] disabled:opacity-50" disabled={busy} onClick={onVary}>
+          {busy ? "裂变中…" : "姿势裂变"}
+        </button>
+        {SCENE_PRESETS.map((item) => (
+          <button
+            key={item}
+            type="button"
+            className={`border px-2 py-1.5 text-[13px] ${scene === item ? "border-[var(--text)] bg-[var(--bg)]" : "border-[var(--line)] bg-[var(--paper)]"}`}
+            disabled={busy}
+            onClick={() => setScene(item)}
+          >
+            {item}
+          </button>
+        ))}
+        <input
+          className="w-36 border border-[var(--line)] bg-[var(--paper)] px-2 py-1.5 text-[13px]"
+          placeholder="或自己写场景"
+          value={scene}
+          disabled={busy}
+          onChange={(e) => setScene(e.target.value)}
+        />
+        <button
+          type="button"
+          className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px] disabled:opacity-50"
+          disabled={busy || !scene.trim()}
+          onClick={() => onScene(scene.trim())}
+        >
+          {busy ? "换场景中…" : "换场景"}
+        </button>
+      </div>
       <div className="mt-4">
         <div className="text-[13px] font-medium">提示词</div>
         <p className="mt-1 text-[12px] text-[var(--muted)]">可以改几句再点重做，人、衣服尽量按原图走。</p>
@@ -236,6 +271,7 @@ export function WardrobePage() {
   const styleRef = useRef<HTMLInputElement>(null);
   const varyRef = useRef<HTMLInputElement>(null);
   const [varyCount, setVaryCount] = useState(2);
+  const [suggested, setSuggested] = useState<WardrobeSuggest[]>([]);
 
   async function reload() {
     const [status, closet, looksData, stylesData] = await Promise.all([
@@ -427,6 +463,41 @@ export function WardrobePage() {
       setHint("已按新提示词重做");
     } catch (err) {
       setError(err instanceof Error ? err.message : "重做失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onSuggest() {
+    setBusy(true);
+    setError("");
+    setHint("正在看你的照片，从衣橱里配适合你的方案");
+    try {
+      const data = await suggestWardrobeLooks();
+      setSuggested(data.items);
+      setHint(data.items.length ? "已给出搭配方案，点「生成这套」才会出图" : "没有给出方案");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "智能搭配失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onScene(lookId: number, scene: string) {
+    if (!scene.trim()) {
+      setError("请先写场景");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setHint("正在换场景，人、衣服和姿势尽量不变");
+    try {
+      await changeWardrobeScene(lookId, scene.trim());
+      await reload();
+      setPreview(null);
+      setHint("换场景好了，新图已放到搭配");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "换场景失败");
     } finally {
       setBusy(false);
     }
@@ -713,13 +784,16 @@ export function WardrobePage() {
         <div>
           <Card className="mb-4 px-5 py-4">
             <p className="text-[13px] text-[var(--muted)]">
-              在衣橱里点「选来搭配」，一件就能试穿，多件就是整套。点「姿势裂变」会按这张图再出不同姿势，张数自己选，最多 3 张。也可以自己上传一张图来裂变。
+              在衣橱里点「选来搭配」，一件就能试穿，多件就是整套。也可以点「智能搭配」，先按你的照片给方案，再点生成。点开效果图还能换场景、做姿势裂变。
               {activeStyleName ? ` 会学「${activeStyleName}」的光线、场景和姿势，衣服用你选的。` : ""}
             </p>
             <div className="mt-3 text-[13px]">已选 {picked.length} 件</div>
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy || picked.length < 1} onClick={() => void onTryOn(picked)}>
                 生成搭配
+              </button>
+              <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy} onClick={() => void onSuggest()}>
+                {busy ? "搭配中…" : "智能搭配"}
               </button>
               <label className="flex items-center gap-2 text-[13px] text-[var(--muted)]">
                 裂变张数
@@ -739,6 +813,31 @@ export function WardrobePage() {
               </button>
               <input ref={varyRef} type="file" accept="image/*" className="hidden" onChange={(e) => void onVary(undefined, e.target.files?.[0])} />
             </div>
+            {suggested.length > 0 ? (
+              <div className="mt-4 space-y-3">
+                {suggested.map((row, index) => (
+                  <div key={`${row.item_ids.join("-")}-${index}`} className="border border-[var(--line)] px-3 py-3">
+                    <div className="text-[13px] font-medium">方案 {index + 1}</div>
+                    {row.reason ? <p className="mt-1 text-[13px] text-[var(--muted)]">{row.reason}</p> : null}
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {row.items.map((item) => (
+                        <div key={item.id} className="w-16">
+                          <div className="flex h-16 items-center justify-center overflow-hidden rounded-md bg-[var(--bg)]">
+                            {item.cutout_url || item.original_url ? (
+                              <img src={item.cutout_url || item.original_url} alt={item.name} className="max-h-full max-w-full object-contain" />
+                            ) : null}
+                          </div>
+                          <div className="mt-1 truncate text-[12px]">{item.name}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <button type="button" className="mt-3 border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px] disabled:opacity-50" disabled={busy} onClick={() => void onTryOn(row.item_ids)}>
+                      生成这套
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </Card>
           {looks.length === 0 ? (
             <p className="text-[13px] text-[var(--muted)]">还没有搭配图。</p>
@@ -832,6 +931,7 @@ export function WardrobePage() {
               onFocusStyle={setStyleFocusSrc}
               onVary={() => void onVary(preview.look.id)}
               onRemake={(prompt) => void onRemake(preview.look.id, prompt)}
+              onScene={(scene) => void onScene(preview.look.id, scene)}
             />
           ) : null}
           {preview.kind === "photo" ? (

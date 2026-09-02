@@ -36,7 +36,7 @@ from app.wardrobe.store import (
     tmp_dir,
     write_bytes,
 )
-from app.wardrobe.vision import analyze_photo, crop_box, describe_style, remove_chroma, to_png
+from app.wardrobe.vision import analyze_photo, crop_box, describe_style, remove_chroma, suggest_outfits, to_png
 
 router = APIRouter()
 PART_LABELS = {
@@ -74,6 +74,11 @@ class LookIn(BaseModel):
 
 class LookPromptIn(BaseModel):
     prompt: str = ""
+
+
+class SceneIn(BaseModel):
+    look_id: int = 0
+    scene: str = ""
 
 
 class StyleActiveIn(BaseModel):
@@ -224,6 +229,17 @@ def _pose_vary_prompt(pose: str) -> str:
     )
 
 
+def _scene_prompt(scene: str) -> str:
+    return (
+        "以这张图为唯一参考，拍一张真实时尚照片。"
+        "同一个人、同一张脸、同一发型、同一套衣服、同一个姿势。"
+        f"只把场景和背景换成：{scene}。"
+        "不要改衣服颜色、版型和细节，不要换人。"
+        + _single_shot()
+        + "不要文字、水印、logo。"
+    )
+
+
 def _modeled_prompt(item: dict[str, Any], style_name: str = "", desc: dict[str, str] | None = None) -> str:
     name = item.get("name") or "这件衣服"
     extra = _style_line(style_name, desc)
@@ -310,6 +326,54 @@ async def save_reference(file: UploadFile = File(...)):
 def list_items(db: Session = Depends(get_db)):
     rows = db.scalars(select(WardrobeItem).order_by(WardrobeItem.id.desc())).all()
     return ok({"items": [_item_dict(row) for row in rows]})
+
+
+@router.post("/wardrobe/suggest")
+def suggest_looks(db: Session = Depends(get_db)):
+    """看本人照片，从衣橱里给这个人出 2 套搭配方案，先不生图。"""
+
+    ref = reference_path()
+    if not ref.is_file():
+        return fail("请先上传一张自己的照片")
+    rows = db.scalars(select(WardrobeItem).order_by(WardrobeItem.id.desc())).all()
+    closet: list[dict[str, Any]] = []
+    for row in rows:
+        if not (item_dir(row.id) / "cutout.png").is_file():
+            continue
+        closet.append(
+            {
+                "id": row.id,
+                "name": row.name or "衣服",
+                "part": row.part or "upperbody",
+                "color": row.color or "",
+                "tags": json.loads(row.tags or "[]"),
+            }
+        )
+    tops = [item for item in closet if item["part"] in ("upperbody", "wholebody_up")]
+    bottoms = [item for item in closet if item["part"] == "lowerbody"]
+    if len(closet) < 2 or not tops or not bottoms:
+        return fail("衣橱里至少要有一件上装和一件下装")
+    try:
+        outfits = suggest_outfits(ref.read_bytes(), closet)
+    except ValueError as exc:
+        return fail(str(exc))
+    valid = {item["id"] for item in closet}
+    cleaned: list[dict[str, Any]] = []
+    for outfit in outfits:
+        ids = [item_id for item_id in outfit.get("item_ids") or [] if item_id in valid][:3]
+        if len(ids) < 2:
+            continue
+        items = [db.get(WardrobeItem, item_id) for item_id in ids]
+        cleaned.append(
+            {
+                "item_ids": ids,
+                "reason": outfit.get("reason") or "",
+                "items": [_item_dict(row) for row in items if row is not None],
+            }
+        )
+    if not cleaned:
+        return fail("没有给出能用的搭配，请再试一次")
+    return ok({"items": cleaned[:2]})
 
 
 @router.post("/wardrobe/items")
@@ -639,6 +703,34 @@ def remake_look(look_id: int, body: LookPromptIn, db: Session = Depends(get_db))
         return fail(str(exc))
     write_bytes(current, picture)
     save_look_prompt(look_id, prompt)
+    return ok(_look_dict(row))
+
+
+@router.post("/wardrobe/looks/scene")
+def change_scene(body: SceneIn, db: Session = Depends(get_db)):
+    """人、衣服、姿势不变，只换场景。"""
+
+    scene = (body.scene or "").strip()[:80]
+    if not scene:
+        return fail("请先写场景")
+    source = db.get(WardrobeLook, body.look_id)
+    if source is None:
+        return fail("没有这套搭配")
+    path = look_dir(source.id) / "look.png"
+    if not path.is_file():
+        return fail("这套搭配没有效果图")
+    raw = path.read_bytes()
+    prompt = _scene_prompt(scene)
+    try:
+        picture = image_edit(prompt, [raw], size="1024x1024", timeout=180)
+    except ValueError as exc:
+        return fail(str(exc))
+    base = (source.title or "搭配").split(" · 换场景")[0].strip() or "搭配"
+    title = f"{base} · {scene}"[:200]
+    ids = json.loads(source.item_ids or "[]")
+    row = _write_look(db, picture, title, ids, source.id, raw, prompt)
+    db.commit()
+    db.refresh(row)
     return ok(_look_dict(row))
 
 
