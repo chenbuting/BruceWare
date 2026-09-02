@@ -38,28 +38,36 @@ type Preview =
   | { kind: "look"; look: WardrobeLook }
   | { kind: "photo"; src: string; title: string };
 
-/** 搭配放大：主图、这套衣服明细、相关其它搭配 */
+/** 从搭配标题里找出当时用的风格 */
+function styleForLook(look: WardrobeLook, styles: WardrobeStyle[]): WardrobeStyle | undefined {
+  const named = styles.filter((item) => item.name && look.title.endsWith(` · ${item.name}`));
+  return named.find((item) => item.active) || named[0];
+}
+
+/** 搭配放大：效果图、这套衣服、当时用的风格图 */
 function LookPreview({
   look,
   items,
-  looks,
+  styles,
   focusId,
+  styleFocusSrc,
   onFocus,
-  onOpenLook,
+  onFocusStyle,
 }: {
   look: WardrobeLook;
   items: WardrobeItem[];
-  looks: WardrobeLook[];
+  styles: WardrobeStyle[];
   focusId: number | null;
+  styleFocusSrc: string;
   onFocus: (id: number | null) => void;
-  onOpenLook: (look: WardrobeLook) => void;
+  onFocusStyle: (src: string) => void;
 }) {
   const focusItem = focusId ? items.find((row) => row.id === focusId) : null;
-  const mainSrc = focusItem ? focusItem.cutout_url || focusItem.original_url : look.image_url;
-  const mainAlt = focusItem ? focusItem.name : look.title;
-  const relatedLooks = looks.filter(
-    (row) => row.id !== look.id && row.item_ids.some((id) => look.item_ids.includes(id)),
-  );
+  const style = styleForLook(look, styles);
+  const mainSrc = focusItem
+    ? focusItem.cutout_url || focusItem.original_url
+    : styleFocusSrc || look.image_url;
+  const mainAlt = focusItem ? focusItem.name : styleFocusSrc ? style?.name || "风格参考" : look.title;
 
   return (
     <div>
@@ -76,8 +84,15 @@ function LookPreview({
             看整套
           </button>
         </div>
+      ) : styleFocusSrc ? (
+        <div className="mt-2 flex flex-wrap items-center gap-3 text-[13px] text-[var(--muted)]">
+          <span>风格参考{style?.name ? ` · ${style.name}` : ""}</span>
+          <button type="button" className="text-[var(--text)]" onClick={() => onFocusStyle("")}>
+            看整套
+          </button>
+        </div>
       ) : (
-        <p className="mt-2 text-[13px] text-[var(--muted)]">点下面单件，看这套里每件衣服的细节。</p>
+        <p className="mt-2 text-[13px] text-[var(--muted)]">点下面单件或风格图，看细节。</p>
       )}
       <div className="mt-4 text-[13px] font-medium">这套用了 {look.item_ids.length} 件</div>
       {look.item_ids.length === 0 ? (
@@ -98,7 +113,10 @@ function LookPreview({
                 key={id}
                 type="button"
                 className={`rounded-md border px-2 py-2 text-left ${focusId === id ? "border-[var(--text)] bg-[var(--bg)]" : "border-[var(--line)] bg-[var(--paper)]"}`}
-                onClick={() => onFocus(focusId === id ? null : id)}
+                onClick={() => {
+                  onFocusStyle("");
+                  onFocus(focusId === id ? null : id);
+                }}
               >
                 <div className="flex h-20 items-center justify-center overflow-hidden rounded-md bg-[var(--bg)]">
                   {item.cutout_url || item.original_url ? (
@@ -112,19 +130,28 @@ function LookPreview({
           })}
         </div>
       )}
-      {relatedLooks.length > 0 ? (
+      {style ? (
         <>
-          <div className="mt-4 text-[13px] font-medium">相关搭配</div>
-          <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-4">
-            {relatedLooks.map((row) => (
-              <button key={row.id} type="button" className="rounded-md border border-[var(--line)] bg-[var(--paper)] px-2 py-2 text-left" onClick={() => onOpenLook(row)}>
-                <div className="flex h-20 items-center justify-center overflow-hidden rounded-md bg-[var(--bg)]">
-                  {row.image_url ? <img src={row.image_url} alt={row.title} className="max-h-full max-w-full object-contain" /> : null}
-                </div>
-                <div className="mt-2 truncate text-[12px]">{row.title}</div>
-              </button>
-            ))}
-          </div>
+          <div className="mt-4 text-[13px] font-medium">风格参考 · {style.name}</div>
+          {style.image_urls.length === 0 ? (
+            <p className="mt-2 text-[13px] text-[var(--muted)]">这套风格还没有参考图。</p>
+          ) : (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {style.image_urls.map((url) => (
+                <button
+                  key={url}
+                  type="button"
+                  className={`h-24 w-24 overflow-hidden rounded-md border bg-[var(--bg)] ${styleFocusSrc === url ? "border-[var(--text)]" : "border-[var(--line)]"}`}
+                  onClick={() => {
+                    onFocus(null);
+                    onFocusStyle(styleFocusSrc === url ? "" : url);
+                  }}
+                >
+                  <img src={url} alt={style.name} className="h-full w-full object-cover" />
+                </button>
+              ))}
+            </div>
+          )}
         </>
       ) : null}
     </div>
@@ -153,6 +180,7 @@ export function WardrobePage() {
   const [askStyleId, setAskStyleId] = useState<number | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [lookFocusId, setLookFocusId] = useState<number | null>(null);
+  const [styleFocusSrc, setStyleFocusSrc] = useState("");
   const [drafts, setDrafts] = useState<DirectDraft[]>([]);
   const importRef = useRef<HTMLInputElement>(null);
   const directRef = useRef<HTMLInputElement>(null);
@@ -586,7 +614,9 @@ export function WardrobePage() {
             <p className="text-[13px] text-[var(--muted)]">还没有搭配图。</p>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {looks.map((look) => (
+              {looks.map((look) => {
+                const style = styleForLook(look, styles);
+                return (
                 <Card key={look.id} className="px-3 py-3">
                   {look.image_url ? (
                     <button
@@ -594,11 +624,27 @@ export function WardrobePage() {
                       className="flex h-52 w-full items-center justify-center overflow-hidden rounded-md bg-[var(--bg)]"
                       onClick={() => {
                         setLookFocusId(null);
+                        setStyleFocusSrc("");
                         setPreview({ kind: "look", look });
                       }}
                     >
                       <img src={look.image_url} alt={look.title} className="max-h-full max-w-full object-contain" />
                     </button>
+                  ) : null}
+                  {style && style.image_urls.length > 0 ? (
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <span className="text-[12px] text-[var(--muted)]">风格</span>
+                      {style.image_urls.slice(0, 4).map((url) => (
+                        <button
+                          key={url}
+                          type="button"
+                          className="h-10 w-10 overflow-hidden rounded-md border border-[var(--line)] bg-[var(--bg)]"
+                          onClick={() => setPreview({ kind: "photo", src: url, title: style.name })}
+                        >
+                          <img src={url} alt={style.name} className="h-full w-full object-cover" />
+                        </button>
+                      ))}
+                    </div>
                   ) : null}
                   <div className="mt-2 flex items-center justify-between gap-3">
                     <div className="text-[13px]">{look.title}</div>
@@ -615,7 +661,8 @@ export function WardrobePage() {
                     </button>
                   </div>
                 </Card>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -661,13 +708,11 @@ export function WardrobePage() {
             <LookPreview
               look={preview.look}
               items={items}
-              looks={looks}
+              styles={styles}
               focusId={lookFocusId}
+              styleFocusSrc={styleFocusSrc}
               onFocus={setLookFocusId}
-              onOpenLook={(look) => {
-                setLookFocusId(null);
-                setPreview({ kind: "look", look });
-              }}
+              onFocusStyle={setStyleFocusSrc}
             />
           ) : null}
           {preview.kind === "photo" ? (
