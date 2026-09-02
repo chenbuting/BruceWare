@@ -315,11 +315,12 @@ export function deleteWardrobeLook(id: number) {
   return request<boolean>(`/api/v1/wardrobe/looks/${id}`, { method: "DELETE" });
 }
 
-/** 从现有搭配或上传图做姿势裂变，一次 2 张 */
-export function varyWardrobeLook(lookId?: number, file?: File) {
+/** 从现有搭配或上传图做姿势裂变，张数 1～3 */
+export function varyWardrobeLook(lookId?: number, file?: File, count = 2) {
   const body = new FormData();
   if (lookId) body.append("look_id", String(lookId));
   if (file) body.append("file", file);
+  body.append("count", String(Math.max(1, Math.min(3, count))));
   return request<{ items: WardrobeLook[] }>("/api/v1/wardrobe/looks/vary", { method: "POST", body });
 }
 

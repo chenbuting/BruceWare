@@ -188,6 +188,7 @@ export function WardrobePage() {
   const selfRef = useRef<HTMLInputElement>(null);
   const styleRef = useRef<HTMLInputElement>(null);
   const varyRef = useRef<HTMLInputElement>(null);
+  const [varyCount, setVaryCount] = useState(2);
 
   async function reload() {
     const [status, closet, looksData, stylesData] = await Promise.all([
@@ -349,13 +350,13 @@ export function WardrobePage() {
     }
     setBusy(true);
     setError("");
-    setHint("正在做姿势裂变，一次 2 张，大约一两分钟，请不要重复点");
+    setHint(`正在做姿势裂变，一次 ${varyCount} 张，大约一两分钟，请不要重复点`);
     try {
-      const data = await varyWardrobeLook(lookId, file);
+      const data = await varyWardrobeLook(lookId, file, varyCount);
       await reload();
       setTab("looks");
       setPreview(null);
-      setHint(data.items.length >= 2 ? "姿势裂变好了，新图已放到搭配" : "只做出 1 张，可以再试一次");
+      setHint(data.items.length >= varyCount ? "姿势裂变好了，新图已放到搭配" : `只做出 ${data.items.length} 张，可以再试一次`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "裂变失败");
     } finally {
@@ -626,14 +627,27 @@ export function WardrobePage() {
         <div>
           <Card className="mb-4 px-5 py-4">
             <p className="text-[13px] text-[var(--muted)]">
-              在衣橱里点「选来搭配」，一件就能试穿，多件就是整套。点「姿势裂变」会按这张图再出 2 个不同姿势。也可以自己上传一张图来裂变。
+              在衣橱里点「选来搭配」，一件就能试穿，多件就是整套。点「姿势裂变」会按这张图再出不同姿势，张数自己选，最多 3 张。也可以自己上传一张图来裂变。
               {activeStyleName ? ` 会学「${activeStyleName}」的光线、场景和姿势，衣服用你选的。` : ""}
             </p>
             <div className="mt-3 text-[13px]">已选 {picked.length} 件</div>
-            <div className="mt-3 flex flex-wrap gap-2">
+            <div className="mt-3 flex flex-wrap items-center gap-2">
               <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy || picked.length < 1} onClick={() => void onTryOn(picked)}>
                 生成搭配
               </button>
+              <label className="flex items-center gap-2 text-[13px] text-[var(--muted)]">
+                裂变张数
+                <select
+                  className="border border-[var(--line)] bg-[var(--paper)] px-2 py-1.5 text-[var(--text)]"
+                  value={varyCount}
+                  disabled={busy}
+                  onChange={(e) => setVaryCount(Number(e.target.value))}
+                >
+                  <option value={1}>1 张</option>
+                  <option value={2}>2 张</option>
+                  <option value={3}>3 张</option>
+                </select>
+              </label>
               <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy} onClick={() => varyRef.current?.click()}>
                 {busy ? "裂变中…" : "上传图片做姿势裂变"}
               </button>

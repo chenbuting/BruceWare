@@ -171,6 +171,7 @@ def _single_shot() -> str:
 POSE_VARIANTS = [
     "换成站立姿势：正面或微侧，一只手自然垂下或轻轻插口袋。姿势必须和原图明显不同。",
     "换成走动或回眸姿势：迈一小步，或身体转向一侧看向别处。姿势必须和原图明显不同。",
+    "换成坐下或倚靠姿势：坐在合适的位置，或轻轻靠一下。姿势必须和原图明显不同。",
 ]
 
 
@@ -481,10 +482,11 @@ def _write_look(db: Session, picture: bytes, title: str, item_ids: list[int], so
 @router.post("/wardrobe/looks/vary")
 async def vary_look(
     look_id: int = Form(0),
+    count: int = Form(2),
     file: UploadFile | None = File(None),
     db: Session = Depends(get_db),
 ):
-    """从现有搭配或上传图做姿势裂变，固定出 2 张。"""
+    """从现有搭配或上传图做姿势裂变，张数 1～3。"""
 
     source: WardrobeLook | None = None
     raw = b""
@@ -512,7 +514,8 @@ async def vary_look(
     ids = json.loads(source.item_ids or "[]") if source else []
     created: list[WardrobeLook] = []
     last_error = ""
-    for pose in POSE_VARIANTS:
+    times = max(1, min(3, int(count or 2)))
+    for pose in POSE_VARIANTS[:times]:
         try:
             picture = image_edit(_pose_vary_prompt(pose), [raw], size="1024x1024", timeout=180)
         except ValueError as exc:
