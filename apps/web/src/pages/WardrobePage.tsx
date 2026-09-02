@@ -18,7 +18,7 @@ import {
 } from "@/api/client";
 import type { WardrobeDetected, WardrobeItem, WardrobeLook, WardrobeStyle } from "@/api/types";
 import { Card } from "@/components/Card";
-import { ConfirmModal } from "@/components/Modal";
+import { ConfirmModal, Modal } from "@/components/Modal";
 
 type Tab = "closet" | "import" | "looks" | "styles";
 
@@ -33,6 +33,103 @@ const PARTS = [
 const ITEM_PARTS = PARTS.filter((item) => item.id);
 
 type DirectDraft = { file: File; preview: string; name: string; part: string };
+type Preview =
+  | { kind: "item"; item: WardrobeItem }
+  | { kind: "look"; look: WardrobeLook }
+  | { kind: "photo"; src: string; title: string };
+
+/** 搭配放大：主图、这套衣服明细、相关其它搭配 */
+function LookPreview({
+  look,
+  items,
+  looks,
+  focusId,
+  onFocus,
+  onOpenLook,
+}: {
+  look: WardrobeLook;
+  items: WardrobeItem[];
+  looks: WardrobeLook[];
+  focusId: number | null;
+  onFocus: (id: number | null) => void;
+  onOpenLook: (look: WardrobeLook) => void;
+}) {
+  const focusItem = focusId ? items.find((row) => row.id === focusId) : null;
+  const mainSrc = focusItem ? focusItem.cutout_url || focusItem.original_url : look.image_url;
+  const mainAlt = focusItem ? focusItem.name : look.title;
+  const relatedLooks = looks.filter(
+    (row) => row.id !== look.id && row.item_ids.some((id) => look.item_ids.includes(id)),
+  );
+
+  return (
+    <div>
+      <div className="flex max-h-[48vh] items-center justify-center overflow-hidden rounded-md bg-[var(--bg)]">
+        {mainSrc ? <img src={mainSrc} alt={mainAlt} className="max-h-[48vh] max-w-full object-contain" /> : null}
+      </div>
+      {focusItem ? (
+        <div className="mt-2 flex flex-wrap items-center gap-3 text-[13px] text-[var(--muted)]">
+          <span>
+            {focusItem.name} · {focusItem.part_label}
+            {focusItem.color ? ` · ${focusItem.color}` : ""}
+          </span>
+          <button type="button" className="text-[var(--text)]" onClick={() => onFocus(null)}>
+            看整套
+          </button>
+        </div>
+      ) : (
+        <p className="mt-2 text-[13px] text-[var(--muted)]">点下面单件，看这套里每件衣服的细节。</p>
+      )}
+      <div className="mt-4 text-[13px] font-medium">这套用了 {look.item_ids.length} 件</div>
+      {look.item_ids.length === 0 ? (
+        <p className="mt-2 text-[13px] text-[var(--muted)]">没有记下衣服明细。</p>
+      ) : (
+        <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-4">
+          {look.item_ids.map((id) => {
+            const item = items.find((row) => row.id === id);
+            if (!item) {
+              return (
+                <div key={id} className="rounded-md border border-[var(--line)] px-2 py-3 text-center text-[12px] text-[var(--muted)]">
+                  已不在衣橱
+                </div>
+              );
+            }
+            return (
+              <button
+                key={id}
+                type="button"
+                className={`rounded-md border px-2 py-2 text-left ${focusId === id ? "border-[var(--text)] bg-[var(--bg)]" : "border-[var(--line)] bg-[var(--paper)]"}`}
+                onClick={() => onFocus(focusId === id ? null : id)}
+              >
+                <div className="flex h-20 items-center justify-center overflow-hidden rounded-md bg-[var(--bg)]">
+                  {item.cutout_url || item.original_url ? (
+                    <img src={item.cutout_url || item.original_url} alt={item.name} className="max-h-full max-w-full object-contain" />
+                  ) : null}
+                </div>
+                <div className="mt-2 truncate text-[12px]">{item.name}</div>
+                <div className="truncate text-[12px] text-[var(--muted)]">{item.part_label}{item.color ? ` · ${item.color}` : ""}</div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {relatedLooks.length > 0 ? (
+        <>
+          <div className="mt-4 text-[13px] font-medium">相关搭配</div>
+          <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-4">
+            {relatedLooks.map((row) => (
+              <button key={row.id} type="button" className="rounded-md border border-[var(--line)] bg-[var(--paper)] px-2 py-2 text-left" onClick={() => onOpenLook(row)}>
+                <div className="flex h-20 items-center justify-center overflow-hidden rounded-md bg-[var(--bg)]">
+                  {row.image_url ? <img src={row.image_url} alt={row.title} className="max-h-full max-w-full object-contain" /> : null}
+                </div>
+                <div className="mt-2 truncate text-[12px]">{row.title}</div>
+              </button>
+            ))}
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
 
 /** 衣橱：识别照片里的衣服，生成单件图、试穿和搭配 */
 export function WardrobePage() {
@@ -54,6 +151,8 @@ export function WardrobePage() {
   const [busy, setBusy] = useState(false);
   const [askId, setAskId] = useState<number | null>(null);
   const [askStyleId, setAskStyleId] = useState<number | null>(null);
+  const [preview, setPreview] = useState<Preview | null>(null);
+  const [lookFocusId, setLookFocusId] = useState<number | null>(null);
   const [drafts, setDrafts] = useState<DirectDraft[]>([]);
   const importRef = useRef<HTMLInputElement>(null);
   const directRef = useRef<HTMLInputElement>(null);
@@ -384,7 +483,9 @@ export function WardrobePage() {
                 <Card key={item.id} className="px-4 py-3">
                   <div className="flex flex-wrap gap-2">
                     {item.image_urls.map((url) => (
-                      <img key={url} src={url} alt="" className="h-16 w-16 rounded-md object-cover" />
+                      <button key={url} type="button" onClick={() => setPreview({ kind: "photo", src: url, title: item.name })}>
+                        <img src={url} alt="" className="h-20 w-20 rounded-md object-cover" />
+                      </button>
                     ))}
                   </div>
                   <div className="mt-3 text-[13px] font-medium">{item.name}</div>
@@ -433,14 +534,18 @@ export function WardrobePage() {
           {shown.length === 0 ? (
             <p className="text-[13px] text-[var(--muted)]">还没有衣服。去「导入」，单件图可以直接加。</p>
           ) : (
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            <div className="grid gap-3 grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
               {shown.map((item) => (
-                <Card key={item.id} className="px-4 py-3">
-                  <div className="aspect-[3/4] overflow-hidden rounded-md bg-[var(--bg)]">
+                <Card key={item.id} className="px-3 py-3">
+                  <button
+                    type="button"
+                    className="flex h-44 w-full items-center justify-center overflow-hidden rounded-md bg-[var(--bg)]"
+                    onClick={() => setPreview({ kind: "item", item })}
+                  >
                     {item.cutout_url || item.original_url ? (
-                      <img src={item.cutout_url || item.original_url} alt={item.name} className="h-full w-full object-contain" />
+                      <img src={item.cutout_url || item.original_url} alt={item.name} className="max-h-full max-w-full object-contain" />
                     ) : null}
-                  </div>
+                  </button>
                   <div className="mt-3 text-[13px] font-medium">{item.name}</div>
                   <div className="text-[12px] text-[var(--muted)]">{item.part_label}</div>
                   <div className="mt-3 flex flex-wrap gap-2">
@@ -480,10 +585,21 @@ export function WardrobePage() {
           {looks.length === 0 ? (
             <p className="text-[13px] text-[var(--muted)]">还没有搭配图。</p>
           ) : (
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
               {looks.map((look) => (
-                <Card key={look.id} className="px-4 py-3">
-                  {look.image_url ? <img src={look.image_url} alt={look.title} className="w-full rounded-md" /> : null}
+                <Card key={look.id} className="px-3 py-3">
+                  {look.image_url ? (
+                    <button
+                      type="button"
+                      className="flex h-52 w-full items-center justify-center overflow-hidden rounded-md bg-[var(--bg)]"
+                      onClick={() => {
+                        setLookFocusId(null);
+                        setPreview({ kind: "look", look });
+                      }}
+                    >
+                      <img src={look.image_url} alt={look.title} className="max-h-full max-w-full object-contain" />
+                    </button>
+                  ) : null}
                   <div className="mt-2 flex items-center justify-between gap-3">
                     <div className="text-[13px]">{look.title}</div>
                     <button
@@ -523,6 +639,43 @@ export function WardrobePage() {
           }}
           onClose={() => setAskId(null)}
         />
+      ) : null}
+
+      {preview ? (
+        <Modal title={preview.kind === "item" ? preview.item.name : preview.kind === "look" ? preview.look.title : preview.title} wide={preview.kind === "look"} onClose={() => setPreview(null)}>
+          {preview.kind === "item" ? (
+            <div>
+              <div className="flex max-h-[70vh] items-center justify-center overflow-hidden rounded-md bg-[var(--bg)]">
+                {preview.item.cutout_url || preview.item.original_url ? (
+                  <img src={preview.item.cutout_url || preview.item.original_url} alt={preview.item.name} className="max-h-[70vh] max-w-full object-contain" />
+                ) : null}
+              </div>
+              <p className="mt-3 text-[13px] text-[var(--muted)]">
+                {preview.item.part_label}
+                {preview.item.color ? ` · ${preview.item.color}` : ""}
+                {preview.item.tags.length ? ` · ${preview.item.tags.join("、")}` : ""}
+              </p>
+            </div>
+          ) : null}
+          {preview.kind === "look" ? (
+            <LookPreview
+              look={preview.look}
+              items={items}
+              looks={looks}
+              focusId={lookFocusId}
+              onFocus={setLookFocusId}
+              onOpenLook={(look) => {
+                setLookFocusId(null);
+                setPreview({ kind: "look", look });
+              }}
+            />
+          ) : null}
+          {preview.kind === "photo" ? (
+            <div className="flex max-h-[70vh] items-center justify-center overflow-hidden rounded-md bg-[var(--bg)]">
+              <img src={preview.src} alt={preview.title} className="max-h-[70vh] max-w-full object-contain" />
+            </div>
+          ) : null}
+        </Modal>
       ) : null}
 
       {askStyleId !== null ? (
