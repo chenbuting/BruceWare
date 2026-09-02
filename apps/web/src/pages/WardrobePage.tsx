@@ -644,9 +644,7 @@ export function WardrobePage() {
             <p className="text-[13px] text-[var(--muted)]">还没有搭配图。</p>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {looks.map((look) => {
-                const styleUrls = look.style_image_urls || [];
-                return (
+              {looks.map((look) => (
                 <Card key={look.id} className="px-3 py-3">
                   {look.image_url ? (
                     <button
@@ -660,21 +658,6 @@ export function WardrobePage() {
                     >
                       <img src={look.image_url} alt={look.title} className="max-h-full max-w-full object-contain" />
                     </button>
-                  ) : null}
-                  {styleUrls.length > 0 ? (
-                    <div className="mt-2 flex flex-wrap items-center gap-2">
-                      <span className="text-[12px] text-[var(--muted)]">风格</span>
-                      {styleUrls.slice(0, 4).map((url) => (
-                        <button
-                          key={url}
-                          type="button"
-                          className="h-10 w-10 overflow-hidden rounded-md border border-[var(--line)] bg-[var(--bg)]"
-                          onClick={() => setPreview({ kind: "photo", src: url, title: look.style_name || "风格参考" })}
-                        >
-                          <img src={url} alt={look.style_name || "风格参考"} className="h-full w-full object-cover" />
-                        </button>
-                      ))}
-                    </div>
                   ) : null}
                   <div className="mt-2 flex items-center justify-between gap-3">
                     <div className="text-[13px]">{look.title}</div>
@@ -696,8 +679,7 @@ export function WardrobePage() {
                     </div>
                   </div>
                 </Card>
-                );
-              })}
+              ))}
             </div>
           )}
         </div>
