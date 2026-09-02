@@ -4,6 +4,7 @@ import type {
   FilesEntry,
   FilesList,
   FilesStatus,
+  FolderBrowse,
   InterviewSession,
   LlmWrite,
   ModuleList,
@@ -71,6 +72,10 @@ export function saveFilesRoot(root: string) {
     method: "PUT",
     body: JSON.stringify({ root }),
   });
+}
+
+export function browseFolders(path = "") {
+  return request<FolderBrowse>(`/api/v1/settings/files/browse?path=${encodeURIComponent(path)}`);
 }
 
 export function fetchFilesStatus() {

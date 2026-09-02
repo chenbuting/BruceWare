@@ -1,9 +1,10 @@
+import { Folder } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import { downloadBackup, fetchSettings, importBackup, saveDatabase, saveFilesRoot, saveLlm, testDatabase, testLlm } from "@/api/client";
-import type { DatabaseWrite, SettingsInfo } from "@/api/types";
+import { browseFolders, downloadBackup, fetchSettings, importBackup, saveDatabase, saveFilesRoot, saveLlm, testDatabase, testLlm } from "@/api/client";
+import type { DatabaseWrite, FolderBrowse, SettingsInfo } from "@/api/types";
 import { Card } from "@/components/Card";
-import { ConfirmModal } from "@/components/Modal";
+import { ConfirmModal, Modal } from "@/components/Modal";
 import { PageFrame } from "@/components/PageFrame";
 import {
   loadLayout,
@@ -40,6 +41,8 @@ export function SettingsPage() {
   const [hasLlmKey, setHasLlmKey] = useState(false);
   const [hasImageKey, setHasImageKey] = useState(false);
   const [filesRoot, setFilesRoot] = useState("");
+  const [folderPick, setFolderPick] = useState<FolderBrowse | null>(null);
+  const [folderChosen, setFolderChosen] = useState("");
   const [error, setError] = useState("");
   const [hint, setHint] = useState("");
   const [busy, setBusy] = useState(false);
@@ -77,6 +80,26 @@ export function SettingsPage() {
       setLlmImageKey("");
     }
     setFilesRoot(data.files?.root || "");
+  }
+
+  function openFolderPick(path = "") {
+    setBusy(true);
+    setError("");
+    browseFolders(path)
+      .then((data) => {
+        setFolderPick(data);
+        setFolderChosen(data.path);
+      })
+      .catch((err: Error) => setError(err.message))
+      .finally(() => setBusy(false));
+  }
+
+  function usePickedFolder(path: string) {
+    if (!path) return;
+    setFilesRoot(path);
+    setFolderPick(null);
+    setFolderChosen("");
+    setHint("已选中，点保存根目录才会生效");
   }
 
   function payload(): DatabaseWrite {
@@ -468,7 +491,12 @@ export function SettingsPage() {
               </p>
               <label className="mt-4 block">
                 <span className="mb-1 block text-[var(--muted)]">根目录</span>
-                <input className={inputClass} value={filesRoot} onChange={(e) => setFilesRoot(e.target.value)} placeholder="比如 D:\我的文件柜" />
+                <div className="flex flex-wrap gap-2">
+                  <input className={`${inputClass} min-w-0 flex-1`} value={filesRoot} onChange={(e) => setFilesRoot(e.target.value)} placeholder="点浏览选择，也可以手填" />
+                  <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy} onClick={() => openFolderPick(filesRoot.trim())}>
+                    浏览
+                  </button>
+                </div>
               </label>
               <div className="mt-5">
                 <button
@@ -581,6 +609,76 @@ export function SettingsPage() {
           ) : null}
         </div>
       </div>
+
+      {folderPick ? (
+        <Modal title="选择文件夹" wide onClose={() => setFolderPick(null)}>
+          <p className="text-[13px] text-[var(--muted)]">点文件夹选中，双击进入。右边「选择」可以直接用这个夹。</p>
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-[13px]">
+            {folderPick.crumbs.map((item, index) => (
+              <span key={`${item.path}-${item.name}`} className="flex items-center gap-2">
+                {index > 0 ? <span className="text-[var(--muted)]">/</span> : null}
+                <button type="button" disabled={busy} onClick={() => openFolderPick(item.path)}>
+                  {item.name}
+                </button>
+              </span>
+            ))}
+          </div>
+          <p className="mt-2 text-[12px] text-[var(--muted)]">当前：{folderChosen || folderPick.path || "此电脑"}</p>
+          <div className="mt-3 max-h-[50vh] overflow-auto rounded-md border border-[var(--line)] p-2">
+            {folderPick.folders.length === 0 ? (
+              <p className="px-2 py-6 text-center text-[13px] text-[var(--muted)]">这里没有子文件夹，可选当前目录</p>
+            ) : (
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {folderPick.folders.map((item) => (
+                  <div
+                    key={item.path}
+                    className={`flex items-center gap-1 rounded-md border px-2 py-2 ${
+                      folderChosen === item.path ? "border-[var(--text)] bg-[var(--bg)]" : "border-[var(--line)] bg-[var(--paper)]"
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                      disabled={busy}
+                      onClick={() => setFolderChosen(item.path)}
+                      onDoubleClick={() => openFolderPick(item.path)}
+                    >
+                      <Folder className="h-4 w-4 shrink-0" />
+                      <span className="truncate text-[13px]">{item.name}</span>
+                    </button>
+                    <button type="button" className="shrink-0 text-[12px] text-[var(--muted)]" disabled={busy} onClick={() => usePickedFolder(item.path)}>
+                      选择
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="mt-4 flex flex-wrap gap-3">
+            {folderPick.parent || folderPick.path ? (
+              <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy} onClick={() => openFolderPick(folderPick.parent)}>
+                上一级
+              </button>
+            ) : null}
+            {folderChosen && folderChosen !== folderPick.path ? (
+              <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy} onClick={() => openFolderPick(folderChosen)}>
+                进入选中
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50"
+              disabled={busy || !folderChosen}
+              onClick={() => usePickedFolder(folderChosen)}
+            >
+              选这个文件夹
+            </button>
+            <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5" onClick={() => setFolderPick(null)}>
+              取消
+            </button>
+          </div>
+        </Modal>
+      ) : null}
 
       {deleteCategoryId ? (
         <ConfirmModal

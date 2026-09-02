@@ -1,5 +1,7 @@
 """设置：查看并切换本地 / 远程数据源。"""
 
+import os
+import string
 from pathlib import Path
 from typing import Any, Literal
 
@@ -171,6 +173,70 @@ def test_llm():
 
 class FilesForm(BaseModel):
     root: str = ""
+
+
+def _windows_drives() -> list[Path]:
+    if hasattr(os, "listdrives"):
+        return [Path(item) for item in os.listdrives()]
+    found: list[Path] = []
+    for letter in string.ascii_uppercase:
+        path = Path(f"{letter}:/")
+        if path.exists():
+            found.append(path)
+    return found
+
+
+def _folder_name(path: Path) -> str:
+    text = path.name
+    if text:
+        return text
+    drive = path.drive
+    return f"{drive}\\" if drive else str(path)
+
+
+@router.get("/settings/files/browse")
+def browse_folders(path: str = ""):
+    """列出本机文件夹，给设置页点选根目录。"""
+
+    raw = path.strip()
+    if not raw:
+        drives = _windows_drives() if os.name == "nt" else [Path("/")]
+        return ok(
+            {
+                "path": "",
+                "parent": "",
+                "crumbs": [{"name": "此电脑" if os.name == "nt" else "根目录", "path": ""}],
+                "folders": [{"name": _folder_name(item), "path": str(item)} for item in drives],
+            }
+        )
+    current = Path(raw).expanduser()
+    if not current.exists() or not current.is_dir():
+        return fail("这个文件夹打不开")
+    current = current.resolve()
+    crumbs = [{"name": "此电脑" if os.name == "nt" else "根目录", "path": ""}]
+    if current.drive:
+        crumbs.append({"name": f"{current.drive}\\", "path": str(Path(current.anchor))})
+    walked = Path(current.anchor) if current.anchor else Path("/")
+    for part in current.parts[1:]:
+        walked = walked / part
+        crumbs.append({"name": part, "path": str(walked)})
+    parent = ""
+    if current.parent != current:
+        parent = str(current.parent)
+        if current.drive and current == Path(current.anchor):
+            parent = ""
+    folders: list[dict[str, str]] = []
+    try:
+        children = sorted(current.iterdir(), key=lambda item: item.name.lower())
+    except OSError:
+        return fail("没有权限看这个文件夹")
+    for child in children:
+        try:
+            if child.is_dir():
+                folders.append({"name": child.name, "path": str(child)})
+        except OSError:
+            continue
+    return ok({"path": str(current), "parent": parent, "crumbs": crumbs, "folders": folders})
 
 
 @router.put("/settings/files")

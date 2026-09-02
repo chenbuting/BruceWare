@@ -39,6 +39,13 @@ export type FilesSettings = {
   ready: boolean;
 };
 
+export type FolderBrowse = {
+  path: string;
+  parent: string;
+  crumbs: { name: string; path: string }[];
+  folders: { name: string; path: string }[];
+};
+
 export type SettingsInfo = {
   app_name: string;
   api_host: string;
