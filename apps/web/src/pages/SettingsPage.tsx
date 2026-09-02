@@ -1,7 +1,7 @@
 import { Folder } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import { browseFolders, downloadBackup, fetchSettings, importBackup, saveDatabase, saveFilesRoot, saveLlm, testDatabase, testLlm } from "@/api/client";
+import { browseFolders, downloadBackup, fetchSettings, importBackup, saveDatabase, saveFilesRoot, saveFilesSftp, saveLlm, testDatabase, testFilesSftp, testLlm } from "@/api/client";
 import type { DatabaseWrite, FolderBrowse, SettingsInfo } from "@/api/types";
 import { Card } from "@/components/Card";
 import { ConfirmModal, Modal } from "@/components/Modal";
@@ -41,6 +41,12 @@ export function SettingsPage() {
   const [hasLlmKey, setHasLlmKey] = useState(false);
   const [hasImageKey, setHasImageKey] = useState(false);
   const [filesRoot, setFilesRoot] = useState("");
+  const [sftpHost, setSftpHost] = useState("");
+  const [sftpPort, setSftpPort] = useState("22");
+  const [sftpUser, setSftpUser] = useState("");
+  const [sftpPassword, setSftpPassword] = useState("");
+  const [sftpRemote, setSftpRemote] = useState("");
+  const [hasSftpPassword, setHasSftpPassword] = useState(false);
   const [folderPick, setFolderPick] = useState<FolderBrowse | null>(null);
   const [folderChosen, setFolderChosen] = useState("");
   const [error, setError] = useState("");
@@ -48,6 +54,7 @@ export function SettingsPage() {
   const [busy, setBusy] = useState(false);
   const [importMode, setImportMode] = useState<"replace" | "merge" | null>(null);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [askMove, setAskMove] = useState(false);
   const backupRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -80,6 +87,13 @@ export function SettingsPage() {
       setLlmImageKey("");
     }
     setFilesRoot(data.files?.root || "");
+    const sftp = data.files?.sftp;
+    setSftpHost(sftp?.host || "");
+    setSftpPort(String(sftp?.port || 22));
+    setSftpUser(sftp?.user || "");
+    setSftpRemote(sftp?.remote || "");
+    setHasSftpPassword(Boolean(sftp?.has_password));
+    setSftpPassword("");
   }
 
   function openFolderPick(path = "") {
@@ -100,6 +114,21 @@ export function SettingsPage() {
     setFolderPick(null);
     setFolderChosen("");
     setHint("已选中，点保存根目录才会生效");
+  }
+
+  function saveLocalRoot(moveGenerated: boolean) {
+    setAskMove(false);
+    setBusy(true);
+    setError("");
+    setHint("");
+    saveFilesRoot(filesRoot.trim(), moveGenerated)
+      .then((data) => {
+        setInfo(data);
+        applyForm(data);
+        setHint(moveGenerated ? "根目录已保存，项目文件已搬走" : "文件根目录已保存");
+      })
+      .catch((err: Error) => setError(err.message))
+      .finally(() => setBusy(false));
   }
 
   function payload(): DatabaseWrite {
@@ -188,7 +217,10 @@ export function SettingsPage() {
         { label: "后端", value: `${info.api_host}:${info.api_port}` },
         { label: "当前", value: `${info.database.label} · ${info.database.connected ? "正常" : "失败"}` },
         { label: "位置", value: info.database.target },
-        { label: "文件", value: info.files?.root || "还没指定根目录" },
+        {
+          label: "文件",
+          value: [info.files?.root || "本地未指定", info.files?.sftp?.configured ? `${info.files.sftp.user}@${info.files.sftp.host}:${info.files.sftp.remote}` : "服务器未指定"].join(" · "),
+        },
       ]
     : [];
 
@@ -487,8 +519,10 @@ export function SettingsPage() {
           {!managing && visibleIds.includes("files") ? (
             <Card title="文件" className="px-5 py-4">
               <p className="text-[13px] leading-6 text-[var(--muted)]">
-                自己指定一个电脑上的文件夹当文件柜。没指定就用不了。换电脑时把这个文件夹拷走，再在这里指过去。
+                本地和服务器可以同时保存。文件页里点「本地」或「服务器」切换。密码不回显，不改请留空。
+                选了根目录后，这个项目自己的文件都放在根目录下的 BruceWare：衣橱图、本地库。设置文件还留在程序里。换根目录时可以选搬不搬。
               </p>
+              {info.files?.generated?.path ? <p className="mt-2 text-[12px] text-[var(--muted)]">当前项目文件：{info.files.generated.path}</p> : null}
               <label className="mt-4 block">
                 <span className="mb-1 block text-[var(--muted)]">根目录</span>
                 <div className="flex flex-wrap gap-2">
@@ -504,20 +538,92 @@ export function SettingsPage() {
                   className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50"
                   disabled={busy}
                   onClick={() => {
+                    const next = filesRoot.trim();
+                    if (!next) {
+                      setError("请填写根目录");
+                      return;
+                    }
+                    const old = (info.files?.root || "").trim();
+                    const shouldAsk = Boolean(info.files?.generated?.needs_move) || (Boolean(info.files?.generated?.has_files) && next !== old);
+                    if (shouldAsk) {
+                      setAskMove(true);
+                      return;
+                    }
+                    void saveLocalRoot(false);
+                  }}
+                >
+                  保存本地根目录
+                </button>
+              </div>
+              <p className="mt-6 text-[13px] text-[var(--muted)]">服务器文件夹，用账号密码连过去。</p>
+              <label className="mt-3 block">
+                <span className="mb-1 block text-[var(--muted)]">地址</span>
+                <input className={inputClass} value={sftpHost} onChange={(e) => setSftpHost(e.target.value)} placeholder="例如 192.168.1.8" />
+              </label>
+              <label className="mt-3 block">
+                <span className="mb-1 block text-[var(--muted)]">端口</span>
+                <input className={inputClass} value={sftpPort} onChange={(e) => setSftpPort(e.target.value)} placeholder="22" />
+              </label>
+              <label className="mt-3 block">
+                <span className="mb-1 block text-[var(--muted)]">账号</span>
+                <input className={inputClass} value={sftpUser} onChange={(e) => setSftpUser(e.target.value)} />
+              </label>
+              <label className="mt-3 block">
+                <span className="mb-1 block text-[var(--muted)]">密码{hasSftpPassword ? "（已保存，不改请留空）" : ""}</span>
+                <input className={inputClass} type="password" value={sftpPassword} onChange={(e) => setSftpPassword(e.target.value)} placeholder={hasSftpPassword ? "不改请留空" : ""} />
+              </label>
+              <label className="mt-3 block">
+                <span className="mb-1 block text-[var(--muted)]">远程文件夹</span>
+                <input className={inputClass} value={sftpRemote} onChange={(e) => setSftpRemote(e.target.value)} placeholder="例如 /home/你的名字/files" />
+              </label>
+              <div className="mt-5 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50"
+                  disabled={busy}
+                  onClick={() => {
                     setBusy(true);
                     setError("");
                     setHint("");
-                    saveFilesRoot(filesRoot.trim())
+                    testFilesSftp({
+                      host: sftpHost.trim(),
+                      port: Number(sftpPort) || 22,
+                      user: sftpUser.trim(),
+                      password: sftpPassword,
+                      remote: sftpRemote.trim(),
+                    })
+                      .then(() => setHint("服务器能连上"))
+                      .catch((err: Error) => setError(err.message))
+                      .finally(() => setBusy(false));
+                  }}
+                >
+                  测试服务器
+                </button>
+                <button
+                  type="button"
+                  className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50"
+                  disabled={busy}
+                  onClick={() => {
+                    setBusy(true);
+                    setError("");
+                    setHint("");
+                    saveFilesSftp({
+                      host: sftpHost.trim(),
+                      port: Number(sftpPort) || 22,
+                      user: sftpUser.trim(),
+                      password: sftpPassword,
+                      remote: sftpRemote.trim(),
+                    })
                       .then((data) => {
                         setInfo(data);
                         applyForm(data);
-                        setHint("文件根目录已保存");
+                        setHint("服务器文件夹已保存");
                       })
                       .catch((err: Error) => setError(err.message))
                       .finally(() => setBusy(false));
                   }}
                 >
-                  保存根目录
+                  保存服务器
                 </button>
               </div>
             </Card>
@@ -674,6 +780,25 @@ export function SettingsPage() {
               选这个文件夹
             </button>
             <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5" onClick={() => setFolderPick(null)}>
+              取消
+            </button>
+          </div>
+        </Modal>
+      ) : null}
+
+      {askMove ? (
+        <Modal title="换根目录" onClose={() => setAskMove(false)}>
+          <p className="text-[13px] leading-6 text-[var(--muted)]">
+            这里已经有项目文件（衣橱图或本地库）。要一起搬到这个根目录下的 BruceWare 吗？搬过去：衣橱图和本地库都挪过去。不搬：以后新文件才放过去，旧的还在原处，这边会是空的。
+          </p>
+          <div className="mt-4 flex flex-wrap gap-3">
+            <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy} onClick={() => saveLocalRoot(true)}>
+              搬过去
+            </button>
+            <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50" disabled={busy} onClick={() => saveLocalRoot(false)}>
+              不搬
+            </button>
+            <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5" onClick={() => setAskMove(false)}>
               取消
             </button>
           </div>

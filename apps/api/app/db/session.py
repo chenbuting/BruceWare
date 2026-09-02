@@ -27,6 +27,16 @@ def _engine_kwargs(url: str) -> dict:
     return kwargs
 
 
+def dispose_database() -> None:
+    """先断开，才能搬本地库文件。"""
+
+    if _Db.engine is not None:
+        _Db.engine.dispose()
+        _Db.engine = None
+        _Db.SessionLocal = None
+        _Db.url = ""
+
+
 def connect_database(url: str) -> None:
     """换到新连接，并按模型建表。"""
 

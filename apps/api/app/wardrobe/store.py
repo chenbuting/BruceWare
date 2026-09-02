@@ -1,9 +1,7 @@
-"""衣橱图片存在本机 data/wardrobe。"""
+"""衣橱图片：有文件根目录就放在根目录/BruceWare/wardrobe。"""
 
 import json
 from pathlib import Path
-
-from app.core.config import get_settings
 
 ALLOWED_FILES = {"original.png", "cutout.png", "modeled.png", "look.png", "model-reference.png"}
 
@@ -15,7 +13,9 @@ def _is_look_style_name(name: str) -> bool:
 
 
 def wardrobe_root() -> Path:
-    root = get_settings().repo_root / "data" / "wardrobe"
+    from app.core.generated import wardrobe_dir
+
+    root = wardrobe_dir()
     root.mkdir(parents=True, exist_ok=True)
     return root
 

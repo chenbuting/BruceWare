@@ -16,6 +16,38 @@ IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 PDF_EXTS = {".pdf"}
 
 
+def normalize_source(source: str) -> str:
+    text = (source or "local").strip().lower()
+    return "sftp" if text in {"sftp", "remote", "server"} else "local"
+
+
+def sources_status() -> list[dict]:
+    from app.files import sftp
+
+    root, err = root_ready()
+    local = {
+        "id": "local",
+        "label": "本地",
+        "configured": bool(configured_root()),
+        "ready": root is not None,
+        "root": str(root) if root is not None else configured_root(),
+        "message": err,
+    }
+    remote = sftp.sftp_public()
+    label = f"{remote['user']}@{remote['host']}:{remote['remote']}" if remote["configured"] else ""
+    return [
+        local,
+        {
+            "id": "sftp",
+            "label": "服务器",
+            "configured": remote["configured"],
+            "ready": remote["ready"],
+            "root": label,
+            "message": "" if remote["configured"] else "请先去设置填服务器",
+        },
+    ]
+
+
 def configured_root() -> str:
     stored = load_local_settings(get_settings().repo_root).get("files") or {}
     if not isinstance(stored, dict):
@@ -109,7 +141,11 @@ def entry_dict(path: Path, root: Path) -> dict:
     }
 
 
-def list_entries(rel: str) -> dict:
+def list_entries(rel: str, source: str = "local") -> dict:
+    if normalize_source(source) == "sftp":
+        from app.files import sftp
+
+        return sftp.list_entries(rel)
     root, err = root_ready()
     if root is None:
         raise ValueError(err)
@@ -127,7 +163,11 @@ def list_entries(rel: str) -> dict:
     }
 
 
-def search_entries(query: str, rel: str = "") -> dict:
+def search_entries(query: str, rel: str = "", source: str = "local") -> dict:
+    if normalize_source(source) == "sftp":
+        from app.files import sftp
+
+        return sftp.search_entries(query, rel)
     root, err = root_ready()
     if root is None:
         raise ValueError(err)
@@ -147,7 +187,11 @@ def search_entries(query: str, rel: str = "") -> dict:
     return {"query": query.strip(), "path": rel_of(folder, root), "items": found}
 
 
-def make_dir(rel: str, name: str) -> dict:
+def make_dir(rel: str, name: str, source: str = "local") -> dict:
+    if normalize_source(source) == "sftp":
+        from app.files import sftp
+
+        return sftp.make_dir(rel, name)
     folder = resolve_inside(rel)
     if not folder.is_dir():
         raise ValueError("这不是文件夹")
@@ -158,7 +202,11 @@ def make_dir(rel: str, name: str) -> dict:
     return entry_dict(dest, root)
 
 
-def save_upload(rel: str, filename: str, data: bytes) -> dict:
+def save_upload(rel: str, filename: str, data: bytes, source: str = "local") -> dict:
+    if normalize_source(source) == "sftp":
+        from app.files import sftp
+
+        return sftp.save_upload(rel, filename, data)
     folder = resolve_inside(rel)
     if not folder.is_dir():
         raise ValueError("这不是文件夹")
@@ -169,7 +217,11 @@ def save_upload(rel: str, filename: str, data: bytes) -> dict:
     return entry_dict(dest, root)
 
 
-def rename_entry(rel: str, name: str) -> dict:
+def rename_entry(rel: str, name: str, source: str = "local") -> dict:
+    if normalize_source(source) == "sftp":
+        from app.files import sftp
+
+        return sftp.rename_entry(rel, name)
     path = resolve_inside(rel)
     root, err = root_ready()
     if root is None:
@@ -187,7 +239,11 @@ def rename_entry(rel: str, name: str) -> dict:
     return entry_dict(dest, root)
 
 
-def move_entry(rel: str, dest_rel: str) -> dict:
+def move_entry(rel: str, dest_rel: str, source: str = "local") -> dict:
+    if normalize_source(source) == "sftp":
+        from app.files import sftp
+
+        return sftp.move_entry(rel, dest_rel)
     path = resolve_inside(rel)
     root, err = root_ready()
     if root is None:
@@ -204,7 +260,12 @@ def move_entry(rel: str, dest_rel: str) -> dict:
     return entry_dict(dest, root)
 
 
-def delete_entry(rel: str) -> None:
+def delete_entry(rel: str, source: str = "local") -> None:
+    if normalize_source(source) == "sftp":
+        from app.files import sftp
+
+        sftp.delete_entry(rel)
+        return
     path = resolve_inside(rel)
     root, err = root_ready()
     if root is None:
@@ -219,9 +280,27 @@ def delete_entry(rel: str) -> None:
         raise ValueError("没有这个文件")
 
 
-def open_with_system(rel: str) -> None:
+def read_bytes(rel: str, source: str = "local", limit: int | None = None) -> tuple[str, bytes]:
+    if normalize_source(source) == "sftp":
+        from app.files import sftp
+
+        return sftp.read_bytes(rel, limit)
+    path = resolve_inside(rel)
+    if not path.is_file():
+        raise ValueError("没有这个文件")
+    with path.open("rb") as handle:
+        data = handle.read(limit) if limit else handle.read()
+    return path.name, data
+
+
+def open_with_system(rel: str, source: str = "local") -> None:
     """用电脑默认程序打开，像资源管理器双击。"""
 
+    if normalize_source(source) == "sftp":
+        from app.files import sftp
+
+        sftp.open_with_system(rel)
+        return
     path = resolve_inside(rel)
     if not path.exists():
         raise ValueError("没有这个文件")

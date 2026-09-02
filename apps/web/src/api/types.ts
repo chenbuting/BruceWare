@@ -34,9 +34,21 @@ export type LlmInfo = {
   has_image_key: boolean;
 };
 
+export type FilesSftpSettings = {
+  host: string;
+  port: number;
+  user: string;
+  remote: string;
+  has_password: boolean;
+  configured: boolean;
+  ready: boolean;
+};
+
 export type FilesSettings = {
   root: string;
   ready: boolean;
+  sftp?: FilesSftpSettings;
+  generated?: { path: string; has_files: boolean; follow: boolean; needs_move?: boolean };
 };
 
 export type FolderBrowse = {
@@ -55,11 +67,21 @@ export type SettingsInfo = {
   files: FilesSettings;
 };
 
+export type FilesSource = {
+  id: "local" | "sftp";
+  label: string;
+  configured: boolean;
+  ready: boolean;
+  root: string;
+  message: string;
+};
+
 export type FilesStatus = {
   configured: boolean;
   ready: boolean;
   root: string;
   message: string;
+  sources: FilesSource[];
 };
 
 export type FilesEntry = {

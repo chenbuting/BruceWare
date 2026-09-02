@@ -6,7 +6,7 @@ import mimetypes
 from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, UploadFile
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 
 from app.core.response import fail, ok
@@ -18,15 +18,18 @@ router = APIRouter()
 class NameIn(BaseModel):
     path: str = ""
     name: str = ""
+    source: str = "local"
 
 
 class MoveIn(BaseModel):
     path: str = ""
     dest: str = ""
+    source: str = "local"
 
 
 class PathIn(BaseModel):
     path: str = ""
+    source: str = "local"
 
 
 def _fail_or(exc: Exception):
@@ -35,29 +38,32 @@ def _fail_or(exc: Exception):
 
 @router.get("/files/status")
 def files_status():
-    root, err = store.root_ready()
+    sources = store.sources_status()
+    ready_item = next((item for item in sources if item["ready"]), None)
+    any_cfg = any(item["configured"] for item in sources)
     return ok(
         {
-            "configured": bool(store.configured_root()),
-            "ready": root is not None,
-            "root": str(root) if root is not None else store.configured_root(),
-            "message": err,
+            "configured": any_cfg,
+            "ready": ready_item is not None,
+            "root": ready_item["root"] if ready_item else "",
+            "message": "" if any_cfg else "请先去设置指定本地或服务器文件夹",
+            "sources": sources,
         }
     )
 
 
 @router.get("/files/list")
-def list_files(path: str = ""):
+def list_files(path: str = "", source: str = "local"):
     try:
-        return ok(store.list_entries(path))
+        return ok(store.list_entries(path, source))
     except ValueError as exc:
         return _fail_or(exc)
 
 
 @router.get("/files/search")
-def search_files(q: str = "", path: str = ""):
+def search_files(q: str = "", path: str = "", source: str = "local"):
     try:
-        return ok(store.search_entries(q, path))
+        return ok(store.search_entries(q, path, source))
     except ValueError as exc:
         return _fail_or(exc)
 
@@ -68,20 +74,20 @@ def make_dir(body: NameIn):
     if not name:
         return fail("请填写文件夹名")
     try:
-        return ok(store.make_dir(body.path, name))
+        return ok(store.make_dir(body.path, name, body.source))
     except ValueError as exc:
         return _fail_or(exc)
 
 
 @router.post("/files/upload")
-async def upload_files(path: str = Form(""), files: list[UploadFile] = File(...)):
+async def upload_files(path: str = Form(""), source: str = Form("local"), files: list[UploadFile] = File(...)):
     created = []
     try:
         for item in files:
             raw = await item.read()
             if not raw:
                 continue
-            created.append(store.save_upload(path, item.filename or "未命名", raw))
+            created.append(store.save_upload(path, item.filename or "未命名", raw, source))
     except ValueError as exc:
         return _fail_or(exc)
     if not created:
@@ -95,7 +101,7 @@ def rename_file(body: NameIn):
     if not name:
         return fail("请填写新名字")
     try:
-        return ok(store.rename_entry(body.path, name))
+        return ok(store.rename_entry(body.path, name, body.source))
     except ValueError as exc:
         return _fail_or(exc)
 
@@ -103,7 +109,7 @@ def rename_file(body: NameIn):
 @router.post("/files/move")
 def move_file(body: MoveIn):
     try:
-        return ok(store.move_entry(body.path, body.dest))
+        return ok(store.move_entry(body.path, body.dest, body.source))
     except ValueError as exc:
         return _fail_or(exc)
 
@@ -113,7 +119,7 @@ def open_file(body: PathIn):
     if not (body.path or "").strip():
         return fail("请先选一项")
     try:
-        store.open_with_system(body.path)
+        store.open_with_system(body.path, body.source)
     except ValueError as exc:
         return _fail_or(exc)
     return ok(True)
@@ -124,14 +130,25 @@ def delete_file(body: PathIn):
     if not (body.path or "").strip():
         return fail("请先选一项")
     try:
-        store.delete_entry(body.path)
+        store.delete_entry(body.path, body.source)
     except ValueError as exc:
         return _fail_or(exc)
     return ok(True)
 
 
-def _file_or_fail(path: str, download: bool):
+def _file_or_fail(path: str, download: bool, source: str = "local"):
     try:
+        if store.normalize_source(source) == "sftp":
+            name, data = store.read_bytes(path, source)
+            media = mimetypes.guess_type(name)[0] or "application/octet-stream"
+            if name.lower().endswith(".pdf"):
+                media = "application/pdf"
+            headers = {}
+            if download:
+                headers["Content-Disposition"] = f"attachment; filename*=UTF-8''{quote(name)}"
+            else:
+                headers["Content-Disposition"] = "inline"
+            return Response(content=data, media_type=media, headers=headers)
         target = store.resolve_inside(path)
     except ValueError as exc:
         return fail(str(exc))
@@ -149,27 +166,25 @@ def _file_or_fail(path: str, download: bool):
 
 
 @router.get("/files/download")
-def download_file(path: str = ""):
-    return _file_or_fail(path, True)
+def download_file(path: str = "", source: str = "local"):
+    return _file_or_fail(path, True, source)
 
 
 @router.get("/files/raw")
-def raw_file(path: str = ""):
-    return _file_or_fail(path, False)
+def raw_file(path: str = "", source: str = "local"):
+    return _file_or_fail(path, False, source)
 
 
 @router.get("/files/text")
-def text_file(path: str = ""):
+def text_file(path: str = "", source: str = "local"):
     try:
-        target = store.resolve_inside(path)
+        name, data = store.read_bytes(path, source, 200_000)
     except ValueError as exc:
         return fail(str(exc))
-    if not target.is_file():
-        return fail("没有这个文件")
-    if store.preview_kind(target.name) != "text":
+    if store.preview_kind(name) != "text":
         return fail("这个文件不能当文本打开")
     try:
-        text = target.read_text(encoding="utf-8")
+        text = data.decode("utf-8")
     except UnicodeDecodeError:
-        text = target.read_text(encoding="gbk", errors="replace")
-    return PlainTextResponse(text[:200_000])
+        text = data.decode("gbk", errors="replace")
+    return PlainTextResponse(text)

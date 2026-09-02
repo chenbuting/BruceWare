@@ -67,10 +67,24 @@ export function testLlm() {
   });
 }
 
-export function saveFilesRoot(root: string) {
+export function saveFilesRoot(root: string, moveGenerated = false) {
   return request<SettingsInfo>("/api/v1/settings/files", {
     method: "PUT",
-    body: JSON.stringify({ root }),
+    body: JSON.stringify({ root, move_generated: moveGenerated }),
+  });
+}
+
+export function saveFilesSftp(body: { host: string; port: number; user: string; password: string; remote: string }) {
+  return request<SettingsInfo>("/api/v1/settings/files/sftp", {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+}
+
+export function testFilesSftp(body: { host: string; port: number; user: string; password: string; remote: string }) {
+  return request<boolean>("/api/v1/settings/files/sftp/test", {
+    method: "POST",
+    body: JSON.stringify(body),
   });
 }
 
@@ -82,60 +96,61 @@ export function fetchFilesStatus() {
   return request<FilesStatus>("/api/v1/files/status");
 }
 
-export function fetchFilesList(path = "") {
-  return request<FilesList>(`/api/v1/files/list?path=${encodeURIComponent(path)}`);
+export function fetchFilesList(path = "", source = "local") {
+  return request<FilesList>(`/api/v1/files/list?path=${encodeURIComponent(path)}&source=${encodeURIComponent(source)}`);
 }
 
-export function searchFiles(query: string, path = "") {
+export function searchFiles(query: string, path = "", source = "local") {
   return request<{ query: string; path: string; items: FilesEntry[] }>(
-    `/api/v1/files/search?q=${encodeURIComponent(query)}&path=${encodeURIComponent(path)}`,
+    `/api/v1/files/search?q=${encodeURIComponent(query)}&path=${encodeURIComponent(path)}&source=${encodeURIComponent(source)}`,
   );
 }
 
-export function makeFilesDir(path: string, name: string) {
+export function makeFilesDir(path: string, name: string, source = "local") {
   return request<FilesEntry>("/api/v1/files/mkdir", {
     method: "POST",
-    body: JSON.stringify({ path, name }),
+    body: JSON.stringify({ path, name, source }),
   });
 }
 
-export function uploadFiles(path: string, files: File[]) {
+export function uploadFiles(path: string, files: File[], source = "local") {
   const body = new FormData();
   body.append("path", path);
+  body.append("source", source);
   files.forEach((file) => body.append("files", file));
   return request<{ items: FilesEntry[] }>("/api/v1/files/upload", { method: "POST", body });
 }
 
-export function renameFilesEntry(path: string, name: string) {
+export function renameFilesEntry(path: string, name: string, source = "local") {
   return request<FilesEntry>("/api/v1/files/rename", {
     method: "POST",
-    body: JSON.stringify({ path, name }),
+    body: JSON.stringify({ path, name, source }),
   });
 }
 
-export function moveFilesEntry(path: string, dest: string) {
+export function moveFilesEntry(path: string, dest: string, source = "local") {
   return request<FilesEntry>("/api/v1/files/move", {
     method: "POST",
-    body: JSON.stringify({ path, dest }),
+    body: JSON.stringify({ path, dest, source }),
   });
 }
 
-export function deleteFilesEntry(path: string) {
+export function deleteFilesEntry(path: string, source = "local") {
   return request<boolean>("/api/v1/files/delete", {
     method: "POST",
-    body: JSON.stringify({ path }),
+    body: JSON.stringify({ path, source }),
   });
 }
 
-export function openFilesEntry(path: string) {
+export function openFilesEntry(path: string, source = "local") {
   return request<boolean>("/api/v1/files/open", {
     method: "POST",
-    body: JSON.stringify({ path }),
+    body: JSON.stringify({ path, source }),
   });
 }
 
-export async function downloadFilesEntry(path: string, filename: string) {
-  const res = await fetch(`/api/v1/files/download?path=${encodeURIComponent(path)}`);
+export async function downloadFilesEntry(path: string, filename: string, source = "local") {
+  const res = await fetch(`/api/v1/files/download?path=${encodeURIComponent(path)}&source=${encodeURIComponent(source)}`);
   if (!res.ok) {
     let message = "下载失败";
     try {

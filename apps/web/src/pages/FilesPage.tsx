@@ -14,7 +14,7 @@ import {
   searchFiles,
   uploadFiles,
 } from "@/api/client";
-import type { FilesEntry, FilesList, FilesStatus } from "@/api/types";
+import type { FilesEntry, FilesList, FilesSource, FilesStatus } from "@/api/types";
 import { Card } from "@/components/Card";
 import { ConfirmModal, Modal } from "@/components/Modal";
 import { PdfPreview } from "@/components/PdfPreview";
@@ -36,9 +36,14 @@ function itemIcon(item: FilesEntry) {
   return { Icon: File, color: "text-[var(--muted)]" };
 }
 
-/** 文件柜：只管理设置里指定的那个文件夹 */
+function pickDefaultSource(sources: FilesSource[]) {
+  return sources.find((item) => item.ready)?.id || sources.find((item) => item.configured)?.id || "";
+}
+
+/** 文件柜：本机和服务器上的文件夹可以同时用 */
 export function FilesPage() {
   const [status, setStatus] = useState<FilesStatus | null>(null);
+  const [source, setSource] = useState("");
   const [list, setList] = useState<FilesList | null>(null);
   const [path, setPath] = useState("");
   const [query, setQuery] = useState("");
@@ -57,8 +62,16 @@ export function FilesPage() {
   const uploadRef = useRef<HTMLInputElement>(null);
   const location = useLocation();
 
-  async function load(next = path) {
-    const data = await fetchFilesList(next);
+  const sources =
+    status?.sources?.length
+      ? status.sources
+      : status
+        ? [{ id: "local" as const, label: "本地", configured: status.configured, ready: status.ready, root: status.root, message: status.message }]
+        : [];
+  const current = sources.find((item) => item.id === source) || null;
+
+  async function load(next = path, nextSource = source) {
+    const data = await fetchFilesList(next, nextSource);
     setList(data);
     setPath(data.path);
     setHits(null);
@@ -69,14 +82,32 @@ export function FilesPage() {
     fetchFilesStatus()
       .then((data) => {
         setStatus(data);
-        if (data.ready) {
-          return load("");
+        const next = pickDefaultSource(data.sources || []);
+        setSource(next);
+        if (next && (data.sources || []).some((item) => item.id === next && item.ready)) {
+          return load("", next);
         }
         setList(null);
         return undefined;
       })
       .catch((err: Error) => setError(err.message));
   }, [location.pathname]);
+
+  function switchSource(id: string) {
+    const item = sources.find((row) => row.id === id);
+    setSource(id);
+    setPath("");
+    setHits(null);
+    setPreview(null);
+    setQuery("");
+    setError("");
+    setHint("");
+    if (item?.ready) {
+      void load("", id).catch((err: Error) => setError(err.message));
+    } else {
+      setList(null);
+    }
+  }
 
   async function openDir(next: string) {
     setError("");
@@ -98,7 +129,7 @@ export function FilesPage() {
     setBusy(true);
     setError("");
     try {
-      const data = await searchFiles(text, path);
+      const data = await searchFiles(text, path, source);
       setHits(data.items);
       setHint(data.items.length ? `找到 ${data.items.length} 项` : "没有找到");
     } catch (err) {
@@ -117,7 +148,7 @@ export function FilesPage() {
     setBusy(true);
     setError("");
     try {
-      await makeFilesDir(path, name);
+      await makeFilesDir(path, name, source);
       setFolderName("");
       await load(path);
       setHint("文件夹已建好");
@@ -133,7 +164,7 @@ export function FilesPage() {
     setBusy(true);
     setError("");
     try {
-      await uploadFiles(path, Array.from(files));
+      await uploadFiles(path, Array.from(files), source);
       await load(path);
       setHint("已上传");
     } catch (err) {
@@ -149,7 +180,7 @@ export function FilesPage() {
     setPreviewText("");
     if (item.preview === "text") {
       try {
-        const res = await fetch(`/api/v1/files/text?path=${encodeURIComponent(item.path)}`);
+        const res = await fetch(`/api/v1/files/text?path=${encodeURIComponent(item.path)}&source=${encodeURIComponent(source)}`);
         setPreviewText(await res.text());
       } catch {
         setPreviewText("打不开这张文本");
@@ -169,12 +200,10 @@ export function FilesPage() {
     return <p className="text-[13px] text-[var(--muted)]">正在读取…</p>;
   }
 
-  if (!status.ready) {
+  if (!status.configured) {
     return (
       <Card className="px-5 py-4">
-        <p className="text-[13px] leading-6 text-[var(--muted)]">
-          {status.configured ? status.message || "设置里的文件夹找不到了，请回去改路径。" : "还没有指定根目录。先去设置里填一个电脑上的文件夹，填好才能用。"}
-        </p>
+        <p className="text-[13px] leading-6 text-[var(--muted)]">还没有指定本地或服务器文件夹。先去设置里填一边或两边。</p>
         <Link to="/settings" className="mt-4 inline-block border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px]">
           去设置
         </Link>
@@ -191,6 +220,29 @@ export function FilesPage() {
       {hint ? <p className="mb-4 text-[var(--ok)]">{hint}</p> : null}
 
       <Card className="mb-4 px-5 py-4">
+        <div className="mb-3 flex flex-wrap gap-2">
+          {sources.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={`border px-3 py-1.5 text-[13px] ${source === item.id ? "border-[var(--text)] bg-[var(--paper)]" : "border-[var(--line)] bg-[var(--paper)] text-[var(--muted)]"}`}
+              disabled={busy}
+              onClick={() => switchSource(item.id)}
+            >
+              {item.label}
+              {item.configured ? "" : "（未设置）"}
+            </button>
+          ))}
+        </div>
+        {!current?.ready ? (
+          <p className="mb-3 text-[13px] leading-6 text-[var(--muted)]">
+            {current?.message || "这边还不能用。"}
+            <Link to="/settings" className="ml-2 text-[var(--text)]">
+              去设置
+            </Link>
+          </p>
+        ) : null}
+        {current?.ready ? (
         <div className="flex flex-wrap items-center gap-2 text-[13px]">
           {(list?.crumbs || []).map((item, index) => (
             <span key={`${item.path}-${item.name}`} className="flex items-center gap-2">
@@ -201,7 +253,9 @@ export function FilesPage() {
             </span>
           ))}
         </div>
-        <p className="mt-2 text-[12px] text-[var(--muted)]">{status.root}</p>
+        ) : null}
+        {current?.ready ? <p className="mt-2 text-[12px] text-[var(--muted)]">{current.root}</p> : null}
+        {current?.ready ? (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <input
             className={`${inputClass} w-48`}
@@ -238,11 +292,12 @@ export function FilesPage() {
           </button>
           <input ref={uploadRef} type="file" multiple className="hidden" onChange={(e) => void onUpload(e.target.files)} />
         </div>
+        ) : null}
       </Card>
 
-      {shown.length === 0 ? (
+      {current?.ready && shown.length === 0 ? (
         <p className="text-[13px] text-[var(--muted)]">{searching ? "没有找到。" : "这个文件夹是空的。可以上传或新建文件夹。"}</p>
-      ) : (
+      ) : current?.ready ? (
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
           {shown.map((item) => {
             const { Icon, color } = itemIcon(item);
@@ -260,7 +315,7 @@ export function FilesPage() {
                 </button>
                 <div className="mt-2 flex flex-wrap justify-center gap-2 text-[12px] text-[var(--muted)] opacity-0 group-hover:opacity-100">
                   {item.kind === "file" ? (
-                    <button type="button" disabled={busy} onClick={() => void downloadFilesEntry(item.path, item.name).catch((err: Error) => setError(err.message))}>
+                    <button type="button" disabled={busy} onClick={() => void downloadFilesEntry(item.path, item.name, source).catch((err: Error) => setError(err.message))}>
                       下载
                     </button>
                   ) : null}
@@ -292,7 +347,7 @@ export function FilesPage() {
             );
           })}
         </div>
-      )}
+      ) : null}
 
       {renameFrom ? (
         <Modal title="重命名" onClose={() => setRenameFrom(null)}>
@@ -304,7 +359,7 @@ export function FilesPage() {
               disabled={busy || !renameTo.trim()}
               onClick={() => {
                 setBusy(true);
-                renameFilesEntry(renameFrom.path, renameTo.trim())
+                renameFilesEntry(renameFrom.path, renameTo.trim(), source)
                   .then(() => load(path))
                   .then(() => {
                     setRenameFrom(null);
@@ -334,7 +389,7 @@ export function FilesPage() {
               disabled={busy}
               onClick={() => {
                 setBusy(true);
-                moveFilesEntry(moveFrom.path, moveTo.trim())
+                moveFilesEntry(moveFrom.path, moveTo.trim(), source)
                   .then(() => load(path))
                   .then(() => {
                     setMoveFrom(null);
@@ -359,7 +414,7 @@ export function FilesPage() {
           message={ask.kind === "dir" ? `删除「${ask.name}」？里面的东西也会删掉。` : `删除「${ask.name}」？`}
           onConfirm={() => {
             setBusy(true);
-            deleteFilesEntry(ask.path)
+            deleteFilesEntry(ask.path, source)
               .then(() => load(path))
               .then(() => {
                 setAsk(null);
@@ -379,10 +434,10 @@ export function FilesPage() {
         <Modal title={preview.name} wide onClose={() => setPreview(null)}>
           {preview.preview === "image" ? (
             <div className="flex max-h-[70vh] items-center justify-center overflow-hidden rounded-md bg-[var(--bg)]">
-              <img src={`/api/v1/files/raw?path=${encodeURIComponent(preview.path)}`} alt={preview.name} className="max-h-[70vh] max-w-full object-contain" />
+              <img src={`/api/v1/files/raw?path=${encodeURIComponent(preview.path)}&source=${encodeURIComponent(source)}`} alt={preview.name} className="max-h-[70vh] max-w-full object-contain" />
             </div>
           ) : null}
-          {preview.preview === "pdf" ? <PdfPreview path={preview.path} /> : null}
+          {preview.preview === "pdf" ? <PdfPreview path={preview.path} source={source} /> : null}
           {preview.preview === "text" ? (
             <pre className="max-h-[70vh] overflow-auto whitespace-pre-wrap rounded-md bg-[var(--bg)] px-3 py-2 text-[13px] leading-6">{previewText || "正在读取…"}</pre>
           ) : null}
@@ -400,7 +455,7 @@ export function FilesPage() {
               className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px] disabled:opacity-50"
               disabled={busy}
               onClick={() =>
-                openFilesEntry(preview.path)
+                openFilesEntry(preview.path, source)
                   .then(() => setHint("已用电脑打开"))
                   .catch((err: Error) => setError(err.message))
               }
@@ -410,7 +465,7 @@ export function FilesPage() {
             <button
               type="button"
               className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px]"
-              onClick={() => void downloadFilesEntry(preview.path, preview.name).catch((err: Error) => setError(err.message))}
+              onClick={() => void downloadFilesEntry(preview.path, preview.name, source).catch((err: Error) => setError(err.message))}
             >
               下载
             </button>
