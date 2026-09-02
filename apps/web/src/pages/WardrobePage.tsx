@@ -534,7 +534,9 @@ export function WardrobePage() {
       <Card className="mb-4 px-5 py-4">
         <div className="flex flex-wrap items-center gap-3">
           {referenceUrl ? (
-            <img src={referenceUrl} alt="我" className="h-16 w-16 rounded-md object-cover" />
+            <button type="button" onClick={() => setPreview({ kind: "photo", src: referenceUrl, title: "我的照片" })}>
+              <img src={referenceUrl} alt="我" className="h-16 w-16 rounded-md object-cover" />
+            </button>
           ) : (
             <div className="flex h-16 w-16 items-center justify-center rounded-md border border-[var(--line)] text-[12px] text-[var(--muted)]">无照片</div>
           )}
