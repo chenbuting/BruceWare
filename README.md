@@ -55,5 +55,8 @@ BruceWare/
   apps/api/      后端
   apps/web/      网页
   modules/       各功能模块的说明
+  docs/design/   设计文档（知识库等）
   data/          本机设置（不要提交）
 ```
+
+知识库还在设计，未开发。总体：[docs/design/知识库总体设计.md](docs/design/知识库总体设计.md)，详细：[docs/design/知识库详细设计.md](docs/design/知识库详细设计.md)。
