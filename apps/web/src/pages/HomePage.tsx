@@ -3,6 +3,7 @@ import { Link, useLocation } from "react-router-dom";
 
 import {
   fetchFilesStatus,
+  fetchKbLibraries,
   fetchPortalLinks,
   fetchResumeDocs,
   fetchSettings,
@@ -18,6 +19,7 @@ type HomeStats = {
   resume: number | null;
   wardrobe: number | null;
   portal: number | null;
+  kb: number | null;
 };
 
 function moduleNote(id: string, stats: HomeStats, files: FilesStatus | null) {
@@ -38,6 +40,10 @@ function moduleNote(id: string, stats: HomeStats, files: FilesStatus | null) {
     if (stats.portal === null) return "打开后可收藏常用网站。";
     return stats.portal ? `${stats.portal} 个入口` : "还没有收藏";
   }
+  if (id === "kb") {
+    if (stats.kb === null) return "打开后可整理资料。";
+    return stats.kb ? `${stats.kb} 个库` : "还没有库";
+  }
   return "";
 }
 
@@ -47,7 +53,7 @@ export function HomePage() {
   const { modules } = useModules();
   const [settings, setSettings] = useState<SettingsInfo | null>(null);
   const [files, setFiles] = useState<FilesStatus | null>(null);
-  const [stats, setStats] = useState<HomeStats>({ resume: null, wardrobe: null, portal: null });
+  const [stats, setStats] = useState<HomeStats>({ resume: null, wardrobe: null, portal: null, kb: null });
   const [busy, setBusy] = useState(false);
   const [hint, setHint] = useState("");
   const [error, setError] = useState("");
@@ -57,8 +63,14 @@ export function HomePage() {
   useEffect(() => {
     if (location.pathname !== "/") return;
     let cancelled = false;
-    Promise.allSettled([fetchSettings(), fetchFilesStatus(), fetchResumeDocs(), fetchWardrobeItems(), fetchPortalLinks()]).then(
-      ([settingsRes, filesRes, resumeRes, wardrobeRes, portalRes]) => {
+    Promise.allSettled([
+      fetchSettings(),
+      fetchFilesStatus(),
+      fetchResumeDocs(),
+      fetchWardrobeItems(),
+      fetchPortalLinks(),
+      fetchKbLibraries(),
+    ]).then(([settingsRes, filesRes, resumeRes, wardrobeRes, portalRes, kbRes]) => {
         if (cancelled) return;
         if (settingsRes.status === "fulfilled") setSettings(settingsRes.value);
         if (filesRes.status === "fulfilled") setFiles(filesRes.value);
@@ -66,6 +78,7 @@ export function HomePage() {
           resume: resumeRes.status === "fulfilled" ? resumeRes.value.items.length : null,
           wardrobe: wardrobeRes.status === "fulfilled" ? wardrobeRes.value.items.length : null,
           portal: portalRes.status === "fulfilled" ? portalRes.value.items.length : null,
+          kb: kbRes.status === "fulfilled" ? kbRes.value.items.length : null,
         });
       },
     );

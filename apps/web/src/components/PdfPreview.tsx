@@ -4,8 +4,8 @@ import { useEffect, useRef, useState } from "react";
 
 GlobalWorkerOptions.workerSrc = workerUrl;
 
-/** 在页面里翻页看 PDF，不走浏览器下载 */
-export function PdfPreview({ path, source = "local" }: { path: string; source?: string }) {
+/** 在页面里翻页看 PDF，不走浏览器下载。url 优先，没有则走文件柜 raw。 */
+export function PdfPreview({ path = "", source = "local", url }: { path?: string; source?: string; url?: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pdfRef = useRef<PDFDocumentProxy | null>(null);
   const [page, setPage] = useState(1);
@@ -24,7 +24,8 @@ export function PdfPreview({ path, source = "local" }: { path: string; source?: 
 
     (async () => {
       try {
-        const res = await fetch(`/api/v1/files/raw?path=${encodeURIComponent(path)}&source=${encodeURIComponent(source)}`, { signal: ctrl.signal });
+        const src = url || `/api/v1/files/raw?path=${encodeURIComponent(path)}&source=${encodeURIComponent(source)}`;
+        const res = await fetch(src, { signal: ctrl.signal });
         if (!res.ok) throw new Error("读取失败");
         const data = new Uint8Array(await res.arrayBuffer());
         if (cancelled) return;
@@ -50,7 +51,7 @@ export function PdfPreview({ path, source = "local" }: { path: string; source?: 
         pdfRef.current = null;
       }
     };
-  }, [path, source]);
+  }, [path, source, url]);
 
   useEffect(() => {
     const pdf = pdfRef.current;

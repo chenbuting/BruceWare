@@ -1,0 +1,8 @@
+id: kb
+name: 知识库
+kind: app
+description: 多个库整理资料，可分文件夹和标签，支持预览
+version: 0.1.0
+web:
+  route_prefix: /m/kb
+  nav_label: 知识库

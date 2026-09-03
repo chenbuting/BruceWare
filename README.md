@@ -45,6 +45,7 @@ npm run dev
 - **简历**：保存、AI 分析、打字模拟面试
 - **衣橱**：衣服图、试穿和搭配
 - **文件**：管理本机或服务器上的文件夹
+- **知识库**：多个库整理资料，可分文件夹和标签，支持预览
 
 设置里配数据源、AI、文件根目录。选了根目录后，衣橱图和本地库会放在根目录下的 `BruceWare` 里；设置文件仍留在程序的 `data/app-settings.json`。
 
@@ -59,4 +60,4 @@ BruceWare/
   data/          本机设置（不要提交）
 ```
 
-知识库还在设计，未开发。总体：[docs/design/知识库总体设计.md](docs/design/知识库总体设计.md)，详细：[docs/design/知识库详细设计.md](docs/design/知识库详细设计.md)。
+知识库一期已接（多库、目录、上传、预览）。设计：[docs/design/知识库总体设计.md](docs/design/知识库总体设计.md)、[docs/design/知识库详细设计.md](docs/design/知识库详细设计.md)。

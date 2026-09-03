@@ -2,6 +2,7 @@ import type { ComponentType } from "react";
 
 import { FilesPage } from "@/pages/FilesPage";
 import { HelpPage } from "@/pages/HelpPage";
+import { KbPage } from "@/pages/KbPage";
 import { ModulesPage } from "@/pages/ModulesPage";
 import { PortalPage } from "@/pages/PortalPage";
 import { ResumePage } from "@/pages/ResumePage";
@@ -45,6 +46,12 @@ export const MODULE_PAGES: Record<string, ModulePageEntry> = {
     desc: "上传衣服照片，AI 抠单件、试穿和搭配。先在设置里配好 AI。",
     wide: true,
     page: WardrobePage,
+  },
+  kb: {
+    title: "知识库",
+    desc: "多个库整理资料，可分文件夹和标签，支持预览。",
+    wide: true,
+    page: KbPage,
   },
   files: {
     title: "文件",

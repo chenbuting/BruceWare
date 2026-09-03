@@ -6,6 +6,9 @@ import type {
   FilesStatus,
   FolderBrowse,
   InterviewSession,
+  KbDocument,
+  KbFolder,
+  KbLibrary,
   LlmWrite,
   ModuleList,
   PortalLink,
@@ -485,4 +488,85 @@ export function setWardrobeStyleActive(id: number, active: boolean) {
 
 export function deleteWardrobeStyle(id: number) {
   return request<boolean>(`/api/v1/wardrobe/styles/${id}`, { method: "DELETE" });
+}
+
+export function fetchKbLibraries() {
+  return request<{ items: KbLibrary[] }>("/api/v1/kb/libraries");
+}
+
+export function createKbLibrary(name: string, description = "") {
+  return request<KbLibrary>("/api/v1/kb/libraries", {
+    method: "POST",
+    body: JSON.stringify({ name, description }),
+  });
+}
+
+export function updateKbLibrary(id: number, name: string, description = "") {
+  return request<KbLibrary>(`/api/v1/kb/libraries/${id}`, {
+    method: "PUT",
+    body: JSON.stringify({ name, description }),
+  });
+}
+
+export function deleteKbLibrary(id: number) {
+  return request<boolean>(`/api/v1/kb/libraries/${id}`, { method: "DELETE" });
+}
+
+export function fetchKbFolders(libraryId: number) {
+  return request<{ items: KbFolder[] }>(`/api/v1/kb/libraries/${libraryId}/folders`);
+}
+
+export function createKbFolder(libraryId: number, name: string, parentId: number | null) {
+  return request<KbFolder>(`/api/v1/kb/libraries/${libraryId}/folders`, {
+    method: "POST",
+    body: JSON.stringify({ name, parent_id: parentId }),
+  });
+}
+
+export function renameKbFolder(id: number, name: string) {
+  return request<KbFolder>(`/api/v1/kb/folders/${id}`, {
+    method: "PUT",
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function deleteKbFolder(id: number) {
+  return request<boolean>(`/api/v1/kb/folders/${id}`, { method: "DELETE" });
+}
+
+export function fetchKbDocuments(libraryId: number, folderId: number | null, q = "", tag = "") {
+  const params = new URLSearchParams();
+  if (folderId != null) params.set("folder_id", String(folderId));
+  if (q.trim()) params.set("q", q.trim());
+  if (tag.trim()) params.set("tag", tag.trim());
+  const query = params.toString();
+  return request<{ items: KbDocument[] }>(`/api/v1/kb/libraries/${libraryId}/documents${query ? `?${query}` : ""}`);
+}
+
+export function uploadKbDocument(libraryId: number, file: File, folderId: number | null, tags = "", force = false) {
+  const body = new FormData();
+  body.append("file", file);
+  if (folderId != null) body.append("folder_id", String(folderId));
+  if (tags) body.append("tags", tags);
+  if (force) body.append("force", "true");
+  return request<KbDocument>(`/api/v1/kb/libraries/${libraryId}/documents`, { method: "POST", body });
+}
+
+export function updateKbDocument(id: number, payload: { title?: string; tags?: string; folder_id?: number | null }) {
+  return request<KbDocument>(`/api/v1/kb/documents/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteKbDocument(id: number) {
+  return request<boolean>(`/api/v1/kb/documents/${id}`, { method: "DELETE" });
+}
+
+export function kbDocumentFileUrl(id: number) {
+  return `/api/v1/kb/documents/${id}/file`;
+}
+
+export function fetchKbDocumentText(id: number) {
+  return request<{ text: string }>(`/api/v1/kb/documents/${id}/text`);
 }

@@ -220,3 +220,31 @@ export type InterviewSession = {
   resume_id: number;
   messages: InterviewMessage[];
 };
+
+export type KbLibrary = {
+  id: number;
+  name: string;
+  description: string;
+  created_at: string;
+};
+
+export type KbFolder = {
+  id: number;
+  library_id: number;
+  parent_id: number | null;
+  name: string;
+};
+
+export type KbDocument = {
+  id: number;
+  library_id: number;
+  folder_id: number | null;
+  title: string;
+  file_name: string;
+  tags: string;
+  kind: string;
+  preview: string;
+  parse_status: string;
+  created_at: string;
+  updated_at: string;
+};

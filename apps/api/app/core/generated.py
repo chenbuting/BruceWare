@@ -45,6 +45,14 @@ def wardrobe_dir() -> Path:
     return wardrobe_dir_for(files_root_text(), generated_follow())
 
 
+def kb_dir_for(files_root: str, follow: bool) -> Path:
+    return app_data_dir_for(files_root, follow) / "kb"
+
+
+def kb_dir() -> Path:
+    return kb_dir_for(files_root_text(), generated_follow())
+
+
 def sqlite_path_for(files_root: str, follow: bool) -> Path:
     return app_data_dir_for(files_root, follow) / "bruceware.db"
 
@@ -93,7 +101,7 @@ def has_generated_files(folder: Path) -> bool:
 
 def has_app_data(files_root: str, follow: bool) -> bool:
     pack = app_data_dir_for(files_root, follow)
-    if has_generated_files(pack / "wardrobe"):
+    if has_generated_files(pack / "wardrobe") or has_generated_files(pack / "kb"):
         return True
     db = pack / "bruceware.db"
     return db.is_file() and db.stat().st_size > 0
@@ -201,6 +209,9 @@ def move_app_data(old_files_root: str, new_files_root: str) -> None:
         if has_generated_files(old_wardrobe):
             new_wardrobe.mkdir(parents=True, exist_ok=True)
             _move_tree(old_wardrobe, new_wardrobe)
+        old_kb = old_pack / "kb"
+        if has_generated_files(old_kb):
+            _move_tree(old_kb, new_pack / "kb")
         _move_sqlite(old_pack, new_pack)
     stored = load_local_settings(get_settings().repo_root)
     current_db = sqlite_current_path(stored)
