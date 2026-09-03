@@ -18,4 +18,6 @@ if __name__ == "__main__":
         host=settings.api_host,
         port=settings.api_port,
         reload=settings.app_debug,
+        reload_dirs=[str(_API_ROOT / "app")],
+        reload_excludes=["*.pyc", ".playwright-cli", "*.log"],
     )

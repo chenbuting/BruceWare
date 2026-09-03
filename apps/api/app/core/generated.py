@@ -133,13 +133,54 @@ def _move_tree(src: Path, dest: Path) -> None:
             shutil.move(str(child), str(target))
 
 
+def _copy_sqlite_db(src: Path, dest: Path) -> None:
+    """库文件可能正被占用，先备份拷过去，再尽量删旧的。"""
+
+    import sqlite3
+
+    source = sqlite3.connect(f"file:{src.resolve().as_posix()}?mode=ro", uri=True)
+    target = sqlite3.connect(str(dest))
+    try:
+        source.backup(target)
+    finally:
+        target.close()
+        source.close()
+
+
 def _move_sqlite(old_dir: Path, new_pack: Path) -> None:
     new_pack.mkdir(parents=True, exist_ok=True)
     for name in SQLITE_NAMES:
         src = old_dir / name
         dest = new_pack / name
-        if src.is_file() and not dest.exists():
-            shutil.move(str(src), str(dest))
+        if not src.is_file():
+            continue
+        try:
+            if src.resolve() == dest.resolve():
+                continue
+        except OSError:
+            pass
+        if dest.exists() and dest.stat().st_size > 0:
+            try:
+                src.unlink()
+            except OSError:
+                pass
+            continue
+        if dest.exists():
+            try:
+                dest.unlink()
+            except OSError:
+                pass
+        if name == "bruceware.db":
+            _copy_sqlite_db(src, dest)
+        else:
+            try:
+                shutil.copy2(src, dest)
+            except OSError:
+                continue
+        try:
+            src.unlink()
+        except OSError:
+            pass
 
 
 def move_app_data(old_files_root: str, new_files_root: str) -> None:

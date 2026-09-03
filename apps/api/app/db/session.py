@@ -1,5 +1,8 @@
 """按配置连接本地或远程库，支持运行中切换。"""
 
+import gc
+import os
+import time
 from collections.abc import Generator
 
 from sqlalchemy import create_engine, inspect, text
@@ -35,6 +38,9 @@ def dispose_database() -> None:
         _Db.engine = None
         _Db.SessionLocal = None
         _Db.url = ""
+    gc.collect()
+    if os.name == "nt":
+        time.sleep(0.3)
 
 
 def connect_database(url: str) -> None:

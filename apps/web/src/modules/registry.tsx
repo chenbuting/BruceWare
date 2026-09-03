@@ -48,7 +48,7 @@ export const MODULE_PAGES: Record<string, ModulePageEntry> = {
   },
   files: {
     title: "文件",
-    desc: "管理电脑上指定文件夹里的文件。先在设置里指定根目录。",
+    desc: "管理本机或服务器上的文件夹。先在设置里指定一边或两边。",
     wide: true,
     page: FilesPage,
   },

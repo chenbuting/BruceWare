@@ -1,6 +1,6 @@
 # BruceWare
 
-个人工作台底座。网页是总入口，功能以后按模块往里加。
+个人工作台。左边点模块，右边同一块工作区打开，不另开窗口。
 
 ## 技术
 
@@ -8,7 +8,7 @@
 |------|------|
 | 网页 | React + Vite + TypeScript + Tailwind |
 | 后端 | Python 3.11+ + FastAPI |
-| 数据库 | 默认 SQLite，可在 `.env` 改成远程 MySQL / PostgreSQL |
+| 数据库 | 默认 SQLite，也可在设置里改成远程 MySQL / PostgreSQL |
 
 ## 启动
 
@@ -18,7 +18,7 @@
 copy .env.example .env
 ```
 
-启动后端（安装依赖并打开接口服务）：
+启动后端：
 
 ```bash
 cd apps/api
@@ -39,16 +39,21 @@ npm run dev
 
 网页：http://127.0.0.1:5173
 
-## 换数据源
+## 现在有什么
 
-打开网页「设置」，选本地 SQLite 或远程 MySQL / PostgreSQL，先测试再保存。  
-保存后写到 `data/app-settings.json`，不必改 `.env`。
+- **网站入口**：收藏常用网站
+- **简历**：保存、AI 分析、打字模拟面试
+- **衣橱**：衣服图、试穿和搭配
+- **文件**：管理本机或服务器上的文件夹
+
+设置里配数据源、AI、文件根目录。选了根目录后，衣橱图和本地库会放在根目录下的 `BruceWare` 里；设置文件仍留在程序的 `data/app-settings.json`。
 
 ## 目录
 
 ```
 BruceWare/
   apps/api/      后端
-  apps/web/      网页壳
-  modules/       以后放各功能模块（现在是空的）
+  apps/web/      网页
+  modules/       各功能模块的说明
+  data/          本机设置（不要提交）
 ```
