@@ -235,6 +235,18 @@ export type KbFolder = {
   name: string;
 };
 
+export type KbAskHit = {
+  id: number;
+  title: string;
+  score: number;
+};
+
+export type KbAskResult = {
+  answer: string;
+  citations: KbAskHit[];
+  used_llm: boolean;
+};
+
 export type KbDocument = {
   id: number;
   library_id: number;

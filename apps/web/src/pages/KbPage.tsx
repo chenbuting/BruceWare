@@ -8,17 +8,19 @@ import {
   deleteKbDocument,
   deleteKbFolder,
   deleteKbLibrary,
+  fetchKbDocument,
   fetchKbDocumentText,
   fetchKbDocuments,
   fetchKbFolders,
   fetchKbLibraries,
+  askKbLibrary,
   kbDocumentFileUrl,
   renameKbFolder,
   updateKbDocument,
   updateKbLibrary,
   uploadKbDocument,
 } from "@/api/client";
-import type { KbDocument, KbFolder, KbLibrary } from "@/api/types";
+import type { KbAskResult, KbDocument, KbFolder, KbLibrary } from "@/api/types";
 import { ConfirmModal, Modal } from "@/components/Modal";
 import { PdfPreview } from "@/components/PdfPreview";
 
@@ -35,7 +37,7 @@ function childFolders(items: KbFolder[], parentId: number | null) {
   return items.filter((item) => item.parent_id === parentId);
 }
 
-/** 知识库一期：多库、文件夹、上传、预览 */
+/** 知识库：整理资料，并按当前库提问 */
 export function KbPage() {
   const location = useLocation();
   const uploadRef = useRef<HTMLInputElement>(null);
@@ -64,6 +66,10 @@ export function KbPage() {
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [uploadTags, setUploadTags] = useState("");
   const [manageLib, setManageLib] = useState(false);
+  const [question, setQuestion] = useState("");
+  const [onlyFolder, setOnlyFolder] = useState(false);
+  const [askResult, setAskResult] = useState<KbAskResult | null>(null);
+  const [asking, setAsking] = useState(false);
 
   const library = libraries.find((item) => item.id === libraryId) || null;
 
@@ -133,10 +139,35 @@ export function KbPage() {
       .finally(() => setBusy(false));
   }
 
+  function onAsk() {
+    if (libraryId == null) return;
+    const text = question.trim();
+    if (!text) return;
+    setAsking(true);
+    setError("");
+    setHint("");
+    askKbLibrary(libraryId, text, folderId, onlyFolder)
+      .then((data) => setAskResult(data))
+      .catch((err: Error) => setError(err.message))
+      .finally(() => setAsking(false));
+  }
+
+  function onOpenCitation(id: number) {
+    const found = docs.find((item) => item.id === id);
+    if (found) {
+      setPreview(found);
+      return;
+    }
+    fetchKbDocument(id)
+      .then((item) => setPreview(item))
+      .catch((err: Error) => setError(err.message));
+  }
+
   function onPickLibrary(id: number) {
     setLibraryId(id);
     setFolderId(null);
     setPreview(null);
+    setAskResult(null);
     run(async () => {
       await loadFolders(id);
       await loadDocs(id, null);
@@ -266,6 +297,47 @@ export function KbPage() {
 
       {error ? <p className="text-[13px] text-[var(--err)]">{error}</p> : null}
       {hint ? <p className="text-[13px] text-[var(--ok)]">{hint}</p> : null}
+
+      {library ? (
+        <div className="shrink-0 rounded-lg border border-[var(--line)] bg-[var(--paper)] px-3 py-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              className={`${inputClass} min-w-[12rem] flex-1`}
+              placeholder="问当前库里的资料"
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && onAsk()}
+            />
+            <label className="flex items-center gap-1 text-[13px] text-[var(--muted)]">
+              <input
+                type="checkbox"
+                checked={onlyFolder && folderId != null}
+                disabled={folderId == null}
+                onChange={(e) => setOnlyFolder(e.target.checked)}
+              />
+              只搜当前文件夹
+            </label>
+            <button type="button" className={btnClass} disabled={asking || !question.trim()} onClick={onAsk}>
+              {asking ? "在找…" : "提问"}
+            </button>
+          </div>
+          {askResult ? (
+            <div className="mt-2 border-t border-[var(--line)] pt-2 text-[13px] leading-6">
+              <p className="whitespace-pre-wrap">{askResult.answer}</p>
+              {askResult.citations.length ? (
+                <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[var(--muted)]">
+                  <span>出处</span>
+                  {askResult.citations.map((hit) => (
+                    <button key={hit.id} type="button" className="underline hover:text-[var(--text)]" onClick={() => onOpenCitation(hit.id)}>
+                      {hit.title}
+                    </button>
+                  ))}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden rounded-lg border border-[var(--line)] bg-[var(--paper)] md:grid-cols-[220px_minmax(0,1fr)] xl:grid-cols-[220px_minmax(0,1fr)_300px]">
         <aside className="flex min-h-0 flex-col border-b border-[var(--line)] md:border-b-0 md:border-r">

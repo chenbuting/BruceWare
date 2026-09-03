@@ -59,6 +59,7 @@ def connect_database(url: str) -> None:
     Base.metadata.create_all(bind=_Db.engine)
     _ensure_resume_columns(_Db.engine)
     _ensure_portal_columns(_Db.engine)
+    _ensure_kb_columns(_Db.engine)
 
 
 def _ensure_resume_columns(engine: Engine) -> None:
@@ -85,6 +86,19 @@ def _ensure_portal_columns(engine: Engine) -> None:
         return
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE portal_links ADD COLUMN category VARCHAR(80) DEFAULT ''"))
+
+
+def _ensure_kb_columns(engine: Engine) -> None:
+    """旧库补上知识库检索正文。"""
+
+    inspector = inspect(engine)
+    if "kb_documents" not in inspector.get_table_names():
+        return
+    cols = {item["name"] for item in inspector.get_columns("kb_documents")}
+    if "search_text" in cols:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE kb_documents ADD COLUMN search_text TEXT DEFAULT ''"))
 
 
 def try_connect(url: str) -> tuple[bool, str]:

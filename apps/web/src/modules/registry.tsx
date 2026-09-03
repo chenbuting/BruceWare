@@ -50,7 +50,7 @@ export const MODULE_PAGES: Record<string, ModulePageEntry> = {
   },
   kb: {
     title: "知识库",
-    desc: "多个库整理资料，可分文件夹和标签，支持预览。",
+    desc: "多个库整理资料，可分文件夹和标签，也能对着当前库提问。",
     wide: true,
     fill: true,
     page: KbPage,

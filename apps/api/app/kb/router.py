@@ -1,4 +1,4 @@
-"""知识库一期接口：多库、文件夹、上传、预览。"""
+"""知识库接口：多库、文件夹、上传、预览、提问。"""
 
 from datetime import datetime
 from urllib.parse import quote
@@ -9,9 +9,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.ai import chat_complete, llm_public
 from app.core.response import fail, ok
 from app.db.session import get_db
+from app.kb.extract import extract_search_text
 from app.kb.models import KbDocument, KbFolder, KbLibrary
+from app.kb.search import folder_scope, rank_documents, snippet_of
 from app.kb.store import (
     file_digest,
     kind_of,
@@ -40,6 +43,12 @@ class DocumentPatch(BaseModel):
     title: str | None = Field(default=None, max_length=255)
     tags: str | None = Field(default=None, max_length=500)
     folder_id: int | None = None
+
+
+class AskIn(BaseModel):
+    question: str = Field(min_length=1, max_length=2000)
+    folder_id: int | None = None
+    only_folder: bool = False
 
 
 def _iso(value: datetime | None) -> str:
@@ -287,6 +296,7 @@ async def upload_document(
         file_hash=digest,
         parse_status=parse_status_of(kind),
         kind=kind,
+        search_text=extract_search_text(file_name, data),
         updated_at=datetime.utcnow(),
     )
     db.add(row)
@@ -297,6 +307,79 @@ async def upload_document(
     db.commit()
     db.refresh(row)
     return ok(_doc_dict(row))
+
+
+def _fill_search_text(row: KbDocument) -> None:
+    """旧文件还没抽过正文时，提问前补一次。"""
+
+    if (row.search_text or "").strip():
+        return
+    try:
+        path = abs_path(row.library_id, row.rel_path)
+        data = path.read_bytes()
+    except (ValueError, OSError):
+        return
+    row.search_text = extract_search_text(row.file_name, data)
+
+
+@router.post("/kb/libraries/{library_id}/ask")
+def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
+    """当前库关键词检索，再按原文回答并带出处。"""
+
+    if _get_library(db, library_id) is None:
+        return fail("这个库不存在", 404)
+    if body.only_folder and body.folder_id is not None and not _folder_in_library(db, library_id, body.folder_id):
+        return fail("文件夹不在这个库里")
+    question = body.question.strip()
+    if not question:
+        return fail("请先写问题")
+    folders = db.scalars(select(KbFolder).where(KbFolder.library_id == library_id)).all()
+    scope = folder_scope(list(folders), body.folder_id) if body.only_folder else None
+    stmt = select(KbDocument).where(KbDocument.library_id == library_id)
+    rows = list(db.scalars(stmt).all())
+    if scope is not None:
+        rows = [row for row in rows if row.folder_id in scope]
+    for row in rows:
+        _fill_search_text(row)
+    db.commit()
+    ranked = rank_documents(question, rows)
+    citations = []
+    blocks = []
+    for index, (row, score) in enumerate(ranked, start=1):
+        snippet = snippet_of(question, row)
+        citations.append(
+            {
+                "id": row.id,
+                "title": row.title or row.file_name,
+                "score": round(score, 3),
+            }
+        )
+        blocks.append(f"【资料{index}】{row.title or row.file_name}\n{snippet}")
+    if not ranked:
+        return ok({"answer": "当前范围内没找到相关资料。", "citations": [], "used_llm": False})
+    if not llm_public().get("has_key"):
+        return ok(
+            {
+                "answer": "还没配 AI。先列出可能相关的资料，配好 Key 后再问可以写成回答。",
+                "citations": citations,
+                "used_llm": False,
+            }
+        )
+    prompt = (
+        "只根据下面资料回答。没有依据就说资料里没有。不要编造。"
+        "回答末尾用「依据：资料1、资料2」标出来源。\n\n"
+        + "\n\n".join(blocks)
+    )
+    try:
+        answer = chat_complete(
+            [
+                {"role": "system", "content": "你是知识库助手，依据用户资料作答，并标明出处。"},
+                {"role": "user", "content": f"问题：{question}\n\n{prompt}"},
+            ]
+        )
+    except ValueError as exc:
+        return fail(str(exc))
+    return ok({"answer": answer, "citations": citations, "used_llm": True})
 
 
 @router.get("/kb/documents/{doc_id}")

@@ -6,6 +6,7 @@ import type {
   FilesStatus,
   FolderBrowse,
   InterviewSession,
+  KbAskResult,
   KbDocument,
   KbFolder,
   KbLibrary,
@@ -567,6 +568,21 @@ export function kbDocumentFileUrl(id: number) {
   return `/api/v1/kb/documents/${id}/file`;
 }
 
+export function fetchKbDocument(id: number) {
+  return request<KbDocument>(`/api/v1/kb/documents/${id}`);
+}
+
 export function fetchKbDocumentText(id: number) {
   return request<{ text: string }>(`/api/v1/kb/documents/${id}/text`);
+}
+
+export function askKbLibrary(libraryId: number, question: string, folderId: number | null, onlyFolder: boolean) {
+  return request<KbAskResult>(`/api/v1/kb/libraries/${libraryId}/ask`, {
+    method: "POST",
+    body: JSON.stringify({
+      question,
+      folder_id: onlyFolder ? folderId : null,
+      only_folder: onlyFolder && folderId != null,
+    }),
+  });
 }

@@ -52,5 +52,6 @@ class KbDocument(Base):
     wiki_json = Column(Text, nullable=False, default="")
     embedding_profile = Column(String(150), nullable=False, default="")
     extra = Column(Text, nullable=False, default="")
+    search_text = Column(Text, nullable=False, default="")
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
