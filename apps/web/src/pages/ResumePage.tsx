@@ -43,6 +43,18 @@ const INTRO_STYLES: { id: string; label: string }[] = [
   { id: "funny", label: "轻松搞笑" },
 ];
 
+/** 把面试官按【解读】【参考回答】【下一问】写的回复拆开显示 */
+function parseInterviewReply(content: string) {
+  const pattern = /【(开场|解读|参考回答|下一问|总评)】/g;
+  const matches = [...content.matchAll(pattern)];
+  if (matches.length === 0) return [];
+  return matches.map((match, index) => {
+    const start = (match.index || 0) + match[0].length;
+    const end = index + 1 < matches.length ? matches[index + 1].index || content.length : content.length;
+    return { title: match[1], text: content.slice(start, end).trim() };
+  }).filter((item) => item.text);
+}
+
 const SECTIONS: { id: ResumeSection; label: string }[] = [
   { id: "basic", label: "基本信息" },
   { id: "summary", label: "自我评价" },
@@ -654,16 +666,31 @@ export function ResumePage() {
                 >
                   {messages.length > 0 ? "重新开始" : "开始面试"}
                 </button>
-                <div className="mt-3 max-h-[360px] space-y-3 overflow-auto text-[13px] leading-6">
+                <p className="mt-2 text-[12px] text-[var(--muted)]">你答完后，面试官会解读、给参考回答，再问下一题。</p>
+                <div className="mt-3 max-h-[420px] space-y-3 overflow-auto text-[13px] leading-6">
                   {messages.length === 0 ? (
                     <p className="text-[var(--muted)]">点开始后，面试官会先提问。</p>
                   ) : (
-                    messages.map((item) => (
-                      <div key={item.id}>
-                        <div className="text-[var(--text)]">{item.role === "user" ? "我" : "面试官"}</div>
-                        <div className="whitespace-pre-wrap text-[var(--muted)]">{item.content}</div>
-                      </div>
-                    ))
+                    messages.map((item) => {
+                      const parts = item.role === "assistant" ? parseInterviewReply(item.content) : [];
+                      return (
+                        <div key={item.id}>
+                          <div className="text-[var(--text)]">{item.role === "user" ? "我" : "面试官"}</div>
+                          {parts.length > 0 ? (
+                            <div className="mt-1 space-y-2">
+                              {parts.map((part) => (
+                                <div key={`${item.id}-${part.title}`}>
+                                  <div className="text-[12px] text-[var(--text)]">{part.title}</div>
+                                  <div className="whitespace-pre-wrap text-[var(--muted)]">{part.text}</div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="whitespace-pre-wrap text-[var(--muted)]">{item.content}</div>
+                          )}
+                        </div>
+                      );
+                    })
                   )}
                 </div>
                 <form className="mt-3 flex gap-2" onSubmit={onReply}>

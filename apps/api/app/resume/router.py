@@ -262,16 +262,22 @@ def start_interview(doc_id: int, db: Session = Depends(get_db)):
         return fail("请先填写简历内容")
     job = row.target_job.strip() or "未指定岗位"
     system = (
-        "你是面试官，用中文进行一轮打字模拟面试。"
+        "你是面试官，也是面试教练，用中文进行一轮打字模拟面试。"
         "每次只问一个问题，根据简历和对方回答追问。"
-        "对方说结束或你认为问得差不多时，给简短总评。"
+        "对方第一次开场时，只写【开场】一两句，再写【下一问】问第一个问题，不要解读，不要给参考回答。"
+        "对方回答之后，必须按这个顺序写，每块都要有："
+        "【解读】点评刚才的回答，说清楚好在哪、缺什么；"
+        "【参考回答】结合简历给出这题比较好的答法，像候选人自己在说；"
+        "【下一问】再问一个新问题。"
+        "对方说结束或你认为问得差不多时，用【总评】代替【下一问】。"
+        "不要用 Markdown，不要编号列表以外的花样。"
         f"目标岗位：{job}\n简历：\n{body_text}"
     )
     try:
         first = chat_complete(
             [
                 {"role": "system", "content": system},
-                {"role": "user", "content": "请开始面试，先做简短开场并问第一个问题。"},
+                {"role": "user", "content": "请开始面试。只写【开场】和【下一问】，不要解读，不要给参考回答。"},
             ]
         )
     except ValueError as exc:
@@ -305,7 +311,16 @@ def reply_interview(doc_id: int, body: InterviewReplyIn, db: Session = Depends(g
         .order_by(ResumeInterviewMessage.id.asc())
     ).all()
     messages = [{"role": item.role, "content": item.content} for item in history]
-    messages.append({"role": "user", "content": text})
+    messages.append(
+        {
+            "role": "user",
+            "content": (
+                f"{text}\n\n"
+                "请按固定格式回复：先写【解读】，再写【参考回答】，最后写【下一问】。"
+                "若该结束了，用【总评】代替【下一问】。"
+            ),
+        }
+    )
     try:
         answer = chat_complete(messages)
     except ValueError as exc:
