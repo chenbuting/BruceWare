@@ -13,6 +13,7 @@ export type ModulePageEntry = {
   title: string;
   desc?: string;
   wide?: boolean;
+  fill?: boolean;
   page: ComponentType;
 };
 
@@ -51,6 +52,7 @@ export const MODULE_PAGES: Record<string, ModulePageEntry> = {
     title: "知识库",
     desc: "多个库整理资料，可分文件夹和标签，支持预览。",
     wide: true,
+    fill: true,
     page: KbPage,
   },
   files: {

@@ -155,7 +155,7 @@ function TabPane({ tab }: { tab: Tab }) {
     }
     const Page = entry.page;
     return (
-      <PageFrame hideHeader wide={entry.wide}>
+      <PageFrame hideHeader wide={entry.wide} fill={entry.fill}>
         <Page />
       </PageFrame>
     );

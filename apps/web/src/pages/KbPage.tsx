@@ -63,6 +63,7 @@ export function KbPage() {
   const [askDeleteDoc, setAskDeleteDoc] = useState<KbDocument | null>(null);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [uploadTags, setUploadTags] = useState("");
+  const [manageLib, setManageLib] = useState(false);
 
   const library = libraries.find((item) => item.id === libraryId) || null;
 
@@ -224,90 +225,106 @@ export function KbPage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-3">
+          <h1 className="shrink-0">知识库</h1>
+          <select
+            className={`${inputClass} min-w-[8rem]`}
+            value={libraryId ?? ""}
+            onChange={(event) => onPickLibrary(Number(event.target.value))}
+          >
+            {libraries.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name}
+              </option>
+            ))}
+          </select>
+          <button type="button" className={btnClass} onClick={() => setManageLib(true)}>
+            管理库
+          </button>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-[13px]">
+          <input
+            className={`${inputClass} w-40`}
+            placeholder="搜名称"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && onSearch()}
+          />
+          <input
+            className={`${inputClass} w-28`}
+            placeholder="标签"
+            value={tag}
+            onChange={(e) => setTag(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && onSearch()}
+          />
+          <button type="button" className={btnClass} disabled={busy || !library} onClick={onSearch}>
+            筛选
+          </button>
+        </div>
+      </div>
+
       {error ? <p className="text-[13px] text-[var(--err)]">{error}</p> : null}
       {hint ? <p className="text-[13px] text-[var(--ok)]">{hint}</p> : null}
 
-      <div className="flex flex-wrap items-center gap-2 text-[13px]">
-        <select
-          className={inputClass}
-          value={libraryId ?? ""}
-          onChange={(event) => onPickLibrary(Number(event.target.value))}
-        >
-          {libraries.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.name}
-            </option>
-          ))}
-        </select>
-        <input className={`${inputClass} w-36`} placeholder="新库名 / 改名" value={libName} onChange={(e) => setLibName(e.target.value)} />
-        <button type="button" className={btnClass} disabled={busy} onClick={onCreateLibrary}>
-          新建库
-        </button>
-        <button type="button" className={btnClass} disabled={busy || !library} onClick={onRenameLibrary}>
-          改库名
-        </button>
-        <button type="button" className={btnClass} disabled={busy || !library} onClick={() => setAskDeleteLib(true)}>
-          删库
-        </button>
-      </div>
-
-      <div className="flex min-h-0 flex-1 gap-3">
-        <aside className="w-52 shrink-0 overflow-auto border border-[var(--line)] bg-[var(--paper)] p-2">
-          <button
-            type="button"
-            className={`mb-1 block w-full px-2 py-1 text-left text-[13px] ${folderId == null ? "bg-[var(--bg)]" : ""}`}
-            onClick={() => onOpenFolder(null)}
-          >
-            全部（库根）
-          </button>
-          <FolderTree items={folders} parentId={null} currentId={folderId} onOpen={onOpenFolder} />
+      <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden rounded-lg border border-[var(--line)] bg-[var(--paper)] md:grid-cols-[220px_minmax(0,1fr)] xl:grid-cols-[220px_minmax(0,1fr)_300px]">
+        <aside className="flex min-h-0 flex-col border-b border-[var(--line)] md:border-b-0 md:border-r">
+          <div className="border-b border-[var(--line)] px-3 py-2 text-[12px] text-[var(--muted)]">文件夹</div>
+          <div className="min-h-0 flex-1 overflow-auto p-2">
+            <button
+              type="button"
+              className={`mb-0.5 block w-full rounded-md px-2 py-1.5 text-left text-[13px] ${folderId == null ? "bg-[var(--bg)]" : "hover:bg-[var(--hover)]"}`}
+              onClick={() => onOpenFolder(null)}
+            >
+              全部（库根）
+            </button>
+            <FolderTree items={folders} parentId={null} currentId={folderId} onOpen={onOpenFolder} />
+          </div>
+          <div className="flex gap-2 border-t border-[var(--line)] p-2">
+            <input className={`${inputClass} min-w-0 flex-1`} placeholder="新文件夹" value={folderName} onChange={(e) => setFolderName(e.target.value)} />
+            <button type="button" className={`${btnClass} shrink-0`} disabled={busy || !library} onClick={onCreateFolder}>
+              新建
+            </button>
+          </div>
         </aside>
 
-        <section className="flex min-w-0 flex-1 flex-col gap-3">
-          <div className="flex flex-wrap items-center gap-2 text-[13px]">
-            <button type="button" className="text-[var(--muted)]" onClick={() => onOpenFolder(null)}>
-              {library?.name || "库"}
-            </button>
-            {crumbs.map((item) => (
-              <span key={item.id} className="flex items-center gap-2">
-                <span className="text-[var(--muted)]">/</span>
-                <button type="button" onClick={() => onOpenFolder(item.id)}>
-                  {item.name}
-                </button>
-              </span>
-            ))}
+        <section className="flex min-h-0 min-w-0 flex-col xl:border-r">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] px-3 py-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-1 text-[13px]">
+              <button type="button" className="text-[var(--muted)] hover:text-[var(--text)]" onClick={() => onOpenFolder(null)}>
+                {library?.name || "库"}
+              </button>
+              {crumbs.map((item) => (
+                <span key={item.id} className="flex items-center gap-1">
+                  <span className="text-[var(--muted)]">/</span>
+                  <button type="button" onClick={() => onOpenFolder(item.id)}>
+                    {item.name}
+                  </button>
+                </span>
+              ))}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <input className={`${inputClass} w-28`} placeholder="上传标签" value={uploadTags} onChange={(e) => setUploadTags(e.target.value)} />
+              <button type="button" className={btnClass} disabled={busy || !library} onClick={() => uploadRef.current?.click()}>
+                上传
+              </button>
+              <input
+                ref={uploadRef}
+                type="file"
+                className="hidden"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  event.target.value = "";
+                  if (file) onUpload(file);
+                }}
+              />
+            </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 text-[13px]">
-            <input className={`${inputClass} w-32`} placeholder="新文件夹" value={folderName} onChange={(e) => setFolderName(e.target.value)} />
-            <button type="button" className={btnClass} disabled={busy || !library} onClick={onCreateFolder}>
-              新建文件夹
-            </button>
-            <input className={`${inputClass} w-32`} placeholder="搜名称" value={query} onChange={(e) => setQuery(e.target.value)} />
-            <input className={`${inputClass} w-28`} placeholder="标签" value={tag} onChange={(e) => setTag(e.target.value)} />
-            <button type="button" className={btnClass} disabled={busy || !library} onClick={onSearch}>
-              筛选
-            </button>
-            <input className={`${inputClass} w-28`} placeholder="上传标签" value={uploadTags} onChange={(e) => setUploadTags(e.target.value)} />
-            <button type="button" className={btnClass} disabled={busy || !library} onClick={() => uploadRef.current?.click()}>
-              上传
-            </button>
-            <input
-              ref={uploadRef}
-              type="file"
-              className="hidden"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                event.target.value = "";
-                if (file) onUpload(file);
-              }}
-            />
-          </div>
-
-          <div className="min-h-0 flex-1 overflow-auto border border-[var(--line)] bg-[var(--paper)]">
+          <div className="min-h-0 flex-1 overflow-auto">
             {!searching
               ? hereFolders.map((item) => (
-                  <div key={`f-${item.id}`} className="flex items-center justify-between gap-2 border-b border-[var(--line)] px-3 py-2 text-[13px]">
+                  <div key={`f-${item.id}`} className="flex items-center justify-between gap-2 border-b border-[var(--line)] px-3 py-2.5 text-[13px] hover:bg-[var(--bg)]">
                     <button type="button" className="flex items-center gap-2" onClick={() => onOpenFolder(item.id)}>
                       <Folder className="h-4 w-4 text-amber-500" />
                       {item.name}
@@ -332,8 +349,12 @@ export function KbPage() {
               : null}
             {docs.map((item) => {
               const { Icon, color } = docIcon(item);
+              const active = preview?.id === item.id;
               return (
-                <div key={item.id} className="flex items-center justify-between gap-2 border-b border-[var(--line)] px-3 py-2 text-[13px]">
+                <div
+                  key={item.id}
+                  className={`flex items-center justify-between gap-2 border-b border-[var(--line)] px-3 py-2.5 text-[13px] ${active ? "bg-[var(--bg)]" : "hover:bg-[var(--bg)]"}`}
+                >
                   <button type="button" className="flex min-w-0 items-center gap-2 text-left" onClick={() => setPreview(item)}>
                     <Icon className={`h-4 w-4 shrink-0 ${color}`} />
                     <span className="truncate">{item.title}</span>
@@ -359,17 +380,29 @@ export function KbPage() {
               );
             })}
             {!hereFolders.length && !docs.length ? (
-              <p className="px-3 py-6 text-[13px] text-[var(--muted)]">{searching ? "没有符合的资料" : "这个文件夹还是空的，可以上传或新建文件夹。"}</p>
+              <div className="flex h-full min-h-[12rem] flex-col items-center justify-center gap-3 px-6 text-center">
+                <p className="text-[13px] leading-6 text-[var(--muted)]">
+                  {searching ? "没有符合的资料。" : "这里还是空的。左边可以建文件夹，右上角可以上传。"}
+                </p>
+                {!searching ? (
+                  <button type="button" className={btnClass} disabled={busy || !library} onClick={() => uploadRef.current?.click()}>
+                    上传资料
+                  </button>
+                ) : null}
+              </div>
             ) : null}
           </div>
         </section>
 
-        <aside className="hidden w-[22rem] shrink-0 overflow-auto border border-[var(--line)] bg-[var(--paper)] p-3 xl:block">
-          {preview ? (
-            <PreviewPane item={preview} text={previewText} />
-          ) : (
-            <p className="text-[13px] leading-6 text-[var(--muted)]">点一份资料，右边预览。</p>
-          )}
+        <aside className="hidden min-h-0 flex-col xl:flex">
+          <div className="border-b border-[var(--line)] px-3 py-2 text-[12px] text-[var(--muted)]">预览</div>
+          <div className="min-h-0 flex-1 overflow-auto p-3">
+            {preview ? (
+              <PreviewPane item={preview} text={previewText} />
+            ) : (
+              <p className="pt-8 text-center text-[13px] leading-6 text-[var(--muted)]">点一份资料，这里预览。</p>
+            )}
+          </div>
         </aside>
       </div>
 
@@ -381,12 +414,54 @@ export function KbPage() {
         </div>
       )}
 
+      {manageLib ? (
+        <Modal title="管理知识库" onClose={() => setManageLib(false)}>
+          <p className="mb-2 text-[13px] text-[var(--muted)]">当前：{library?.name || "无"}</p>
+          <input className={`${inputClass} w-full`} placeholder="新库名 / 改名" value={libName} onChange={(e) => setLibName(e.target.value)} />
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              type="button"
+              className={btnClass}
+              disabled={busy}
+              onClick={() => {
+                onCreateLibrary();
+                setManageLib(false);
+              }}
+            >
+              新建库
+            </button>
+            <button
+              type="button"
+              className={btnClass}
+              disabled={busy || !library}
+              onClick={() => {
+                onRenameLibrary();
+                setManageLib(false);
+              }}
+            >
+              改库名
+            </button>
+            <button
+              type="button"
+              className={btnClass}
+              disabled={busy || !library}
+              onClick={() => {
+                setManageLib(false);
+                setAskDeleteLib(true);
+              }}
+            >
+              删库
+            </button>
+          </div>
+        </Modal>
+      ) : null}
+
       {renameFolder ? (
         <Modal title="重命名文件夹" onClose={() => setRenameFolder(null)}>
           <input className={`${inputClass} w-full`} value={renameFolderTo} onChange={(e) => setRenameFolderTo(e.target.value)} />
           <button
             type="button"
-            className="mt-3"
+            className={`${btnClass} mt-3`}
             disabled={busy}
             onClick={() =>
               run(async () => {
@@ -409,7 +484,7 @@ export function KbPage() {
           <input className={`${inputClass} w-full`} value={editTags} onChange={(e) => setEditTags(e.target.value)} placeholder="逗号分隔" />
           <button
             type="button"
-            className="mt-3"
+            className={`${btnClass} mt-3`}
             disabled={busy}
             onClick={() =>
               run(async () => {
@@ -521,7 +596,7 @@ function FolderTree({
         <div key={item.id}>
           <button
             type="button"
-            className={`block w-full truncate px-2 py-1 text-left text-[13px] ${currentId === item.id ? "bg-[var(--bg)]" : ""}`}
+            className={`block w-full truncate rounded-md px-2 py-1.5 text-left text-[13px] ${currentId === item.id ? "bg-[var(--bg)]" : "hover:bg-[var(--hover)]"}`}
             style={{ paddingLeft: 8 + depth * 12 }}
             onClick={() => onOpen(item.id)}
           >
