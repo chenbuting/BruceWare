@@ -40,6 +40,48 @@ function pickDefaultSource(sources: FilesSource[]) {
   return sources.find((item) => item.ready)?.id || sources.find((item) => item.configured)?.id || "";
 }
 
+function itemMeta(item: FilesEntry, searching: boolean) {
+  const base = item.kind === "dir" ? "文件夹" : formatSize(item.size);
+  return searching ? `${base} · ${item.path}` : base;
+}
+
+/** 每项上的操作，格子和列表共用 */
+function FileItemActions({
+  item,
+  busy,
+  onDownload,
+  onRename,
+  onMove,
+  onDelete,
+}: {
+  item: FilesEntry;
+  busy: boolean;
+  onDownload: () => void;
+  onRename: () => void;
+  onMove: () => void;
+  onDelete: () => void;
+}) {
+  const btn = "disabled:opacity-50";
+  return (
+    <div className="flex flex-wrap gap-x-2 gap-y-1 text-[12px] text-[var(--muted)]">
+      {item.kind === "file" ? (
+        <button type="button" className={btn} disabled={busy} onClick={onDownload}>
+          下载
+        </button>
+      ) : null}
+      <button type="button" className={btn} disabled={busy} onClick={onRename}>
+        重命名
+      </button>
+      <button type="button" className={btn} disabled={busy} onClick={onMove}>
+        移动
+      </button>
+      <button type="button" className={btn} disabled={busy} onClick={onDelete}>
+        删除
+      </button>
+    </div>
+  );
+}
+
 /** 文件柜：本机和服务器上的文件夹可以同时用 */
 export function FilesPage() {
   const [status, setStatus] = useState<FilesStatus | null>(null);
@@ -59,6 +101,7 @@ export function FilesPage() {
   const [ask, setAsk] = useState<FilesEntry | null>(null);
   const [preview, setPreview] = useState<FilesEntry | null>(null);
   const [previewText, setPreviewText] = useState("");
+  const [view, setView] = useState<"grid" | "list">("grid");
   const uploadRef = useRef<HTMLInputElement>(null);
   const location = useLocation();
 
@@ -220,128 +263,163 @@ export function FilesPage() {
       {hint ? <p className="mb-4 text-[var(--ok)]">{hint}</p> : null}
 
       <Card className="mb-4 px-5 py-4">
-        <div className="mb-3 flex flex-wrap gap-2">
-          {sources.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className={`border px-3 py-1.5 text-[13px] ${source === item.id ? "border-[var(--text)] bg-[var(--paper)]" : "border-[var(--line)] bg-[var(--paper)] text-[var(--muted)]"}`}
-              disabled={busy}
-              onClick={() => switchSource(item.id)}
-            >
-              {item.label}
-              {item.configured ? "" : "（未设置）"}
-            </button>
-          ))}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap gap-2">
+            {sources.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className={`border px-3 py-1.5 text-[13px] ${source === item.id ? "border-[var(--text)] bg-[var(--paper)]" : "border-[var(--line)] bg-[var(--paper)] text-[var(--muted)]"}`}
+                disabled={busy}
+                onClick={() => switchSource(item.id)}
+              >
+                {item.label}
+                {item.configured ? "" : "（未设置）"}
+              </button>
+            ))}
+          </div>
+          {current?.ready ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                className={`${inputClass} w-44`}
+                placeholder="按文件名搜索"
+                value={query}
+                disabled={busy}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void onSearch();
+                }}
+              />
+              <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px] disabled:opacity-50" disabled={busy} onClick={() => void onSearch()}>
+                搜索
+              </button>
+              {searching ? (
+                <button
+                  type="button"
+                  className="text-[13px] text-[var(--muted)]"
+                  onClick={() => {
+                    setHits(null);
+                    setQuery("");
+                    setHint("");
+                  }}
+                >
+                  取消搜索
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className={`border px-3 py-1.5 text-[13px] ${view === "grid" ? "border-[var(--text)]" : "border-[var(--line)] text-[var(--muted)]"}`}
+                onClick={() => setView("grid")}
+              >
+                格子
+              </button>
+              <button
+                type="button"
+                className={`border px-3 py-1.5 text-[13px] ${view === "list" ? "border-[var(--text)]" : "border-[var(--line)] text-[var(--muted)]"}`}
+                onClick={() => setView("list")}
+              >
+                列表
+              </button>
+            </div>
+          ) : null}
         </div>
         {!current?.ready ? (
-          <p className="mb-3 text-[13px] leading-6 text-[var(--muted)]">
+          <p className="mt-3 text-[13px] leading-6 text-[var(--muted)]">
             {current?.message || "这边还不能用。"}
             <Link to="/settings" className="ml-2 text-[var(--text)]">
               去设置
             </Link>
           </p>
-        ) : null}
-        {current?.ready ? (
-        <div className="flex flex-wrap items-center gap-2 text-[13px]">
-          {(list?.crumbs || []).map((item, index) => (
-            <span key={`${item.path}-${item.name}`} className="flex items-center gap-2">
-              {index > 0 ? <span className="text-[var(--muted)]">/</span> : null}
-              <button type="button" className="text-[var(--text)]" disabled={busy} onClick={() => void openDir(item.path)}>
-                {item.name}
-              </button>
-            </span>
-          ))}
-        </div>
-        ) : null}
-        {current?.ready ? <p className="mt-2 text-[12px] text-[var(--muted)]">{current.root}</p> : null}
-        {current?.ready ? (
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <input
-            className={`${inputClass} w-48`}
-            placeholder="按文件名搜索"
-            value={query}
-            disabled={busy}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void onSearch();
-            }}
-          />
-          <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px] disabled:opacity-50" disabled={busy} onClick={() => void onSearch()}>
-            搜索
-          </button>
-          {searching ? (
-            <button
-              type="button"
-              className="text-[13px] text-[var(--muted)]"
-              onClick={() => {
-                setHits(null);
-                setQuery("");
-                setHint("");
-              }}
-            >
-              取消搜索
-            </button>
-          ) : null}
-          <input className={`${inputClass} w-36`} placeholder="新文件夹名" value={folderName} disabled={busy} onChange={(e) => setFolderName(e.target.value)} />
-          <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px] disabled:opacity-50" disabled={busy} onClick={() => void onMkdir()}>
-            新建文件夹
-          </button>
-          <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px] disabled:opacity-50" disabled={busy} onClick={() => uploadRef.current?.click()}>
-            上传
-          </button>
-          <input ref={uploadRef} type="file" multiple className="hidden" onChange={(e) => void onUpload(e.target.files)} />
-        </div>
-        ) : null}
+        ) : (
+          <>
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex min-w-0 flex-wrap items-center gap-2 text-[13px]">
+                {(list?.crumbs || []).map((item, index) => (
+                  <span key={`${item.path}-${item.name}`} className="flex items-center gap-2">
+                    {index > 0 ? <span className="text-[var(--muted)]">/</span> : null}
+                    <button type="button" className="text-[var(--text)]" disabled={busy} onClick={() => void openDir(item.path)}>
+                      {item.name}
+                    </button>
+                  </span>
+                ))}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <input className={`${inputClass} w-36`} placeholder="新文件夹名" value={folderName} disabled={busy} onChange={(e) => setFolderName(e.target.value)} />
+                <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px] disabled:opacity-50" disabled={busy} onClick={() => void onMkdir()}>
+                  新建文件夹
+                </button>
+                <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px] disabled:opacity-50" disabled={busy} onClick={() => uploadRef.current?.click()}>
+                  上传
+                </button>
+                <input ref={uploadRef} type="file" multiple className="hidden" onChange={(e) => void onUpload(e.target.files)} />
+              </div>
+            </div>
+            <p className="mt-2 text-[12px] text-[var(--muted)]">{current.root}</p>
+          </>
+        )}
       </Card>
 
       {current?.ready && shown.length === 0 ? (
         <p className="text-[13px] text-[var(--muted)]">{searching ? "没有找到。" : "这个文件夹是空的。可以上传或新建文件夹。"}</p>
-      ) : current?.ready ? (
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
+      ) : current?.ready && view === "list" ? (
+        <div className="divide-y divide-[var(--line)] border border-[var(--line)]">
           {shown.map((item) => {
             const { Icon, color } = itemIcon(item);
             return (
-              <div key={item.path} className="group rounded-md border border-transparent px-2 py-3 hover:border-[var(--line)] hover:bg-[var(--paper)]">
+              <div key={item.path} className="flex flex-wrap items-center gap-3 px-3 py-2 hover:bg-[var(--paper)]">
+                <button type="button" className="flex min-w-0 flex-1 items-center gap-3 text-left" onClick={() => clickItem(item)}>
+                  <Icon className={`h-5 w-5 shrink-0 ${color}`} />
+                  <span className="min-w-0 flex-1 break-all text-[13px]" title={item.name}>
+                    {item.name}
+                  </span>
+                  <span className="shrink-0 text-[12px] text-[var(--muted)]">{itemMeta(item, searching)}</span>
+                </button>
+                <FileItemActions
+                  item={item}
+                  busy={busy}
+                  onDownload={() => void downloadFilesEntry(item.path, item.name, source).catch((err: Error) => setError(err.message))}
+                  onRename={() => {
+                    setRenameFrom(item);
+                    setRenameTo(item.name);
+                  }}
+                  onMove={() => {
+                    setMoveFrom(item);
+                    setMoveTo(path);
+                  }}
+                  onDelete={() => setAsk(item)}
+                />
+              </div>
+            );
+          })}
+        </div>
+      ) : current?.ready ? (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
+          {shown.map((item) => {
+            const { Icon, color } = itemIcon(item);
+            return (
+              <div key={item.path} className="rounded-md border border-[var(--line)] bg-[var(--paper)] px-3 py-3">
                 <button type="button" className="flex w-full flex-col items-center text-center" onClick={() => clickItem(item)}>
-                  <Icon className={`h-12 w-12 ${color}`} />
-                  <div className="mt-2 w-full truncate text-[13px]" title={item.name}>
+                  <Icon className={`h-10 w-10 ${color}`} />
+                  <div className="mt-2 line-clamp-2 w-full break-all text-[13px] leading-5" title={item.name}>
                     {item.name}
                   </div>
-                  <div className="mt-1 w-full truncate text-[12px] text-[var(--muted)]">
-                    {item.kind === "dir" ? "文件夹" : formatSize(item.size)}
-                    {searching ? ` · ${item.path}` : ""}
-                  </div>
+                  <div className="mt-1 w-full truncate text-[12px] text-[var(--muted)]">{itemMeta(item, searching)}</div>
                 </button>
-                <div className="mt-2 flex flex-wrap justify-center gap-2 text-[12px] text-[var(--muted)] opacity-0 group-hover:opacity-100">
-                  {item.kind === "file" ? (
-                    <button type="button" disabled={busy} onClick={() => void downloadFilesEntry(item.path, item.name, source).catch((err: Error) => setError(err.message))}>
-                      下载
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => {
+                <div className="mt-2 flex justify-center">
+                  <FileItemActions
+                    item={item}
+                    busy={busy}
+                    onDownload={() => void downloadFilesEntry(item.path, item.name, source).catch((err: Error) => setError(err.message))}
+                    onRename={() => {
                       setRenameFrom(item);
                       setRenameTo(item.name);
                     }}
-                  >
-                    重命名
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => {
+                    onMove={() => {
                       setMoveFrom(item);
                       setMoveTo(path);
                     }}
-                  >
-                    移动
-                  </button>
-                  <button type="button" disabled={busy} onClick={() => setAsk(item)}>
-                    删除
-                  </button>
+                    onDelete={() => setAsk(item)}
+                  />
                 </div>
               </div>
             );
