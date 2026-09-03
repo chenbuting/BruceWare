@@ -1,7 +1,7 @@
 id: portal
 name: 网站入口
 kind: app
-description: 收藏常用网站
+description: 收藏常用网站，可分类、可搜索
 version: 0.1.0
 web:
   route_prefix: /m/portal

@@ -201,14 +201,14 @@ export function fetchPortalLinks() {
   return request<{ items: PortalLink[] }>("/api/v1/portal/links");
 }
 
-export function createPortalLink(payload: { title: string; url: string; remark: string }) {
+export function createPortalLink(payload: { title: string; url: string; remark: string; category: string }) {
   return request<PortalLink>("/api/v1/portal/links", {
     method: "POST",
     body: JSON.stringify(payload),
   });
 }
 
-export function updatePortalLink(id: number, payload: { title: string; url: string; remark: string }) {
+export function updatePortalLink(id: number, payload: { title: string; url: string; remark: string; category: string }) {
   return request<PortalLink>(`/api/v1/portal/links/${id}`, {
     method: "PUT",
     body: JSON.stringify(payload),

@@ -6,7 +6,11 @@ import { Modal } from "@/components/Modal";
 
 const inputClass = "w-full border border-[var(--line)] bg-[var(--paper)] px-2 py-1.5";
 
-const emptyForm = { title: "", url: "", remark: "" };
+const emptyForm = { title: "", url: "", remark: "", category: "" };
+
+function categoryLabel(value: string) {
+  return (value || "").trim() || "未分类";
+}
 
 function hostOf(url: string) {
   try {
@@ -26,6 +30,8 @@ export function PortalPage() {
   const [notice, setNotice] = useState("");
   const [formError, setFormError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("");
 
   const showForm = adding || editingId !== null;
 
@@ -83,7 +89,7 @@ export function PortalPage() {
     setFormError("");
     setAdding(false);
     setEditingId(item.id);
-    setForm({ title: item.title, url: item.url, remark: item.remark });
+    setForm({ title: item.title, url: item.url, remark: item.remark, category: item.category || "" });
   }
 
   function startAdd() {
@@ -100,25 +106,65 @@ export function PortalPage() {
     setFormError("");
   }
 
+  const categories = Array.from(new Set(items.map((item) => categoryLabel(item.category)))).sort((a, b) => a.localeCompare(b, "zh"));
+  const keyword = query.trim().toLowerCase();
+  const shown = items.filter((item) => {
+    if (category && categoryLabel(item.category) !== category) return false;
+    if (!keyword) return true;
+    const hay = [item.title, item.url, item.remark, item.category, hostOf(item.url)].join(" ").toLowerCase();
+    return hay.includes(keyword);
+  });
+
   return (
     <>
-      <div className="mb-4 flex justify-end">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <input
+          className={`${inputClass} max-w-xs`}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="搜索名称、网址、分类"
+        />
         <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px]" onClick={startAdd}>
           添加
         </button>
       </div>
 
+      {items.length > 0 ? (
+        <div className="mb-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            className={`border px-3 py-1.5 text-[13px] ${category === "" ? "border-[var(--text)]" : "border-[var(--line)] text-[var(--muted)]"}`}
+            onClick={() => setCategory("")}
+          >
+            全部
+          </button>
+          {categories.map((name) => (
+            <button
+              key={name}
+              type="button"
+              className={`border px-3 py-1.5 text-[13px] ${category === name ? "border-[var(--text)]" : "border-[var(--line)] text-[var(--muted)]"}`}
+              onClick={() => setCategory(name)}
+            >
+              {name}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
       {items.length === 0 ? (
         <p className="text-[13px] leading-6 text-[var(--muted)]">还没有网站。点右上角添加。</p>
+      ) : shown.length === 0 ? (
+        <p className="text-[13px] leading-6 text-[var(--muted)]">没有符合的收藏。</p>
       ) : (
         <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {items.map((item) => {
+          {shown.map((item) => {
             const host = hostOf(item.url);
             return (
               <li key={item.id}>
                 <div className="group card relative px-5 py-5">
                   <a href={item.url} target="_blank" rel="noreferrer" className="block pr-16">
                     <div className="text-[15px] font-medium">{item.title}</div>
+                    <div className="mt-1 text-[12px] text-[var(--muted)]">{categoryLabel(item.category)}</div>
                     <div className="mt-1.5 text-[13px] leading-6 text-[var(--muted)]">{item.remark || host || item.url}</div>
                   </a>
                   <div className="absolute right-4 top-5 flex gap-3 text-[13px] text-[var(--muted)] opacity-50 group-hover:opacity-100">
@@ -169,6 +215,15 @@ export function PortalPage() {
                 onChange={(e) => setForm({ ...form, url: e.target.value })}
                 placeholder="https://"
                 required
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-[var(--muted)]">分类（可选）</span>
+              <input
+                className={inputClass}
+                value={form.category}
+                onChange={(e) => setForm({ ...form, category: e.target.value })}
+                placeholder="比如 工作、常用"
               />
             </label>
             <label className="block">

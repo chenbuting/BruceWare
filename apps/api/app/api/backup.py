@@ -58,6 +58,7 @@ def _dump(db: Session) -> dict[str, Any]:
                 "title": row.title or "",
                 "url": row.url or "",
                 "remark": row.remark or "",
+                "category": getattr(row, "category", "") or "",
                 "created_at": _iso(row.created_at),
             }
             for row in links
@@ -152,6 +153,7 @@ def _insert_replace(db: Session, payload: dict[str, Any]) -> dict[str, int]:
             "title": str(item.get("title") or "")[:200] or "未命名",
             "url": str(item.get("url") or "")[:1000],
             "remark": str(item.get("remark") or "")[:500],
+            "category": str(item.get("category") or "")[:80],
             "created_at": _dt(item.get("created_at")),
         }
         if item.get("id"):
@@ -208,6 +210,7 @@ def _insert_merge(db: Session, payload: dict[str, Any]) -> dict[str, int]:
             title=str(item.get("title") or "")[:200] or "未命名",
             url=str(item.get("url") or "")[:1000],
             remark=str(item.get("remark") or "")[:500],
+            category=str(item.get("category") or "")[:80],
             created_at=_dt(item.get("created_at")),
         )
         db.add(row)

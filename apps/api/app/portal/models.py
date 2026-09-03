@@ -16,4 +16,5 @@ class PortalLink(Base):
     title = Column(String(200), nullable=False)
     url = Column(String(1000), nullable=False)
     remark = Column(String(500), nullable=False, default="")
+    category = Column(String(80), nullable=False, default="")
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)

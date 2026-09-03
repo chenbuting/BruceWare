@@ -195,6 +195,7 @@ export type PortalLink = {
   title: string;
   url: string;
   remark: string;
+  category: string;
   created_at: string;
 };
 

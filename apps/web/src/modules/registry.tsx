@@ -30,7 +30,7 @@ export const MODULE_PAGES: Record<string, ModulePageEntry> = {
   },
   portal: {
     title: "网站入口",
-    desc: "收藏常用网站，点名称在新标签打开。",
+    desc: "收藏常用网站，可分类、可搜索。点名称在新标签打开。",
     wide: true,
     page: PortalPage,
   },

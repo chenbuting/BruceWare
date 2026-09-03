@@ -16,6 +16,7 @@ class LinkIn(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     url: str = Field(min_length=1, max_length=1000)
     remark: str = Field(default="", max_length=500)
+    category: str = Field(default="", max_length=80)
 
 
 def _clean_url(url: str) -> str | None:
@@ -31,6 +32,7 @@ def _to_dict(row: PortalLink) -> dict:
         "title": row.title,
         "url": row.url,
         "remark": row.remark or "",
+        "category": getattr(row, "category", "") or "",
         "created_at": row.created_at.isoformat() if row.created_at else "",
     }
 
@@ -49,7 +51,7 @@ def create_link(body: LinkIn, db: Session = Depends(get_db)):
     title = body.title.strip()
     if not title:
         return fail("请填写名称")
-    row = PortalLink(title=title, url=url, remark=body.remark.strip())
+    row = PortalLink(title=title, url=url, remark=body.remark.strip(), category=body.category.strip())
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -70,6 +72,7 @@ def update_link(link_id: int, body: LinkIn, db: Session = Depends(get_db)):
     row.title = title
     row.url = url
     row.remark = body.remark.strip()
+    row.category = body.category.strip()
     db.commit()
     db.refresh(row)
     return ok(_to_dict(row))
