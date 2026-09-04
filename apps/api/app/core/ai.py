@@ -80,6 +80,8 @@ def load_llm() -> dict[str, str]:
         "image_base_url": str(stored.get("image_base_url") or "").strip(),
         "image_api_key": str(stored.get("image_api_key") or "").strip(),
         "image_model": str(stored.get("image_model") or "gpt-image-1").strip() or "gpt-image-1",
+        "embedding_model": str(stored.get("embedding_model") or "text-embedding-3-small").strip()
+        or "text-embedding-3-small",
     }
 
 
@@ -102,6 +104,49 @@ def _image_auth() -> tuple[str, str, str]:
     if not key:
         raise ValueError("请先在设置里填写生图 Key，或填写对话 Key")
     return cfg.get("image_base_url") or cfg["base_url"], key, cfg.get("image_model") or "gpt-image-1"
+
+
+def _embeddings_url(base_url: str) -> str:
+    url = base_url.rstrip("/")
+    if url.endswith("/embeddings"):
+        return url
+    if url.endswith("/chat/completions"):
+        url = url[: -len("/chat/completions")]
+    if url.endswith("/v1"):
+        return f"{url}/embeddings"
+    return f"{url}/v1/embeddings"
+
+
+def embedding_profile() -> str:
+    """当前向量模型名，搬家时对得上才不用重算。"""
+
+    return load_llm().get("embedding_model") or "text-embedding-3-small"
+
+
+def embed_texts(texts: list[str], timeout: float = 60) -> list[list[float]]:
+    """把几段文字变成向量。接口不支持就抛错，调用方退回关键词。"""
+
+    cleaned = [item.strip() for item in texts if (item or "").strip()]
+    if not cleaned:
+        return []
+    cfg = load_llm()
+    if not cfg["api_key"]:
+        raise ValueError("请先在设置里填写 AI Key")
+    url = _embeddings_url(cfg["base_url"])
+    payload = {"model": cfg.get("embedding_model") or "text-embedding-3-small", "input": cleaned}
+    headers = {
+        "Authorization": f"Bearer {cfg['api_key']}",
+        "Content-Type": "application/json",
+    }
+    res = _post(url, timeout=timeout, json=payload, headers=headers)
+    if res.status_code >= 400:
+        raise ValueError(f"向量接口返回 {res.status_code}：{res.text[:300]}")
+    data = res.json()
+    try:
+        items = sorted(data["data"], key=lambda item: int(item.get("index") or 0))
+        return [list(item["embedding"]) for item in items]
+    except Exception as exc:
+        raise ValueError("向量接口返回格式不对") from exc
 
 
 def _completions_url(base_url: str) -> str:

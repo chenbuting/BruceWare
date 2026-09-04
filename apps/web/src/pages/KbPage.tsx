@@ -406,6 +406,7 @@ export function KbPage() {
                   ))}
                 </p>
               ) : null}
+              {askResult.used_vector ? <p className="mt-2 text-[12px] text-[var(--muted)]">本次还用了向量检索，换说法也能对上。</p> : null}
               {askResult.wiki_update_hint ? <p className="mt-2 text-[12px] text-[var(--muted)]">{askResult.wiki_update_hint}</p> : null}
             </div>
           ) : null}

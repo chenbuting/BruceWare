@@ -157,6 +157,7 @@ def save_llm(form: LlmForm):
         "image_model": form.image_model.strip() or "gpt-image-1",
         "api_key": key,
         "image_api_key": image_key,
+        "embedding_model": str(old.get("embedding_model") or "text-embedding-3-small"),
     }
     save_local_settings(settings.repo_root, existing)
     return ok(_settings_payload())

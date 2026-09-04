@@ -269,6 +269,7 @@ export type KbAskResult = {
   used_llm: boolean;
   evidence_mode?: KbEvidenceMode;
   wiki_update_hint?: string;
+  used_vector?: boolean;
 };
 
 export type KbDocument = {

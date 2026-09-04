@@ -55,3 +55,17 @@ class KbDocument(Base):
     search_text = Column(Text, nullable=False, default="")
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class KbChunk(Base):
+    """一份资料切出来的一段，用来做向量检索。"""
+
+    __tablename__ = "kb_chunks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    library_id = Column(Integer, nullable=False, index=True)
+    document_id = Column(Integer, nullable=False, index=True)
+    chunk_index = Column(Integer, nullable=False, default=0)
+    text = Column(Text, nullable=False, default="")
+    embedding = Column(Text, nullable=False, default="")
+    profile = Column(String(150), nullable=False, default="")

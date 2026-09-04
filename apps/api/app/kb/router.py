@@ -13,9 +13,10 @@ from app.core.ai import chat_complete, llm_public
 from app.core.response import fail, ok
 from app.db.session import get_db
 from app.kb.extract import extract_search_text
-from app.kb.models import KbDocument, KbFolder, KbLibrary
+from app.kb.models import KbChunk, KbDocument, KbFolder, KbLibrary
 from app.kb.policy import dump_policy, parse_policy, resolve_mode
-from app.kb.search import folder_scope, rank_documents, snippet_of
+from app.kb.search import folder_scope, snippet_of
+from app.kb.vector import clear_chunks, hybrid_rank, index_document, score_chunks
 from app.kb.wiki import ASK_WIKI_LIMIT, clip_summary, dump_wiki, learn_hint, parse_wiki, wiki_item
 from app.kb.store import (
     file_digest,
@@ -241,6 +242,7 @@ def delete_library(library_id: int, db: Session = Depends(get_db)):
     row = _get_library(db, library_id)
     if row is None:
         return fail("这个库不存在", 404)
+    db.execute(KbChunk.__table__.delete().where(KbChunk.library_id == library_id))
     db.execute(KbDocument.__table__.delete().where(KbDocument.library_id == library_id))
     db.execute(KbFolder.__table__.delete().where(KbFolder.library_id == library_id))
     db.delete(row)
@@ -396,6 +398,7 @@ async def upload_document(
     rel_path = f"{row.id}_{file_name}"
     write_bytes(library_id, rel_path, data)
     row.rel_path = rel_path
+    index_document(db, row)
     db.commit()
     db.refresh(row)
     return ok(_doc_dict(row))
@@ -468,7 +471,7 @@ def _ask_style(mode: str, rule: str) -> str:
 
 @router.post("/kb/libraries/{library_id}/ask")
 def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
-    """当前库关键词检索，再按原文回答并带出处。"""
+    """当前库关键词加向量检索，再按原文回答并带出处。"""
 
     lib = _get_library(db, library_id)
     if lib is None:
@@ -488,13 +491,16 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
         rows = [row for row in rows if row.folder_id in scope]
     for row in rows:
         _fill_search_text(row)
+        index_document(db, row)
     db.commit()
-    ranked = rank_documents(question, rows)
+    chunk_best = score_chunks(db, library_id, question, {row.id for row in rows})
+    ranked_full = hybrid_rank(question, rows, chunk_best)
+    ranked = [(row, score) for row, score, _snippet in ranked_full]
+    used_vector = bool(chunk_best)
     citations = []
     blocks = []
     use_notes = policy["wiki_enabled"] and mode == "loose"
-    for index, (row, score) in enumerate(ranked, start=1):
-        snippet = snippet_of(question, row)
+    for index, (row, score, snippet) in enumerate(ranked_full, start=1):
         citations.append(
             {
                 "id": row.id,
@@ -502,7 +508,7 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
                 "score": round(score, 3),
             }
         )
-        block = f"【资料{index}】{row.title or row.file_name}\n{snippet}"
+        block = f"【资料{index}】{row.title or row.file_name}\n{snippet or snippet_of(question, row)}"
         if use_notes:
             note = parse_wiki(row)
             if note.summary:
@@ -515,6 +521,7 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
         "used_llm": False,
         "evidence_mode": mode,
         "wiki_update_hint": "",
+        "used_vector": False,
     }
     if not ranked:
         return ok(empty)
@@ -526,6 +533,7 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
                 "used_llm": False,
                 "evidence_mode": mode,
                 "wiki_update_hint": "",
+                "used_vector": used_vector,
             }
         )
     prompt = (
@@ -552,6 +560,7 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
             "used_llm": True,
             "evidence_mode": mode,
             "wiki_update_hint": hint,
+            "used_vector": used_vector,
         }
     )
 
@@ -665,6 +674,7 @@ def delete_document(doc_id: int, db: Session = Depends(get_db)):
         return fail("这份资料不存在", 404)
     library_id = row.library_id
     rel_path = row.rel_path
+    clear_chunks(db, row.id)
     db.delete(row)
     db.commit()
     remove_file(library_id, rel_path)

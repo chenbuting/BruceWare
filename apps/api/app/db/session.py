@@ -54,7 +54,7 @@ def connect_database(url: str) -> None:
     from app.portal.models import PortalLink  # noqa: F401
     from app.resume.models import ResumeDoc, ResumeInterview, ResumeInterviewMessage  # noqa: F401
     from app.wardrobe.models import WardrobeItem, WardrobeLook, WardrobeStyle  # noqa: F401
-    from app.kb.models import KbDocument, KbFolder, KbLibrary  # noqa: F401
+    from app.kb.models import KbChunk, KbDocument, KbFolder, KbLibrary  # noqa: F401
 
     Base.metadata.create_all(bind=_Db.engine)
     _ensure_resume_columns(_Db.engine)
