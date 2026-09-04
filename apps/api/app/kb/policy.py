@@ -12,7 +12,7 @@ MODES = {"strict", "loose"}
 def parse_policy(row: KbLibrary) -> dict:
     """读库规则。缺省：关 Wiki、严格出处、没有额外规则。"""
 
-    default = {"wiki_enabled": False, "wiki_learn": False, "evidence_mode": "strict", "rule": ""}
+    default = {"wiki_enabled": False, "wiki_learn": False, "vision_enabled": False, "evidence_mode": "strict", "rule": ""}
     raw = (row.policy_json or "").strip()
     if not raw:
         return default
@@ -29,13 +29,20 @@ def parse_policy(row: KbLibrary) -> dict:
     return {
         "wiki_enabled": wiki_enabled,
         "wiki_learn": wiki_enabled and bool(data.get("wiki_learn")),
+        "vision_enabled": bool(data.get("vision_enabled")),
         "evidence_mode": mode,
         "rule": str(data.get("rule") or "").strip()[:500],
     }
 
 
-def dump_policy(wiki_enabled: bool, evidence_mode: str, rule: str, wiki_learn: bool = False) -> str:
-    """写成 policy_json。Wiki 关着时不跟着提问更新。"""
+def dump_policy(
+    wiki_enabled: bool,
+    evidence_mode: str,
+    rule: str,
+    wiki_learn: bool = False,
+    vision_enabled: bool = False,
+) -> str:
+    """写成 policy_json。Wiki 关着时不跟着提问更新。识图默认关。"""
 
     mode = evidence_mode if evidence_mode in MODES else "strict"
     enabled = bool(wiki_enabled)
@@ -43,6 +50,7 @@ def dump_policy(wiki_enabled: bool, evidence_mode: str, rule: str, wiki_learn: b
         {
             "wiki_enabled": enabled,
             "wiki_learn": enabled and bool(wiki_learn),
+            "vision_enabled": bool(vision_enabled),
             "evidence_mode": mode,
             "rule": (rule or "").strip()[:500],
         },

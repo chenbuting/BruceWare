@@ -83,3 +83,4 @@ class KbAsset(Base):
     page = Column(Integer, nullable=False, default=0)
     sort_order = Column(Integer, nullable=False, default=0)
     alt_text = Column(String(200), nullable=False, default="")
+    ocr_text = Column(Text, nullable=False, default="")

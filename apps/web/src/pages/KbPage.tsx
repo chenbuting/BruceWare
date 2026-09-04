@@ -11,6 +11,7 @@ import {
   deleteKbLibrary,
   deleteKbWiki,
   fetchKbDocument,
+  fetchKbDocumentAssets,
   fetchKbDocumentText,
   fetchKbDocuments,
   fetchKbFolders,
@@ -20,13 +21,14 @@ import {
   kbAssetFileUrl,
   kbDocumentFileUrl,
   renameKbFolder,
+  saveKbAssetOcr,
   saveKbWiki,
   updateKbDocument,
   updateKbLibrary,
   updateKbLibraryPolicy,
   uploadKbDocument,
 } from "@/api/client";
-import type { KbAskResult, KbDocument, KbEvidenceMode, KbFolder, KbLibrary, KbWikiList } from "@/api/types";
+import type { KbAskResult, KbDocAsset, KbDocument, KbEvidenceMode, KbFolder, KbLibrary, KbWikiList } from "@/api/types";
 import { ConfirmModal, Modal } from "@/components/Modal";
 import { PdfPreview } from "@/components/PdfPreview";
 
@@ -98,6 +100,7 @@ export function KbPage() {
   const [askMode, setAskMode] = useState<"" | KbEvidenceMode>("");
   const [wikiEnabled, setWikiEnabled] = useState(false);
   const [wikiLearn, setWikiLearn] = useState(false);
+  const [visionEnabled, setVisionEnabled] = useState(false);
   const [libMode, setLibMode] = useState<KbEvidenceMode>("strict");
   const [libRule, setLibRule] = useState("");
   const [wikiList, setWikiList] = useState<KbWikiList | null>(null);
@@ -273,6 +276,7 @@ export function KbPage() {
     if (library) {
       setWikiEnabled(!!library.wiki_enabled);
       setWikiLearn(!!library.wiki_learn);
+      setVisionEnabled(!!library.vision_enabled);
       setLibMode(library.evidence_mode || "strict");
       setLibRule(library.rule || "");
     }
@@ -671,6 +675,15 @@ export function KbPage() {
               <br />
               关掉 Wiki：已有摘要还在，只是不能新写，提问也不用。改完请点下面的「保存规则」。
             </p>
+            <label className="mb-2 flex items-center gap-2 text-[13px]">
+              <input type="checkbox" checked={visionEnabled} onChange={(e) => setVisionEnabled(e.target.checked)} />
+              开启识图
+            </label>
+            <p className="mb-3 text-[12px] leading-5 text-[var(--muted)]">
+              开了才认图上的字，才能搜「营业执照」这类。默认关，费时间和 Key。
+              <br />
+              已抽出的图会在上传或下次提问时认，一次认几张，认不完下次继续。
+            </p>
             <div className="mb-2 flex flex-wrap items-center gap-2 text-[13px]">
               <span className="text-[var(--muted)]">回答风格</span>
               <select className={inputClass} value={libMode} onChange={(e) => setLibMode(e.target.value as KbEvidenceMode)}>
@@ -698,7 +711,7 @@ export function KbPage() {
               onClick={() =>
                 run(async () => {
                   if (!library) return;
-                  const row = await updateKbLibraryPolicy(library.id, wikiEnabled, libMode, libRule, wikiLearn);
+                  const row = await updateKbLibraryPolicy(library.id, wikiEnabled, libMode, libRule, wikiLearn, visionEnabled);
                   setLibraries((items) => items.map((item) => (item.id === row.id ? row : item)));
                   setHint("已保存库规则");
                 })
@@ -955,6 +968,65 @@ function FolderTree({
   );
 }
 
+/** 预览里看图上的字，认错了可以改。 */
+function AssetWords({ docId, onError }: { docId: number; onError: (message: string) => void }) {
+  const [items, setItems] = useState<KbDocAsset[]>([]);
+  const [drafts, setDrafts] = useState<Record<number, string>>({});
+  const [savingId, setSavingId] = useState<number | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    fetchKbDocumentAssets(docId)
+      .then((data) => {
+        if (!alive) return;
+        setItems(data.items);
+        setDrafts(Object.fromEntries(data.items.map((item) => [item.id, item.ocr_text])));
+      })
+      .catch((err: Error) => onError(err.message));
+    return () => {
+      alive = false;
+    };
+  }, [docId, onError]);
+
+  if (!items.length) return null;
+
+  function save(item: KbDocAsset) {
+    setSavingId(item.id);
+    saveKbAssetOcr(item.id, drafts[item.id] ?? "")
+      .then((row) => {
+        setItems((list) => list.map((one) => (one.id === row.id ? row : one)));
+        setDrafts((map) => ({ ...map, [row.id]: row.ocr_text }));
+      })
+      .catch((err: Error) => onError(err.message))
+      .finally(() => setSavingId(null));
+  }
+
+  return (
+    <div className="mt-4 border-t border-[var(--line)] pt-3">
+      <p className="mb-1 font-medium">图上的字</p>
+      <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">认错了可以改。保存后下次提问按改过的找。</p>
+      {items.map((item) => (
+        <div key={item.id} className="mb-3">
+          <button type="button" className="mb-1 block max-w-full text-left" title={item.alt}>
+            <img src={item.url || kbAssetFileUrl(item.id)} alt={item.alt} className="max-h-28 w-auto rounded border border-[var(--line)] object-contain" />
+          </button>
+          {item.alt ? <p className="mb-1 text-[12px] text-[var(--muted)]">{item.alt}</p> : null}
+          <textarea
+            className={`${inputClass} min-h-[4.5rem] w-full`}
+            value={drafts[item.id] ?? ""}
+            maxLength={2000}
+            onChange={(e) => setDrafts((map) => ({ ...map, [item.id]: e.target.value }))}
+            placeholder="图上的字，没有就留空"
+          />
+          <button type="button" className={`${btnClass} mt-1`} disabled={savingId === item.id} onClick={() => save(item)}>
+            {savingId === item.id ? "在存…" : "保存"}
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function PreviewPane({
   item,
   text,
@@ -997,6 +1069,8 @@ function PreviewPane({
       <a className="mt-3 inline-block text-[var(--muted)] underline" href={url} target="_blank" rel="noreferrer">
         打开 / 下载
       </a>
+
+      <AssetWords docId={item.id} onError={onError} />
 
       <div className="mt-4 border-t border-[var(--line)] pt-3">
         <p className="mb-1 font-medium">

@@ -9,8 +9,11 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.kb.extract import extract_search_text
 from app.kb.models import KbAsset, KbDocument
 from app.kb.store import abs_path, kind_of, remove_file, write_bytes
+
+OCR_SKIP = "-"
 
 _MAX_IMAGES = 20
 _MIN_SIDE = 80
@@ -218,3 +221,51 @@ def asset_dict(row: KbAsset) -> dict:
         "page": row.page or 0,
         "url": f"/api/v1/kb/assets/{row.id}/file",
     }
+
+
+def ocr_for_search(text: str) -> str:
+    """空的或失败标记不进检索。"""
+
+    value = (text or "").strip()
+    if not value or value == OCR_SKIP:
+        return ""
+    return value
+
+
+def ocr_for_edit(text: str) -> str:
+    """给预览改字用。失败标记显示成空。"""
+
+    return ocr_for_search(text)
+
+
+def asset_edit_dict(row: KbAsset) -> dict:
+    data = asset_dict(row)
+    data["ocr_text"] = ocr_for_edit(row.ocr_text or "")
+    return data
+
+
+def list_doc_assets(db: Session, document_id: int) -> list[KbAsset]:
+    return list(
+        db.scalars(
+            select(KbAsset).where(KbAsset.document_id == document_id).order_by(KbAsset.sort_order.asc(), KbAsset.id.asc())
+        ).all()
+    )
+
+
+def rebuild_search_text(db: Session, row: KbDocument) -> None:
+    """按原文 + 图名 + 识图文字重拼检索正文。"""
+
+    body = ""
+    try:
+        data = abs_path(row.library_id, row.rel_path).read_bytes()
+        body = extract_search_text(row.file_name, data)
+    except (ValueError, OSError):
+        body = ""
+    parts = [body]
+    for item in list_doc_assets(db, row.id):
+        if item.alt_text:
+            parts.append(item.alt_text)
+        extra = ocr_for_search(item.ocr_text or "")
+        if extra:
+            parts.append(extra)
+    row.search_text = " ".join(part for part in parts if part).strip()[:20000]

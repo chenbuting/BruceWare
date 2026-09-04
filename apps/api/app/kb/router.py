@@ -13,7 +13,19 @@ from app.core.ai import chat_complete, llm_public
 from app.core.response import fail, ok
 from app.db.session import get_db
 from app.kb.extract import extract_search_text
-from app.kb.assets import already_extracted, append_asset_alts, asset_dict, assets_for_docs, clear_assets, save_extracted_images
+from app.kb.assets import (
+    OCR_SKIP,
+    already_extracted,
+    append_asset_alts,
+    asset_dict,
+    asset_edit_dict,
+    assets_for_docs,
+    clear_assets,
+    list_doc_assets,
+    rebuild_search_text,
+    save_extracted_images,
+)
+from app.kb.vision import recognize_assets
 from app.kb.models import KbAsset, KbChunk, KbDocument, KbFolder, KbLibrary
 from app.kb.policy import dump_policy, parse_policy, resolve_mode
 from app.kb.search import folder_scope, snippet_of
@@ -41,12 +53,17 @@ class LibraryIn(BaseModel):
 class PolicyIn(BaseModel):
     wiki_enabled: bool = False
     wiki_learn: bool = False
+    vision_enabled: bool = False
     evidence_mode: str = "strict"
     rule: str = Field(default="", max_length=500)
 
 
 class WikiIn(BaseModel):
     summary: str = Field(default="", max_length=800)
+
+
+class AssetPatch(BaseModel):
+    ocr_text: str = Field(default="", max_length=2000)
 
 
 class FolderIn(BaseModel):
@@ -79,6 +96,7 @@ def _library_dict(row: KbLibrary) -> dict:
         "description": row.description or "",
         "wiki_enabled": policy["wiki_enabled"],
         "wiki_learn": policy["wiki_learn"],
+        "vision_enabled": policy["vision_enabled"],
         "evidence_mode": policy["evidence_mode"],
         "rule": policy["rule"],
         "created_at": _iso(row.created_at),
@@ -178,7 +196,7 @@ def update_library_policy(library_id: int, body: PolicyIn, db: Session = Depends
     if row is None:
         return fail("这个库不存在", 404)
     mode = body.evidence_mode if body.evidence_mode in {"strict", "loose"} else "strict"
-    row.policy_json = dump_policy(body.wiki_enabled, mode, body.rule, body.wiki_learn)
+    row.policy_json = dump_policy(body.wiki_enabled, mode, body.rule, body.wiki_learn, body.vision_enabled)
     db.commit()
     db.refresh(row)
     return ok(_library_dict(row))
@@ -366,7 +384,8 @@ async def upload_document(
     force: bool = Form(default=False),
     db: Session = Depends(get_db),
 ):
-    if _get_library(db, library_id) is None:
+    lib = _get_library(db, library_id)
+    if lib is None:
         return fail("这个库不存在", 404)
     if not _folder_in_library(db, library_id, folder_id):
         return fail("文件夹不在这个库里")
@@ -402,6 +421,8 @@ async def upload_document(
     row.rel_path = rel_path
     alts = save_extracted_images(db, row, data)
     append_asset_alts(row, alts)
+    if parse_policy(lib)["vision_enabled"]:
+        recognize_assets(db, row, 8)
     index_document(db, row)
     db.commit()
     db.refresh(row)
@@ -507,9 +528,12 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
     rows = list(db.scalars(stmt).all())
     if scope is not None:
         rows = [row for row in rows if row.folder_id in scope]
+    vision_left = 4 if policy["vision_enabled"] else 0
     for row in rows:
         _fill_search_text(row)
         _fill_assets(row, db)
+        if vision_left:
+            vision_left -= recognize_assets(db, row, vision_left)
         index_document(db, row)
     db.commit()
     chunk_best = score_chunks(db, library_id, question, {row.id for row in rows})
@@ -592,6 +616,38 @@ def get_document(doc_id: int, db: Session = Depends(get_db)):
     if row is None:
         return fail("这份资料不存在", 404)
     return ok(_doc_dict(row))
+
+
+@router.get("/kb/documents/{doc_id}/assets")
+def list_document_assets(doc_id: int, db: Session = Depends(get_db)):
+    """预览里看图、改识图文字。"""
+
+    row = db.get(KbDocument, doc_id)
+    if row is None:
+        return fail("这份资料不存在", 404)
+    _fill_assets(row, db)
+    db.commit()
+    return ok({"items": [asset_edit_dict(item) for item in list_doc_assets(db, row.id)]})
+
+
+@router.put("/kb/assets/{asset_id}")
+def update_asset(asset_id: int, body: AssetPatch, db: Session = Depends(get_db)):
+    """人工改正识图文字，并重拼检索。"""
+
+    item = db.get(KbAsset, asset_id)
+    if item is None:
+        return fail("这张图不存在", 404)
+    row = db.get(KbDocument, item.document_id)
+    if row is None:
+        return fail("这份资料不存在", 404)
+    text = body.ocr_text.strip()
+    item.ocr_text = text or OCR_SKIP
+    rebuild_search_text(db, row)
+    index_document(db, row)
+    row.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(item)
+    return ok(asset_edit_dict(item))
 
 
 def _save_wiki(row: KbDocument, summary: str, db: Session):

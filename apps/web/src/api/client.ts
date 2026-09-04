@@ -7,6 +7,7 @@ import type {
   FolderBrowse,
   InterviewSession,
   KbAskResult,
+  KbDocAsset,
   KbDocument,
   KbEvidenceMode,
   KbFolder,
@@ -521,10 +522,17 @@ export function updateKbLibraryPolicy(
   evidenceMode: KbEvidenceMode,
   rule: string,
   wikiLearn = false,
+  visionEnabled = false,
 ) {
   return request<KbLibrary>(`/api/v1/kb/libraries/${id}/policy`, {
     method: "PUT",
-    body: JSON.stringify({ wiki_enabled: wikiEnabled, wiki_learn: wikiLearn, evidence_mode: evidenceMode, rule }),
+    body: JSON.stringify({
+      wiki_enabled: wikiEnabled,
+      wiki_learn: wikiLearn,
+      vision_enabled: visionEnabled,
+      evidence_mode: evidenceMode,
+      rule,
+    }),
   });
 }
 
@@ -599,6 +607,17 @@ export function kbDocumentFileUrl(id: number) {
 
 export function kbAssetFileUrl(id: number) {
   return `/api/v1/kb/assets/${id}/file`;
+}
+
+export function fetchKbDocumentAssets(id: number) {
+  return request<{ items: KbDocAsset[] }>(`/api/v1/kb/documents/${id}/assets`);
+}
+
+export function saveKbAssetOcr(id: number, ocrText: string) {
+  return request<KbDocAsset>(`/api/v1/kb/assets/${id}`, {
+    method: "PUT",
+    body: JSON.stringify({ ocr_text: ocrText }),
+  });
 }
 
 export function fetchKbDocument(id: number) {

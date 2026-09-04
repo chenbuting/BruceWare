@@ -39,6 +39,7 @@ def _post(
     json: Any = None,
     data: Any = None,
     files: Any = None,
+    timeout_message: str | None = None,
 ) -> httpx.Response:
     last: Exception | None = None
     for verify in (_ssl_context(), False):
@@ -50,7 +51,7 @@ def _post(
                 last = exc
                 text = str(exc).lower()
                 if "timeout" in text or "timed out" in text:
-                    raise ValueError("AI 请求超时。照片太大或接口太慢，请换一张小一点的图再试。") from exc
+                    raise ValueError(timeout_message or "AI 请求超时。照片太大或接口太慢，请换一张小一点的图再试。") from exc
                 if not _is_ssl_break(exc) and attempt == 0:
                     break
                 time.sleep(0.8 * (attempt + 1))
@@ -138,7 +139,7 @@ def embed_texts(texts: list[str], timeout: float = 60) -> list[list[float]]:
         "Authorization": f"Bearer {cfg['api_key']}",
         "Content-Type": "application/json",
     }
-    res = _post(url, timeout=timeout, json=payload, headers=headers)
+    res = _post(url, timeout=timeout, json=payload, headers=headers, timeout_message="AI 请求超时，请稍后再试。")
     if res.status_code >= 400:
         raise ValueError(f"向量接口返回 {res.status_code}：{res.text[:300]}")
     data = res.json()
@@ -177,7 +178,7 @@ def chat_complete(messages: list[dict[str, Any]], timeout: float = 90) -> str:
         "Authorization": f"Bearer {cfg['api_key']}",
         "Content-Type": "application/json",
     }
-    res = _post(url, timeout=timeout, json=payload, headers=headers)
+    res = _post(url, timeout=timeout, json=payload, headers=headers, timeout_message="AI 请求超时，请稍后再试。")
     if res.status_code >= 400:
         text = res.text[:300]
         raise ValueError(f"AI 接口返回 {res.status_code}：{text}")

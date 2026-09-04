@@ -229,6 +229,7 @@ export type KbLibrary = {
   description: string;
   wiki_enabled: boolean;
   wiki_learn: boolean;
+  vision_enabled: boolean;
   evidence_mode: KbEvidenceMode;
   rule: string;
   created_at: string;
@@ -262,6 +263,14 @@ export type KbAskImage = {
   alt: string;
   page: number;
   url: string;
+};
+
+export type KbDocAsset = {
+  id: number;
+  alt: string;
+  page: number;
+  url: string;
+  ocr_text: string;
 };
 
 export type KbAskHit = {
