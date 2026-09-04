@@ -221,11 +221,32 @@ export type InterviewSession = {
   messages: InterviewMessage[];
 };
 
+export type KbEvidenceMode = "strict" | "loose";
+
 export type KbLibrary = {
   id: number;
   name: string;
   description: string;
+  wiki_enabled: boolean;
+  evidence_mode: KbEvidenceMode;
+  rule: string;
   created_at: string;
+};
+
+export type KbWikiItem = {
+  id: number;
+  title: string;
+  wiki_updated_at: string;
+  wiki_stale: boolean;
+};
+
+export type KbWikiList = {
+  items: KbWikiItem[];
+  total: number;
+  page: number;
+  page_size: number;
+  all_count: number;
+  stale_count: number;
 };
 
 export type KbFolder = {
@@ -245,6 +266,7 @@ export type KbAskResult = {
   answer: string;
   citations: KbAskHit[];
   used_llm: boolean;
+  evidence_mode?: KbEvidenceMode;
 };
 
 export type KbDocument = {
@@ -257,6 +279,10 @@ export type KbDocument = {
   kind: string;
   preview: string;
   parse_status: string;
+  has_wiki: boolean;
+  wiki_summary: string;
+  wiki_updated_at: string;
+  wiki_stale: boolean;
   created_at: string;
   updated_at: string;
 };

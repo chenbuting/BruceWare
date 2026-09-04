@@ -14,7 +14,9 @@ from app.core.response import fail, ok
 from app.db.session import get_db
 from app.kb.extract import extract_search_text
 from app.kb.models import KbDocument, KbFolder, KbLibrary
+from app.kb.policy import dump_policy, parse_policy, resolve_mode
 from app.kb.search import folder_scope, rank_documents, snippet_of
+from app.kb.wiki import clip_summary, dump_wiki, parse_wiki, wiki_item
 from app.kb.store import (
     file_digest,
     kind_of,
@@ -34,6 +36,16 @@ class LibraryIn(BaseModel):
     description: str = Field(default="", max_length=500)
 
 
+class PolicyIn(BaseModel):
+    wiki_enabled: bool = False
+    evidence_mode: str = "strict"
+    rule: str = Field(default="", max_length=500)
+
+
+class WikiIn(BaseModel):
+    summary: str = Field(default="", max_length=800)
+
+
 class FolderIn(BaseModel):
     name: str = Field(default="", max_length=200)
     parent_id: int | None = None
@@ -49,6 +61,7 @@ class AskIn(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     folder_id: int | None = None
     only_folder: bool = False
+    evidence_mode: str | None = None
 
 
 def _iso(value: datetime | None) -> str:
@@ -56,10 +69,14 @@ def _iso(value: datetime | None) -> str:
 
 
 def _library_dict(row: KbLibrary) -> dict:
+    policy = parse_policy(row)
     return {
         "id": row.id,
         "name": row.name,
         "description": row.description or "",
+        "wiki_enabled": policy["wiki_enabled"],
+        "evidence_mode": policy["evidence_mode"],
+        "rule": policy["rule"],
         "created_at": _iso(row.created_at),
     }
 
@@ -74,6 +91,7 @@ def _folder_dict(row: KbFolder) -> dict:
 
 
 def _doc_dict(row: KbDocument) -> dict:
+    note = parse_wiki(row)
     return {
         "id": row.id,
         "library_id": row.library_id,
@@ -88,6 +106,10 @@ def _doc_dict(row: KbDocument) -> dict:
         "kind": row.kind or "other",
         "preview": row.kind if row.kind in {"pdf", "image", "text"} else "",
         "evidence_level": row.evidence_level or "须出处",
+        "has_wiki": bool(note.summary),
+        "wiki_summary": note.summary,
+        "wiki_updated_at": note.updated_at,
+        "wiki_stale": note.stale,
         "created_at": _iso(row.created_at),
         "updated_at": _iso(row.updated_at),
     }
@@ -142,6 +164,74 @@ def update_library(library_id: int, body: LibraryIn, db: Session = Depends(get_d
     db.commit()
     db.refresh(row)
     return ok(_library_dict(row))
+
+
+@router.put("/kb/libraries/{library_id}/policy")
+def update_library_policy(library_id: int, body: PolicyIn, db: Session = Depends(get_db)):
+    """保存库规则和 Wiki 开关，不改库名。"""
+
+    row = _get_library(db, library_id)
+    if row is None:
+        return fail("这个库不存在", 404)
+    mode = body.evidence_mode if body.evidence_mode in {"strict", "loose"} else "strict"
+    row.policy_json = dump_policy(body.wiki_enabled, mode, body.rule)
+    db.commit()
+    db.refresh(row)
+    return ok(_library_dict(row))
+
+
+@router.get("/kb/libraries/{library_id}/wikis")
+def list_wikis(
+    library_id: int,
+    q: str = "",
+    stale: str = "",
+    sort: str = "updated_at",
+    order: str = "desc",
+    page: int = 1,
+    page_size: int = 50,
+    db: Session = Depends(get_db),
+):
+    """管理库里的摘要列表，分页，不一次拉全量。"""
+
+    if _get_library(db, library_id) is None:
+        return fail("这个库不存在", 404)
+    size = min(max(page_size, 1), 50)
+    current = max(page, 1)
+    rows = db.scalars(select(KbDocument).where(KbDocument.library_id == library_id, KbDocument.wiki_json != "")).all()
+    notes = []
+    for row in rows:
+        note = parse_wiki(row)
+        if note.summary:
+            notes.append((row, note))
+    all_count = len(notes)
+    stale_count = sum(1 for _, note in notes if note.stale)
+    query = q.strip().lower()
+    if query:
+        notes = [item for item in notes if query in (item[0].title or item[0].file_name or "").lower()]
+    if stale == "stale":
+        notes = [item for item in notes if item[1].stale]
+    elif stale == "fresh":
+        notes = [item for item in notes if not item[1].stale]
+    reverse = order != "asc"
+    if sort == "title":
+        notes.sort(key=lambda item: (item[0].title or item[0].file_name or "").lower(), reverse=reverse)
+    elif sort == "stale":
+        notes.sort(key=lambda item: (item[1].stale, item[1].updated_at), reverse=reverse)
+    else:
+        notes.sort(key=lambda item: item[1].updated_at, reverse=reverse)
+    total = len(notes)
+    start = (current - 1) * size
+    page_rows = notes[start : start + size]
+    return ok(
+        {
+            "items": [wiki_item(row, note) for row, note in page_rows],
+            "total": total,
+            "page": current,
+            "page_size": size,
+            "all_count": all_count,
+            "stale_count": stale_count,
+        }
+    )
 
 
 @router.delete("/kb/libraries/{library_id}")
@@ -322,17 +412,33 @@ def _fill_search_text(row: KbDocument) -> None:
     row.search_text = extract_search_text(row.file_name, data)
 
 
+def _ask_style(mode: str, rule: str) -> str:
+    """拼给模型的回答约束。"""
+
+    if mode == "loose":
+        text = "可以参考摘要帮助概括，但必须标明来自哪份资料。吃不准就回到原文，不要编造。"
+    else:
+        text = "必须依据原文片段作答，不能把摘要当证据。没有原文依据就说资料里没有。"
+    extra = (rule or "").strip()
+    if extra:
+        text += f" 额外规则：{extra}"
+    return text
+
+
 @router.post("/kb/libraries/{library_id}/ask")
 def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
     """当前库关键词检索，再按原文回答并带出处。"""
 
-    if _get_library(db, library_id) is None:
+    lib = _get_library(db, library_id)
+    if lib is None:
         return fail("这个库不存在", 404)
     if body.only_folder and body.folder_id is not None and not _folder_in_library(db, library_id, body.folder_id):
         return fail("文件夹不在这个库里")
     question = body.question.strip()
     if not question:
         return fail("请先写问题")
+    policy = parse_policy(lib)
+    mode = resolve_mode(policy["evidence_mode"], body.evidence_mode)
     folders = db.scalars(select(KbFolder).where(KbFolder.library_id == library_id)).all()
     scope = folder_scope(list(folders), body.folder_id) if body.only_folder else None
     stmt = select(KbDocument).where(KbDocument.library_id == library_id)
@@ -345,6 +451,7 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
     ranked = rank_documents(question, rows)
     citations = []
     blocks = []
+    use_notes = policy["wiki_enabled"] and mode == "loose"
     for index, (row, score) in enumerate(ranked, start=1):
         snippet = snippet_of(question, row)
         citations.append(
@@ -354,20 +461,28 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
                 "score": round(score, 3),
             }
         )
-        blocks.append(f"【资料{index}】{row.title or row.file_name}\n{snippet}")
+        block = f"【资料{index}】{row.title or row.file_name}\n{snippet}"
+        if use_notes:
+            note = parse_wiki(row)
+            if note.summary:
+                flag = "（可能过期）" if note.stale else ""
+                block += f"\n【笔记{flag}】{note.summary}"
+        blocks.append(block)
+    empty = {"answer": "当前范围内没找到相关资料。", "citations": [], "used_llm": False, "evidence_mode": mode}
     if not ranked:
-        return ok({"answer": "当前范围内没找到相关资料。", "citations": [], "used_llm": False})
+        return ok(empty)
     if not llm_public().get("has_key"):
         return ok(
             {
                 "answer": "还没配 AI。先列出可能相关的资料，配好 Key 后再问可以写成回答。",
                 "citations": citations,
                 "used_llm": False,
+                "evidence_mode": mode,
             }
         )
     prompt = (
-        "只根据下面资料回答。没有依据就说资料里没有。不要编造。"
-        "回答末尾用「依据：资料1、资料2」标出来源。\n\n"
+        _ask_style(mode, policy["rule"])
+        + "回答末尾用「依据：资料1、资料2」标出来源。\n\n"
         + "\n\n".join(blocks)
     )
     try:
@@ -379,7 +494,7 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
         )
     except ValueError as exc:
         return fail(str(exc))
-    return ok({"answer": answer, "citations": citations, "used_llm": True})
+    return ok({"answer": answer, "citations": citations, "used_llm": True, "evidence_mode": mode})
 
 
 @router.get("/kb/documents/{doc_id}")
@@ -387,6 +502,78 @@ def get_document(doc_id: int, db: Session = Depends(get_db)):
     row = db.get(KbDocument, doc_id)
     if row is None:
         return fail("这份资料不存在", 404)
+    return ok(_doc_dict(row))
+
+
+def _save_wiki(row: KbDocument, summary: str, db: Session):
+    text = clip_summary(summary)
+    if not text:
+        return fail("摘要是空的")
+    row.wiki_json = dump_wiki(text, row.file_hash or "")
+    row.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(row)
+    return ok(_doc_dict(row))
+
+
+@router.post("/kb/documents/{doc_id}/wiki")
+def generate_wiki(doc_id: int, db: Session = Depends(get_db)):
+    """开了 Wiki 才能写。点了才生成，上传不自动写。"""
+
+    row = db.get(KbDocument, doc_id)
+    if row is None:
+        return fail("这份资料不存在", 404)
+    lib = _get_library(db, row.library_id)
+    if lib is None:
+        return fail("这个库不存在", 404)
+    if not parse_policy(lib)["wiki_enabled"]:
+        return fail("这个库还没开启 Wiki")
+    if not llm_public().get("has_key"):
+        return fail("请先在设置里填写 AI Key")
+    _fill_search_text(row)
+    db.commit()
+    body = (row.search_text or "").strip()
+    if not body:
+        return fail("抽不出正文，没法写摘要")
+    try:
+        text = chat_complete(
+            [
+                {"role": "system", "content": "你根据资料写短摘要，只写原文里有的内容。"},
+                {
+                    "role": "user",
+                    "content": f"用大约250字说明这份资料是什么、关键看哪。不要编造。\n\n标题：{row.title or row.file_name}\n\n{body[:6000]}",
+                },
+            ]
+        )
+    except ValueError as exc:
+        return fail(str(exc))
+    return _save_wiki(row, text, db)
+
+
+@router.put("/kb/documents/{doc_id}/wiki")
+def save_wiki(doc_id: int, body: WikiIn, db: Session = Depends(get_db)):
+    row = db.get(KbDocument, doc_id)
+    if row is None:
+        return fail("这份资料不存在", 404)
+    lib = _get_library(db, row.library_id)
+    if lib is None:
+        return fail("这个库不存在", 404)
+    if not parse_policy(lib)["wiki_enabled"]:
+        return fail("这个库还没开启 Wiki")
+    return _save_wiki(row, body.summary, db)
+
+
+@router.delete("/kb/documents/{doc_id}/wiki")
+def clear_wiki(doc_id: int, db: Session = Depends(get_db)):
+    """删摘要。关着 Wiki 也能清掉旧的。"""
+
+    row = db.get(KbDocument, doc_id)
+    if row is None:
+        return fail("这份资料不存在", 404)
+    row.wiki_json = ""
+    row.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(row)
     return ok(_doc_dict(row))
 
 

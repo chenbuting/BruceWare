@@ -3,24 +3,29 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 
 import {
+  askKbLibrary,
   createKbFolder,
   createKbLibrary,
   deleteKbDocument,
   deleteKbFolder,
   deleteKbLibrary,
+  deleteKbWiki,
   fetchKbDocument,
   fetchKbDocumentText,
   fetchKbDocuments,
   fetchKbFolders,
   fetchKbLibraries,
-  askKbLibrary,
+  fetchKbWikis,
+  generateKbWiki,
   kbDocumentFileUrl,
   renameKbFolder,
+  saveKbWiki,
   updateKbDocument,
   updateKbLibrary,
+  updateKbLibraryPolicy,
   uploadKbDocument,
 } from "@/api/client";
-import type { KbAskResult, KbDocument, KbFolder, KbLibrary } from "@/api/types";
+import type { KbAskResult, KbDocument, KbEvidenceMode, KbFolder, KbLibrary, KbWikiList } from "@/api/types";
 import { ConfirmModal, Modal } from "@/components/Modal";
 import { PdfPreview } from "@/components/PdfPreview";
 
@@ -35,6 +40,20 @@ function docIcon(item: KbDocument) {
 
 function childFolders(items: KbFolder[], parentId: number | null) {
   return items.filter((item) => item.parent_id === parentId);
+}
+
+function evidenceLabel(mode: KbEvidenceMode) {
+  return mode === "loose" ? "宽松概述" : "严格出处";
+}
+
+function evidenceHint(mode: "" | KbEvidenceMode, libraryMode: KbEvidenceMode = "strict") {
+  if (!mode) {
+    return `按库规则：这次跟库里设的走，当前是${evidenceLabel(libraryMode)}。`;
+  }
+  if (mode === "loose") {
+    return "宽松概述：可以概括，仍要标明哪份资料；拿不准就回原文。";
+  }
+  return "严格出处：只根据原文片段回答，摘要不能当证据。";
 }
 
 /** 知识库：整理资料，并按当前库提问 */
@@ -70,6 +89,16 @@ export function KbPage() {
   const [onlyFolder, setOnlyFolder] = useState(false);
   const [askResult, setAskResult] = useState<KbAskResult | null>(null);
   const [asking, setAsking] = useState(false);
+  const [askMode, setAskMode] = useState<"" | KbEvidenceMode>("");
+  const [wikiEnabled, setWikiEnabled] = useState(false);
+  const [libMode, setLibMode] = useState<KbEvidenceMode>("strict");
+  const [libRule, setLibRule] = useState("");
+  const [wikiList, setWikiList] = useState<KbWikiList | null>(null);
+  const [wikiQ, setWikiQ] = useState("");
+  const [wikiStale, setWikiStale] = useState("");
+  const [wikiSort, setWikiSort] = useState("updated_at");
+  const [wikiOrder, setWikiOrder] = useState("desc");
+  const [wikiPage, setWikiPage] = useState(1);
 
   const library = libraries.find((item) => item.id === libraryId) || null;
 
@@ -146,7 +175,7 @@ export function KbPage() {
     setAsking(true);
     setError("");
     setHint("");
-    askKbLibrary(libraryId, text, folderId, onlyFolder)
+    askKbLibrary(libraryId, text, folderId, onlyFolder, askMode)
       .then((data) => setAskResult(data))
       .catch((err: Error) => setError(err.message))
       .finally(() => setAsking(false));
@@ -215,6 +244,36 @@ export function KbPage() {
     });
   }
 
+  function applyDoc(row: KbDocument) {
+    setDocs((items) => items.map((item) => (item.id === row.id ? row : item)));
+    setPreview((current) => (current?.id === row.id ? row : current));
+  }
+
+  async function loadWikis(page = wikiPage) {
+    if (libraryId == null) return;
+    const data = await fetchKbWikis(libraryId, { q: wikiQ, stale: wikiStale, sort: wikiSort, order: wikiOrder, page });
+    setWikiList(data);
+    setWikiPage(page);
+  }
+
+  function openManage() {
+    setManageLib(true);
+    if (library) {
+      setWikiEnabled(!!library.wiki_enabled);
+      setLibMode(library.evidence_mode || "strict");
+      setLibRule(library.rule || "");
+    }
+    setWikiPage(1);
+    if (libraryId != null) {
+      fetchKbWikis(libraryId, { q: wikiQ, stale: wikiStale, sort: wikiSort, order: wikiOrder, page: 1 })
+        .then((data) => {
+          setWikiList(data);
+          setWikiPage(1);
+        })
+        .catch((err: Error) => setError(err.message));
+    }
+  }
+
   function onCreateFolder() {
     if (libraryId == null) return;
     const name = folderName.trim();
@@ -270,7 +329,7 @@ export function KbPage() {
               </option>
             ))}
           </select>
-          <button type="button" className={btnClass} onClick={() => setManageLib(true)}>
+          <button type="button" className={btnClass} onClick={openManage}>
             管理库
           </button>
         </div>
@@ -317,10 +376,16 @@ export function KbPage() {
               />
               只搜当前文件夹
             </label>
+            <select className={inputClass} value={askMode} onChange={(e) => setAskMode(e.target.value as "" | KbEvidenceMode)}>
+              <option value="">按库规则</option>
+              <option value="strict">严格出处</option>
+              <option value="loose">宽松概述</option>
+            </select>
             <button type="button" className={btnClass} disabled={asking || !question.trim()} onClick={onAsk}>
               {asking ? "在找…" : "提问"}
             </button>
           </div>
+          <p className="mt-1 text-[12px] leading-5 text-[var(--muted)]">{evidenceHint(askMode, library.evidence_mode || "strict")}</p>
           {askResult ? (
             <div className="mt-2 border-t border-[var(--line)] pt-2 text-[13px] leading-6">
               <p className="whitespace-pre-wrap">{askResult.answer}</p>
@@ -470,7 +535,14 @@ export function KbPage() {
           <div className="border-b border-[var(--line)] px-3 py-2 text-[12px] text-[var(--muted)]">预览</div>
           <div className="min-h-0 flex-1 overflow-auto p-3">
             {preview ? (
-              <PreviewPane item={preview} text={previewText} />
+              <PreviewPane
+                item={preview}
+                text={previewText}
+                wikiEnabled={!!library?.wiki_enabled}
+                busy={busy}
+                onSaved={applyDoc}
+                onError={setError}
+              />
             ) : (
               <p className="pt-8 text-center text-[13px] leading-6 text-[var(--muted)]">点一份资料，这里预览。</p>
             )}
@@ -481,16 +553,23 @@ export function KbPage() {
       {preview && (
         <div className="xl:hidden">
           <Modal title={preview.title} wide onClose={() => setPreview(null)}>
-            <PreviewPane item={preview} text={previewText} />
+            <PreviewPane
+              item={preview}
+              text={previewText}
+              wikiEnabled={!!library?.wiki_enabled}
+              busy={busy}
+              onSaved={applyDoc}
+              onError={setError}
+            />
           </Modal>
         </div>
       )}
 
       {manageLib ? (
-        <Modal title="管理知识库" onClose={() => setManageLib(false)}>
+        <Modal title="管理知识库" wide onClose={() => setManageLib(false)}>
           <p className="mb-2 text-[13px] text-[var(--muted)]">当前：{library?.name || "无"}</p>
           <input className={`${inputClass} w-full`} placeholder="新库名 / 改名" value={libName} onChange={(e) => setLibName(e.target.value)} />
-          <div className="mt-4 flex flex-wrap gap-2">
+          <div className="mt-3 flex flex-wrap gap-2">
             <button
               type="button"
               className={btnClass}
@@ -524,6 +603,135 @@ export function KbPage() {
             >
               删库
             </button>
+          </div>
+
+          <div className="mt-5 border-t border-[var(--line)] pt-4">
+            <p className="mb-2 text-[13px] font-medium">库规则</p>
+            <label className="mb-2 flex items-center gap-2 text-[13px]">
+              <input type="checkbox" checked={wikiEnabled} onChange={(e) => setWikiEnabled(e.target.checked)} />
+              开启 Wiki（默认关，点了才写摘要）
+            </label>
+            <div className="mb-2 flex flex-wrap items-center gap-2 text-[13px]">
+              <span className="text-[var(--muted)]">回答风格</span>
+              <select className={inputClass} value={libMode} onChange={(e) => setLibMode(e.target.value as KbEvidenceMode)}>
+                <option value="strict">严格出处</option>
+                <option value="loose">宽松概述</option>
+              </select>
+            </div>
+            <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">
+              严格出处：只根据原文片段回答，摘要不能当证据。
+              <br />
+              宽松概述：可以参考摘要帮忙概括，但仍要标明哪份资料；拿不准就回原文。
+              <br />
+              提问时选「按库规则」就用这里的设置，也可以临时改成另一种。
+            </p>
+            <input
+              className={`${inputClass} w-full`}
+              placeholder="额外规则，可空"
+              value={libRule}
+              onChange={(e) => setLibRule(e.target.value)}
+            />
+            <button
+              type="button"
+              className={`${btnClass} mt-3`}
+              disabled={busy || !library}
+              onClick={() =>
+                run(async () => {
+                  if (!library) return;
+                  const row = await updateKbLibraryPolicy(library.id, wikiEnabled, libMode, libRule);
+                  setLibraries((items) => items.map((item) => (item.id === row.id ? row : item)));
+                  setHint("已保存库规则");
+                })
+              }
+            >
+              保存规则
+            </button>
+          </div>
+
+          <div className="mt-5 border-t border-[var(--line)] pt-4">
+            <p className="mb-2 text-[13px] font-medium">摘要</p>
+            <p className="mb-2 text-[13px] text-[var(--muted)]">
+              本库已有 {wikiList?.all_count ?? 0} 条摘要，其中 {wikiList?.stale_count ?? 0} 条可能过期
+            </p>
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <input
+                className={`${inputClass} w-40`}
+                placeholder="搜资料名"
+                value={wikiQ}
+                onChange={(e) => setWikiQ(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && run(async () => loadWikis(1))}
+              />
+              <select className={inputClass} value={wikiStale} onChange={(e) => setWikiStale(e.target.value)}>
+                <option value="">全部</option>
+                <option value="stale">可能过期</option>
+                <option value="fresh">未过期</option>
+              </select>
+              <select className={inputClass} value={wikiSort} onChange={(e) => setWikiSort(e.target.value)}>
+                <option value="updated_at">更新时间</option>
+                <option value="title">资料名</option>
+                <option value="stale">是否过期</option>
+              </select>
+              <select className={inputClass} value={wikiOrder} onChange={(e) => setWikiOrder(e.target.value)}>
+                <option value="desc">从新到旧</option>
+                <option value="asc">从旧到新</option>
+              </select>
+              <button type="button" className={btnClass} disabled={busy || !library} onClick={() => run(async () => loadWikis(1))}>
+                筛选
+              </button>
+            </div>
+            <div className="max-h-64 overflow-auto border border-[var(--line)]">
+              {(wikiList?.items || []).map((item) => (
+                <div key={item.id} className="flex items-center justify-between gap-2 border-b border-[var(--line)] px-2 py-2 text-[13px]">
+                  <button
+                    type="button"
+                    className="min-w-0 truncate text-left"
+                    onClick={() =>
+                      run(async () => {
+                        const row = await fetchKbDocument(item.id);
+                        setPreview(row);
+                        setManageLib(false);
+                      })
+                    }
+                  >
+                    {item.title}
+                    {item.wiki_stale ? <span className="ml-2 text-[var(--muted)]">可能过期</span> : null}
+                  </button>
+                  <button
+                    type="button"
+                    className="shrink-0 text-[var(--muted)]"
+                    disabled={busy}
+                    onClick={() =>
+                      run(async () => {
+                        const row = await deleteKbWiki(item.id);
+                        applyDoc(row);
+                        await loadWikis(wikiPage);
+                      })
+                    }
+                  >
+                    删除
+                  </button>
+                </div>
+              ))}
+              {!wikiList?.items.length ? <p className="px-2 py-6 text-center text-[13px] text-[var(--muted)]">还没有摘要。</p> : null}
+            </div>
+            {wikiList && wikiList.total > wikiList.page_size ? (
+              <div className="mt-2 flex items-center gap-2 text-[13px] text-[var(--muted)]">
+                <button type="button" className={btnClass} disabled={wikiPage <= 1 || busy} onClick={() => run(async () => loadWikis(wikiPage - 1))}>
+                  上一页
+                </button>
+                <span>
+                  {wikiPage} / {Math.max(1, Math.ceil(wikiList.total / wikiList.page_size))}
+                </span>
+                <button
+                  type="button"
+                  className={btnClass}
+                  disabled={wikiPage >= Math.ceil(wikiList.total / wikiList.page_size) || busy}
+                  onClick={() => run(async () => loadWikis(wikiPage + 1))}
+                >
+                  下一页
+                </button>
+              </div>
+            ) : null}
           </div>
         </Modal>
       ) : null}
@@ -681,8 +889,35 @@ function FolderTree({
   );
 }
 
-function PreviewPane({ item, text }: { item: KbDocument; text: string }) {
+function PreviewPane({
+  item,
+  text,
+  wikiEnabled,
+  busy,
+  onSaved,
+  onError,
+}: {
+  item: KbDocument;
+  text: string;
+  wikiEnabled: boolean;
+  busy: boolean;
+  onSaved: (row: KbDocument) => void;
+  onError: (message: string) => void;
+}) {
   const url = kbDocumentFileUrl(item.id);
+  const [draft, setDraft] = useState(item.wiki_summary || "");
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    setDraft(item.wiki_summary || "");
+  }, [item.id, item.wiki_summary]);
+
+  function runWiki(task: () => Promise<void>) {
+    setSaving(true);
+    task()
+      .catch((err: Error) => onError(err.message))
+      .finally(() => setSaving(false));
+  }
+
   return (
     <div className="text-[13px]">
       <p className="mb-2 font-medium">{item.title}</p>
@@ -696,6 +931,69 @@ function PreviewPane({ item, text }: { item: KbDocument; text: string }) {
       <a className="mt-3 inline-block text-[var(--muted)] underline" href={url} target="_blank" rel="noreferrer">
         打开 / 下载
       </a>
+
+      <div className="mt-4 border-t border-[var(--line)] pt-3">
+        <p className="mb-1 font-medium">
+          摘要
+          {item.wiki_stale ? <span className="ml-2 font-normal text-[var(--muted)]">可能过期</span> : null}
+        </p>
+        {wikiEnabled ? (
+          <>
+            <textarea
+              className={`${inputClass} min-h-[6rem] w-full`}
+              value={draft}
+              maxLength={400}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder="这份资料是什么、关键看哪"
+            />
+            <p className="mt-1 text-[12px] text-[var(--muted)]">已写 {draft.length} / 400</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button
+                type="button"
+                className={btnClass}
+                disabled={saving || busy}
+                onClick={() =>
+                  runWiki(async () => {
+                    onSaved(await generateKbWiki(item.id));
+                  })
+                }
+              >
+                {item.has_wiki ? "更新" : "写摘要"}
+              </button>
+              <button
+                type="button"
+                className={btnClass}
+                disabled={saving || busy || !draft.trim()}
+                onClick={() =>
+                  runWiki(async () => {
+                    onSaved(await saveKbWiki(item.id, draft));
+                  })
+                }
+              >
+                保存
+              </button>
+              {item.has_wiki ? (
+                <button
+                  type="button"
+                  className={btnClass}
+                  disabled={saving || busy}
+                  onClick={() =>
+                    runWiki(async () => {
+                      onSaved(await deleteKbWiki(item.id));
+                    })
+                  }
+                >
+                  删除
+                </button>
+              ) : null}
+            </div>
+          </>
+        ) : item.wiki_summary ? (
+          <p className="whitespace-pre-wrap leading-6 text-[var(--muted)]">{item.wiki_summary}</p>
+        ) : (
+          <p className="text-[var(--muted)]">这个库还没开 Wiki。开了才能写摘要。</p>
+        )}
+      </div>
     </div>
   );
 }

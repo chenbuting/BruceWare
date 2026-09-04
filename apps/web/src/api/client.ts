@@ -8,8 +8,10 @@ import type {
   InterviewSession,
   KbAskResult,
   KbDocument,
+  KbEvidenceMode,
   KbFolder,
   KbLibrary,
+  KbWikiList,
   LlmWrite,
   ModuleList,
   PortalLink,
@@ -513,6 +515,27 @@ export function deleteKbLibrary(id: number) {
   return request<boolean>(`/api/v1/kb/libraries/${id}`, { method: "DELETE" });
 }
 
+export function updateKbLibraryPolicy(id: number, wikiEnabled: boolean, evidenceMode: KbEvidenceMode, rule: string) {
+  return request<KbLibrary>(`/api/v1/kb/libraries/${id}/policy`, {
+    method: "PUT",
+    body: JSON.stringify({ wiki_enabled: wikiEnabled, evidence_mode: evidenceMode, rule }),
+  });
+}
+
+export function fetchKbWikis(
+  libraryId: number,
+  query: { q?: string; stale?: string; sort?: string; order?: string; page?: number } = {},
+) {
+  const params = new URLSearchParams();
+  if (query.q?.trim()) params.set("q", query.q.trim());
+  if (query.stale) params.set("stale", query.stale);
+  if (query.sort) params.set("sort", query.sort);
+  if (query.order) params.set("order", query.order);
+  if (query.page) params.set("page", String(query.page));
+  const qs = params.toString();
+  return request<KbWikiList>(`/api/v1/kb/libraries/${libraryId}/wikis${qs ? `?${qs}` : ""}`);
+}
+
 export function fetchKbFolders(libraryId: number) {
   return request<{ items: KbFolder[] }>(`/api/v1/kb/libraries/${libraryId}/folders`);
 }
@@ -576,13 +599,35 @@ export function fetchKbDocumentText(id: number) {
   return request<{ text: string }>(`/api/v1/kb/documents/${id}/text`);
 }
 
-export function askKbLibrary(libraryId: number, question: string, folderId: number | null, onlyFolder: boolean) {
+export function askKbLibrary(
+  libraryId: number,
+  question: string,
+  folderId: number | null,
+  onlyFolder: boolean,
+  evidenceMode: KbEvidenceMode | "",
+) {
   return request<KbAskResult>(`/api/v1/kb/libraries/${libraryId}/ask`, {
     method: "POST",
     body: JSON.stringify({
       question,
       folder_id: onlyFolder ? folderId : null,
       only_folder: onlyFolder && folderId != null,
+      evidence_mode: evidenceMode || null,
     }),
   });
+}
+
+export function generateKbWiki(id: number) {
+  return request<KbDocument>(`/api/v1/kb/documents/${id}/wiki`, { method: "POST" });
+}
+
+export function saveKbWiki(id: number, summary: string) {
+  return request<KbDocument>(`/api/v1/kb/documents/${id}/wiki`, {
+    method: "PUT",
+    body: JSON.stringify({ summary }),
+  });
+}
+
+export function deleteKbWiki(id: number) {
+  return request<KbDocument>(`/api/v1/kb/documents/${id}/wiki`, { method: "DELETE" });
 }
