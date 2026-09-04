@@ -747,7 +747,7 @@ export function KbPage() {
             <p className="mb-3 text-[12px] leading-5 text-[var(--muted)]">
               开了才认图上的字，才能搜「营业执照」这类。默认关，费时间和 Key。
               <br />
-              已抽出的图会在上传或下次提问时认，一次认几张，认不完下次继续。
+              开了只表示允许识图。上传不会自动认，要点列表「全部识图」或预览里单张「识图」。
             </p>
             <div className="mb-2 flex flex-wrap items-center gap-2 text-[13px]">
               <span className="text-[var(--muted)]">回答风格</span>

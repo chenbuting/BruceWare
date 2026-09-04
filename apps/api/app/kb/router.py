@@ -421,8 +421,6 @@ async def upload_document(
     row.rel_path = rel_path
     alts = save_extracted_images(db, row, data)
     append_asset_alts(row, alts)
-    if parse_policy(lib)["vision_enabled"]:
-        recognize_assets(db, row, 8)
     index_document(db, row)
     db.commit()
     db.refresh(row)
@@ -442,10 +440,10 @@ def _fill_search_text(row: KbDocument) -> None:
     row.search_text = extract_search_text(row.file_name, data)
 
 
-def _fill_assets(row: KbDocument, db: Session) -> None:
-    """旧文件还没抽过图时，提问前补一次。"""
+def _fill_assets(row: KbDocument, db: Session, force: bool = False) -> None:
+    """旧文件还没抽过图时补抽。force 时再扫一遍，只补缺的图。"""
 
-    if already_extracted(row):
+    if already_extracted(row) and not force:
         return
     try:
         path = abs_path(row.library_id, row.rel_path)
@@ -528,12 +526,9 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
     rows = list(db.scalars(stmt).all())
     if scope is not None:
         rows = [row for row in rows if row.folder_id in scope]
-    vision_left = 4 if policy["vision_enabled"] else 0
     for row in rows:
         _fill_search_text(row)
         _fill_assets(row, db)
-        if vision_left:
-            vision_left -= recognize_assets(db, row, vision_left)
         index_document(db, row)
     db.commit()
     chunk_best = score_chunks(db, library_id, question, {row.id for row in rows})
@@ -543,7 +538,7 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
     citations = []
     blocks = []
     use_notes = policy["wiki_enabled"] and mode == "loose"
-    pictures = assets_for_docs(db, [row.id for row, _score, _snip in ranked_full])
+    pictures = assets_for_docs(db, [row.id for row, _score, _snip in ranked_full], question)
     for index, (row, score, snippet) in enumerate(ranked_full, start=1):
         citations.append(
             {
@@ -625,7 +620,7 @@ def list_document_assets(doc_id: int, db: Session = Depends(get_db)):
     row = db.get(KbDocument, doc_id)
     if row is None:
         return fail("这份资料不存在", 404)
-    _fill_assets(row, db)
+    _fill_assets(row, db, force=True)
     db.commit()
     return ok({"items": [asset_edit_dict(item) for item in list_doc_assets(db, row.id)]})
 

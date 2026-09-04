@@ -11,11 +11,11 @@ from sqlalchemy.orm import Session
 
 from app.kb.extract import extract_search_text
 from app.kb.models import KbAsset, KbDocument
+from app.kb.search import search_terms
 from app.kb.store import abs_path, kind_of, remove_file, write_bytes
 
 OCR_SKIP = "-"
 
-_MAX_IMAGES = 20
 _MIN_SIDE = 80
 
 
@@ -71,7 +71,7 @@ def _from_pdf(data: bytes) -> list[tuple[int, bytes]]:
         reader = PdfReader(io.BytesIO(data))
     except Exception:
         return []
-    for page_no, page in enumerate(reader.pages[:40], start=1):
+    for page_no, page in enumerate(reader.pages, start=1):
         try:
             images = page.images
         except Exception:
@@ -83,8 +83,6 @@ def _from_pdf(data: bytes) -> list[tuple[int, bytes]]:
             usable = _usable_image(raw)
             if usable:
                 found.append((page_no, usable))
-            if len(found) >= _MAX_IMAGES:
-                return found
     return found
 
 
@@ -109,8 +107,6 @@ def _from_docx(data: bytes) -> list[tuple[int, bytes]]:
         usable = _usable_image(raw)
         if usable:
             found.append((0, usable))
-        if len(found) >= _MAX_IMAGES:
-            break
     return found
 
 
@@ -142,35 +138,39 @@ def clear_assets(db: Session, row: KbDocument) -> None:
 
 
 def save_extracted_images(db: Session, row: KbDocument, data: bytes) -> list[str]:
-    """抽图落盘，返回图名，方便写进检索正文。"""
+    """抽图落盘。已抽过的只补后面缺的，已有的图和识图文字不动。"""
 
-    if _extra(row).get("assets_done"):
-        return [item.alt_text for item in db.scalars(select(KbAsset).where(KbAsset.document_id == row.id)).all() if item.alt_text]
-    existing = db.scalar(select(KbAsset.id).where(KbAsset.document_id == row.id).limit(1))
-    if existing:
-        _set_extra(row, "assets_done", True)
-        return [item.alt_text for item in db.scalars(select(KbAsset).where(KbAsset.document_id == row.id)).all() if item.alt_text]
-
+    existing = list(
+        db.scalars(
+            select(KbAsset).where(KbAsset.document_id == row.id).order_by(KbAsset.sort_order.asc(), KbAsset.id.asc())
+        ).all()
+    )
+    alts = [item.alt_text for item in existing if item.alt_text]
     kind = row.kind or kind_of(row.file_name)
-    alts: list[str] = []
     if kind == "image" and row.rel_path:
-        alt = row.title or row.file_name or "图片"
-        db.add(
-            KbAsset(
-                library_id=row.library_id,
-                document_id=row.id,
-                rel_path=row.rel_path,
-                page=0,
-                sort_order=0,
-                alt_text=alt,
+        if not existing:
+            alt = row.title or row.file_name or "图片"
+            db.add(
+                KbAsset(
+                    library_id=row.library_id,
+                    document_id=row.id,
+                    rel_path=row.rel_path,
+                    page=0,
+                    sort_order=0,
+                    alt_text=alt,
+                )
             )
-        )
-        alts.append(alt)
+            alts.append(alt)
         _set_extra(row, "assets_done", True)
         return alts
 
     pictures = extract_images(row.file_name, data)
-    for index, (page, blob) in enumerate(pictures, start=1):
+    start = len(existing)
+    if start >= len(pictures):
+        _set_extra(row, "assets_done", True)
+        return alts
+    for offset, (page, blob) in enumerate(pictures[start:]):
+        index = start + offset + 1
         alt = f"第{page}页图{index}" if page else f"图{index}"
         rel = f"assets/{row.id}/{index:02d}.jpg"
         write_bytes(row.library_id, rel, blob)
@@ -198,8 +198,24 @@ def append_asset_alts(row: KbDocument, alts: list[str]) -> None:
     row.search_text = ((row.search_text or "") + " " + extra).strip()[:20000]
 
 
-def assets_for_docs(db: Session, doc_ids: list[int], per_doc: int = 4) -> dict[int, list[KbAsset]]:
-    """提问出处用：每份资料最多带几张图。"""
+def score_asset(question: str, item: KbAsset) -> float:
+    """问句和图上的字、图名有多贴。"""
+
+    blob = f"{item.alt_text or ''} {ocr_for_search(item.ocr_text or '')}".lower()
+    q = question.strip().lower()
+    if not q or not blob.strip():
+        return 0.0
+    if q in blob:
+        return 2.0
+    terms = search_terms(question)
+    if not terms:
+        return 0.0
+    hit = sum(1 for term in terms if term in blob)
+    return hit / len(terms) if hit else 0.0
+
+
+def assets_for_docs(db: Session, doc_ids: list[int], question: str = "", per_doc: int = 4) -> dict[int, list[KbAsset]]:
+    """提问出处用：优先带和问句对得上的图，每份最多几张。"""
 
     if not doc_ids:
         return {}
@@ -208,10 +224,14 @@ def assets_for_docs(db: Session, doc_ids: list[int], per_doc: int = 4) -> dict[i
     ).all()
     grouped: dict[int, list[KbAsset]] = {}
     for row in rows:
-        bucket = grouped.setdefault(row.document_id, [])
-        if len(bucket) < per_doc:
-            bucket.append(row)
-    return grouped
+        grouped.setdefault(row.document_id, []).append(row)
+    picked: dict[int, list[KbAsset]] = {}
+    for doc_id, items in grouped.items():
+        scored = [(score_asset(question, item), item) for item in items]
+        scored.sort(key=lambda pair: (-pair[0], pair[1].sort_order or 0, pair[1].id or 0))
+        matched = [item for score, item in scored if score > 0]
+        picked[doc_id] = matched[:per_doc]
+    return picked
 
 
 def asset_dict(row: KbAsset) -> dict:
