@@ -515,10 +515,16 @@ export function deleteKbLibrary(id: number) {
   return request<boolean>(`/api/v1/kb/libraries/${id}`, { method: "DELETE" });
 }
 
-export function updateKbLibraryPolicy(id: number, wikiEnabled: boolean, evidenceMode: KbEvidenceMode, rule: string) {
+export function updateKbLibraryPolicy(
+  id: number,
+  wikiEnabled: boolean,
+  evidenceMode: KbEvidenceMode,
+  rule: string,
+  wikiLearn = false,
+) {
   return request<KbLibrary>(`/api/v1/kb/libraries/${id}/policy`, {
     method: "PUT",
-    body: JSON.stringify({ wiki_enabled: wikiEnabled, evidence_mode: evidenceMode, rule }),
+    body: JSON.stringify({ wiki_enabled: wikiEnabled, wiki_learn: wikiLearn, evidence_mode: evidenceMode, rule }),
   });
 }
 

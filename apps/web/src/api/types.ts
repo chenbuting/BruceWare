@@ -228,6 +228,7 @@ export type KbLibrary = {
   name: string;
   description: string;
   wiki_enabled: boolean;
+  wiki_learn: boolean;
   evidence_mode: KbEvidenceMode;
   rule: string;
   created_at: string;
@@ -267,6 +268,7 @@ export type KbAskResult = {
   citations: KbAskHit[];
   used_llm: boolean;
   evidence_mode?: KbEvidenceMode;
+  wiki_update_hint?: string;
 };
 
 export type KbDocument = {

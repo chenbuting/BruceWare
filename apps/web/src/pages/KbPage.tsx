@@ -91,6 +91,7 @@ export function KbPage() {
   const [asking, setAsking] = useState(false);
   const [askMode, setAskMode] = useState<"" | KbEvidenceMode>("");
   const [wikiEnabled, setWikiEnabled] = useState(false);
+  const [wikiLearn, setWikiLearn] = useState(false);
   const [libMode, setLibMode] = useState<KbEvidenceMode>("strict");
   const [libRule, setLibRule] = useState("");
   const [wikiList, setWikiList] = useState<KbWikiList | null>(null);
@@ -176,7 +177,12 @@ export function KbPage() {
     setError("");
     setHint("");
     askKbLibrary(libraryId, text, folderId, onlyFolder, askMode)
-      .then((data) => setAskResult(data))
+      .then(async (data) => {
+        setAskResult(data);
+        if (data.wiki_update_hint && preview) {
+          applyDoc(await fetchKbDocument(preview.id));
+        }
+      })
       .catch((err: Error) => setError(err.message))
       .finally(() => setAsking(false));
   }
@@ -260,6 +266,7 @@ export function KbPage() {
     setManageLib(true);
     if (library) {
       setWikiEnabled(!!library.wiki_enabled);
+      setWikiLearn(!!library.wiki_learn);
       setLibMode(library.evidence_mode || "strict");
       setLibRule(library.rule || "");
     }
@@ -377,7 +384,7 @@ export function KbPage() {
               只搜当前文件夹
             </label>
             <select className={inputClass} value={askMode} onChange={(e) => setAskMode(e.target.value as "" | KbEvidenceMode)}>
-              <option value="">按库规则</option>
+              <option value="">按库规则（当前：{evidenceLabel(library.evidence_mode || "strict")}）</option>
               <option value="strict">严格出处</option>
               <option value="loose">宽松概述</option>
             </select>
@@ -399,6 +406,7 @@ export function KbPage() {
                   ))}
                 </p>
               ) : null}
+              {askResult.wiki_update_hint ? <p className="mt-2 text-[12px] text-[var(--muted)]">{askResult.wiki_update_hint}</p> : null}
             </div>
           ) : null}
         </div>
@@ -608,9 +616,34 @@ export function KbPage() {
           <div className="mt-5 border-t border-[var(--line)] pt-4">
             <p className="mb-2 text-[13px] font-medium">库规则</p>
             <label className="mb-2 flex items-center gap-2 text-[13px]">
-              <input type="checkbox" checked={wikiEnabled} onChange={(e) => setWikiEnabled(e.target.checked)} />
-              开启 Wiki（默认关，点了才写摘要）
+              <input
+                type="checkbox"
+                checked={wikiEnabled}
+                onChange={(e) => {
+                  setWikiEnabled(e.target.checked);
+                  if (!e.target.checked) setWikiLearn(false);
+                }}
+              />
+              开启 Wiki
             </label>
+            <label className="mb-2 flex items-center gap-2 text-[13px]">
+              <input
+                type="checkbox"
+                checked={wikiLearn && wikiEnabled}
+                disabled={!wikiEnabled}
+                onChange={(e) => setWikiLearn(e.target.checked)}
+              />
+              跟着提问更新
+            </label>
+            <p className="mb-3 text-[12px] leading-5 text-[var(--muted)]">
+              Wiki 只是开关，打开后才允许写摘要，不会自动给全库写。
+              <br />
+              要手写：关掉本框 → 点一份资料 → 右边预览滚到最下面 → 点「写摘要」或自己填。
+              <br />
+              「跟着提问更新」开着：问完后只改这次出处里最相关的最多 5 份摘要。没出处就不改、也不提示。
+              <br />
+              关掉 Wiki：已有摘要还在，只是不能新写，提问也不用。改完请点下面的「保存规则」。
+            </p>
             <div className="mb-2 flex flex-wrap items-center gap-2 text-[13px]">
               <span className="text-[var(--muted)]">回答风格</span>
               <select className={inputClass} value={libMode} onChange={(e) => setLibMode(e.target.value as KbEvidenceMode)}>
@@ -638,7 +671,7 @@ export function KbPage() {
               onClick={() =>
                 run(async () => {
                   if (!library) return;
-                  const row = await updateKbLibraryPolicy(library.id, wikiEnabled, libMode, libRule);
+                  const row = await updateKbLibraryPolicy(library.id, wikiEnabled, libMode, libRule, wikiLearn);
                   setLibraries((items) => items.map((item) => (item.id === row.id ? row : item)));
                   setHint("已保存库规则");
                 })
@@ -650,8 +683,10 @@ export function KbPage() {
 
           <div className="mt-5 border-t border-[var(--line)] pt-4">
             <p className="mb-2 text-[13px] font-medium">摘要</p>
-            <p className="mb-2 text-[13px] text-[var(--muted)]">
-              本库已有 {wikiList?.all_count ?? 0} 条摘要，其中 {wikiList?.stale_count ?? 0} 条可能过期
+            <p className="mb-2 text-[13px] leading-5 text-[var(--muted)]">
+              这里只列出已经写过的摘要。开了 Wiki 但没写过，这里就是空的。
+              <br />
+              本库已有 {wikiList?.all_count ?? 0} 条，其中 {wikiList?.stale_count ?? 0} 条可能过期。
             </p>
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <input
@@ -712,7 +747,11 @@ export function KbPage() {
                   </button>
                 </div>
               ))}
-              {!wikiList?.items.length ? <p className="px-2 py-6 text-center text-[13px] text-[var(--muted)]">还没有摘要。</p> : null}
+              {!wikiList?.items.length ? (
+                <p className="px-2 py-6 text-center text-[13px] leading-5 text-[var(--muted)]">
+                  还没有摘要。请先保存规则并开启 Wiki，然后关掉本框，点一份资料，在预览最下面写。
+                </p>
+              ) : null}
             </div>
             {wikiList && wikiList.total > wikiList.page_size ? (
               <div className="mt-2 flex items-center gap-2 text-[13px] text-[var(--muted)]">
@@ -939,6 +978,9 @@ function PreviewPane({
         </p>
         {wikiEnabled ? (
           <>
+            <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">
+              开 Wiki 不会自动写。点「写摘要」让 AI 写，或自己填再保存。只给这一份资料写。
+            </p>
             <textarea
               className={`${inputClass} min-h-[6rem] w-full`}
               value={draft}
@@ -991,7 +1033,9 @@ function PreviewPane({
         ) : item.wiki_summary ? (
           <p className="whitespace-pre-wrap leading-6 text-[var(--muted)]">{item.wiki_summary}</p>
         ) : (
-          <p className="text-[var(--muted)]">这个库还没开 Wiki。开了才能写摘要。</p>
+          <p className="leading-5 text-[var(--muted)]">
+            这个库还没开 Wiki。去「管理库」勾选并保存规则后，再回到这里写摘要。开了也不会自动写。
+          </p>
         )}
       </div>
     </div>

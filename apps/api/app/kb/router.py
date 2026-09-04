@@ -16,7 +16,7 @@ from app.kb.extract import extract_search_text
 from app.kb.models import KbDocument, KbFolder, KbLibrary
 from app.kb.policy import dump_policy, parse_policy, resolve_mode
 from app.kb.search import folder_scope, rank_documents, snippet_of
-from app.kb.wiki import clip_summary, dump_wiki, parse_wiki, wiki_item
+from app.kb.wiki import ASK_WIKI_LIMIT, clip_summary, dump_wiki, learn_hint, parse_wiki, wiki_item
 from app.kb.store import (
     file_digest,
     kind_of,
@@ -38,6 +38,7 @@ class LibraryIn(BaseModel):
 
 class PolicyIn(BaseModel):
     wiki_enabled: bool = False
+    wiki_learn: bool = False
     evidence_mode: str = "strict"
     rule: str = Field(default="", max_length=500)
 
@@ -75,6 +76,7 @@ def _library_dict(row: KbLibrary) -> dict:
         "name": row.name,
         "description": row.description or "",
         "wiki_enabled": policy["wiki_enabled"],
+        "wiki_learn": policy["wiki_learn"],
         "evidence_mode": policy["evidence_mode"],
         "rule": policy["rule"],
         "created_at": _iso(row.created_at),
@@ -174,7 +176,7 @@ def update_library_policy(library_id: int, body: PolicyIn, db: Session = Depends
     if row is None:
         return fail("这个库不存在", 404)
     mode = body.evidence_mode if body.evidence_mode in {"strict", "loose"} else "strict"
-    row.policy_json = dump_policy(body.wiki_enabled, mode, body.rule)
+    row.policy_json = dump_policy(body.wiki_enabled, mode, body.rule, body.wiki_learn)
     db.commit()
     db.refresh(row)
     return ok(_library_dict(row))
@@ -412,6 +414,45 @@ def _fill_search_text(row: KbDocument) -> None:
     row.search_text = extract_search_text(row.file_name, data)
 
 
+def _learn_wikis(question: str, ranked: list, db: Session) -> str:
+    """按这次出处更新摘要。没出处不提示；一次最多 5 份。"""
+
+    if not ranked:
+        return ""
+    truncated = len(ranked) > ASK_WIKI_LIMIT
+    titles: list[str] = []
+    for row, _score in ranked[:ASK_WIKI_LIMIT]:
+        snippet = snippet_of(question, row)
+        if not (snippet or "").strip():
+            continue
+        old = parse_wiki(row).summary
+        try:
+            text = chat_complete(
+                [
+                    {"role": "system", "content": "你根据原文和这次提问改短摘要，只写原文里有的内容。"},
+                    {
+                        "role": "user",
+                        "content": (
+                            f"用大约250字写这份资料是什么、和这次问题相关的要点看哪。不要编造。\n"
+                            f"问题：{question}\n旧摘要：{old or '无'}\n标题：{row.title or row.file_name}\n\n{snippet}"
+                        ),
+                    },
+                ],
+                timeout=40,
+            )
+        except ValueError:
+            continue
+        clipped = clip_summary(text)
+        if not clipped:
+            continue
+        row.wiki_json = dump_wiki(clipped, row.file_hash or "")
+        row.updated_at = datetime.utcnow()
+        titles.append(row.title or row.file_name)
+    if titles:
+        db.commit()
+    return learn_hint(len(ranked), titles, truncated)
+
+
 def _ask_style(mode: str, rule: str) -> str:
     """拼给模型的回答约束。"""
 
@@ -468,7 +509,13 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
                 flag = "（可能过期）" if note.stale else ""
                 block += f"\n【笔记{flag}】{note.summary}"
         blocks.append(block)
-    empty = {"answer": "当前范围内没找到相关资料。", "citations": [], "used_llm": False, "evidence_mode": mode}
+    empty = {
+        "answer": "当前范围内没找到相关资料。",
+        "citations": [],
+        "used_llm": False,
+        "evidence_mode": mode,
+        "wiki_update_hint": "",
+    }
     if not ranked:
         return ok(empty)
     if not llm_public().get("has_key"):
@@ -478,6 +525,7 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
                 "citations": citations,
                 "used_llm": False,
                 "evidence_mode": mode,
+                "wiki_update_hint": "",
             }
         )
     prompt = (
@@ -494,7 +542,18 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
         )
     except ValueError as exc:
         return fail(str(exc))
-    return ok({"answer": answer, "citations": citations, "used_llm": True, "evidence_mode": mode})
+    hint = ""
+    if policy["wiki_enabled"] and policy["wiki_learn"] and citations:
+        hint = _learn_wikis(question, ranked, db)
+    return ok(
+        {
+            "answer": answer,
+            "citations": citations,
+            "used_llm": True,
+            "evidence_mode": mode,
+            "wiki_update_hint": hint,
+        }
+    )
 
 
 @router.get("/kb/documents/{doc_id}")

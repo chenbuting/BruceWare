@@ -9,7 +9,19 @@ from datetime import datetime
 from app.kb.models import KbDocument
 
 WIKI_LIMIT = 400
+ASK_WIKI_LIMIT = 5
 _ENDS = "。．.？?！!\n\r"
+
+
+def learn_hint(cited_count: int, updated_titles: list[str], truncated: bool) -> str:
+    """没出处或一份都没更新：不提示。超过上限才说只改了前 5 份。"""
+
+    if cited_count <= 0 or not updated_titles:
+        return ""
+    if truncated:
+        return "本次回答了，只更新最相关的5份摘要，其余未改动。"
+    names = "、".join(updated_titles)
+    return f"已按这次问答更新了 {len(updated_titles)} 份摘要：{names}。"
 
 
 @dataclass
