@@ -69,3 +69,17 @@ class KbChunk(Base):
     text = Column(Text, nullable=False, default="")
     embedding = Column(Text, nullable=False, default="")
     profile = Column(String(150), nullable=False, default="")
+
+
+class KbAsset(Base):
+    """从资料里抽出的一张图。识图以后再加字。"""
+
+    __tablename__ = "kb_assets"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    library_id = Column(Integer, nullable=False, index=True)
+    document_id = Column(Integer, nullable=False, index=True)
+    rel_path = Column(String(500), nullable=False, default="")
+    page = Column(Integer, nullable=False, default=0)
+    sort_order = Column(Integer, nullable=False, default=0)
+    alt_text = Column(String(200), nullable=False, default="")

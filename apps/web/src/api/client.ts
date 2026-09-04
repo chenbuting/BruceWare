@@ -597,6 +597,10 @@ export function kbDocumentFileUrl(id: number) {
   return `/api/v1/kb/documents/${id}/file`;
 }
 
+export function kbAssetFileUrl(id: number) {
+  return `/api/v1/kb/assets/${id}/file`;
+}
+
 export function fetchKbDocument(id: number) {
   return request<KbDocument>(`/api/v1/kb/documents/${id}`);
 }

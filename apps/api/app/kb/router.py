@@ -13,7 +13,8 @@ from app.core.ai import chat_complete, llm_public
 from app.core.response import fail, ok
 from app.db.session import get_db
 from app.kb.extract import extract_search_text
-from app.kb.models import KbChunk, KbDocument, KbFolder, KbLibrary
+from app.kb.assets import already_extracted, append_asset_alts, asset_dict, assets_for_docs, clear_assets, save_extracted_images
+from app.kb.models import KbAsset, KbChunk, KbDocument, KbFolder, KbLibrary
 from app.kb.policy import dump_policy, parse_policy, resolve_mode
 from app.kb.search import folder_scope, snippet_of
 from app.kb.vector import clear_chunks, hybrid_rank, index_document, score_chunks
@@ -242,6 +243,7 @@ def delete_library(library_id: int, db: Session = Depends(get_db)):
     row = _get_library(db, library_id)
     if row is None:
         return fail("这个库不存在", 404)
+    db.execute(KbAsset.__table__.delete().where(KbAsset.library_id == library_id))
     db.execute(KbChunk.__table__.delete().where(KbChunk.library_id == library_id))
     db.execute(KbDocument.__table__.delete().where(KbDocument.library_id == library_id))
     db.execute(KbFolder.__table__.delete().where(KbFolder.library_id == library_id))
@@ -398,6 +400,8 @@ async def upload_document(
     rel_path = f"{row.id}_{file_name}"
     write_bytes(library_id, rel_path, data)
     row.rel_path = rel_path
+    alts = save_extracted_images(db, row, data)
+    append_asset_alts(row, alts)
     index_document(db, row)
     db.commit()
     db.refresh(row)
@@ -415,6 +419,20 @@ def _fill_search_text(row: KbDocument) -> None:
     except (ValueError, OSError):
         return
     row.search_text = extract_search_text(row.file_name, data)
+
+
+def _fill_assets(row: KbDocument, db: Session) -> None:
+    """旧文件还没抽过图时，提问前补一次。"""
+
+    if already_extracted(row):
+        return
+    try:
+        path = abs_path(row.library_id, row.rel_path)
+        data = path.read_bytes()
+    except (ValueError, OSError):
+        return
+    alts = save_extracted_images(db, row, data)
+    append_asset_alts(row, alts)
 
 
 def _learn_wikis(question: str, ranked: list, db: Session) -> str:
@@ -491,6 +509,7 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
         rows = [row for row in rows if row.folder_id in scope]
     for row in rows:
         _fill_search_text(row)
+        _fill_assets(row, db)
         index_document(db, row)
     db.commit()
     chunk_best = score_chunks(db, library_id, question, {row.id for row in rows})
@@ -500,12 +519,14 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
     citations = []
     blocks = []
     use_notes = policy["wiki_enabled"] and mode == "loose"
+    pictures = assets_for_docs(db, [row.id for row, _score, _snip in ranked_full])
     for index, (row, score, snippet) in enumerate(ranked_full, start=1):
         citations.append(
             {
                 "id": row.id,
                 "title": row.title or row.file_name,
                 "score": round(score, 3),
+                "images": [asset_dict(item) for item in pictures.get(row.id, [])],
             }
         )
         block = f"【资料{index}】{row.title or row.file_name}\n{snippet or snippet_of(question, row)}"
@@ -674,6 +695,7 @@ def delete_document(doc_id: int, db: Session = Depends(get_db)):
         return fail("这份资料不存在", 404)
     library_id = row.library_id
     rel_path = row.rel_path
+    clear_assets(db, row)
     clear_chunks(db, row.id)
     db.delete(row)
     db.commit()
@@ -701,6 +723,32 @@ def download_document(doc_id: int, db: Session = Depends(get_db)):
         media = "text/plain; charset=utf-8"
     filename = quote(row.file_name or path.name)
     return FileResponse(path, media_type=media, filename=row.file_name, headers={"Content-Disposition": f"inline; filename*=UTF-8''{filename}"})
+
+
+@router.get("/kb/assets/{asset_id}/file")
+def download_asset(asset_id: int, db: Session = Depends(get_db)):
+    """出处里的抽出图。独立图片走原件路径。"""
+
+    row = db.get(KbAsset, asset_id)
+    if row is None:
+        return fail("这张图不存在", 404)
+    try:
+        path = abs_path(row.library_id, row.rel_path)
+    except ValueError:
+        return fail("图片路径无效", 404)
+    if not path.is_file():
+        return fail("图片找不到了", 404)
+    suffix = path.suffix.lower()
+    media = {
+        ".png": "image/png",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+        ".bmp": "image/bmp",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+    }.get(suffix, "image/jpeg")
+    filename = quote(path.name)
+    return FileResponse(path, media_type=media, filename=path.name, headers={"Content-Disposition": f"inline; filename*=UTF-8''{filename}"})
 
 
 @router.get("/kb/documents/{doc_id}/text")

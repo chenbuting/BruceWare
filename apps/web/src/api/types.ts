@@ -257,10 +257,18 @@ export type KbFolder = {
   name: string;
 };
 
+export type KbAskImage = {
+  id: number;
+  alt: string;
+  page: number;
+  url: string;
+};
+
 export type KbAskHit = {
   id: number;
   title: string;
   score: number;
+  images?: KbAskImage[];
 };
 
 export type KbAskResult = {

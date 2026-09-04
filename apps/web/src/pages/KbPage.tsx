@@ -17,6 +17,7 @@ import {
   fetchKbLibraries,
   fetchKbWikis,
   generateKbWiki,
+  kbAssetFileUrl,
   kbDocumentFileUrl,
   renameKbFolder,
   saveKbWiki,
@@ -397,14 +398,29 @@ export function KbPage() {
             <div className="mt-2 border-t border-[var(--line)] pt-2 text-[13px] leading-6">
               <p className="whitespace-pre-wrap">{askResult.answer}</p>
               {askResult.citations.length ? (
-                <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[var(--muted)]">
-                  <span>出处</span>
+                <div className="mt-2 text-[var(--muted)]">
+                  <p>出处</p>
                   {askResult.citations.map((hit) => (
-                    <button key={hit.id} type="button" className="underline hover:text-[var(--text)]" onClick={() => onOpenCitation(hit.id)}>
-                      {hit.title}
-                    </button>
+                    <div key={hit.id} className="mt-1">
+                      <button type="button" className="underline hover:text-[var(--text)]" onClick={() => onOpenCitation(hit.id)}>
+                        {hit.title}
+                      </button>
+                      {hit.images?.length ? (
+                        <div className="mt-1 flex flex-wrap gap-2">
+                          {hit.images.map((img) => (
+                            <button key={img.id} type="button" className="block" title={img.alt} onClick={() => onOpenCitation(hit.id)}>
+                              <img
+                                src={img.url || kbAssetFileUrl(img.id)}
+                                alt={img.alt}
+                                className="h-16 w-auto rounded border border-[var(--line)] object-cover"
+                              />
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
                   ))}
-                </p>
+                </div>
               ) : null}
               {askResult.used_vector ? <p className="mt-2 text-[12px] text-[var(--muted)]">本次还用了向量检索，换说法也能对上。</p> : null}
               {askResult.wiki_update_hint ? <p className="mt-2 text-[12px] text-[var(--muted)]">{askResult.wiki_update_hint}</p> : null}
