@@ -620,6 +620,10 @@ export function saveKbAssetOcr(id: number, ocrText: string) {
   });
 }
 
+export function recognizeKbDocument(id: number) {
+  return request<{ done: number; left: number; message: string }>(`/api/v1/kb/documents/${id}/vision`, { method: "POST" });
+}
+
 export function fetchKbDocument(id: number) {
   return request<KbDocument>(`/api/v1/kb/documents/${id}`);
 }

@@ -54,6 +54,12 @@ def _pending(db: Session, document_id: int) -> list[KbAsset]:
     return [row for row in rows if not (row.ocr_text or "").strip()]
 
 
+def pending_vision_count(db: Session, document_id: int) -> int:
+    """还没认过的图有几张。"""
+
+    return len(_pending(db, document_id))
+
+
 def recognize_assets(db: Session, row: KbDocument, limit: int) -> int:
     """认这份资料里还没识过的图。失败的记下，下次不再重试。返回认了几张。"""
 

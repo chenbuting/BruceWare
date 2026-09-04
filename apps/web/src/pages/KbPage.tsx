@@ -19,6 +19,7 @@ import {
   fetchKbWikis,
   generateKbWiki,
   kbAssetFileUrl,
+  recognizeKbDocument,
   kbDocumentFileUrl,
   renameKbFolder,
   saveKbAssetOcr,
@@ -80,6 +81,7 @@ export function KbPage() {
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<KbDocument | null>(null);
   const [previewText, setPreviewText] = useState("");
+  const [assetTick, setAssetTick] = useState(0);
   const [libName, setLibName] = useState("");
   const [folderName, setFolderName] = useState("");
   const [renameFolder, setRenameFolder] = useState<KbFolder | null>(null);
@@ -548,6 +550,19 @@ export function KbPage() {
                     >
                       编辑
                     </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() =>
+                        run(async () => {
+                          const data = await recognizeKbDocument(item.id);
+                          setHint(data.message);
+                          if (preview?.id === item.id) setAssetTick((n) => n + 1);
+                        })
+                      }
+                    >
+                      识图
+                    </button>
                     <button type="button" disabled={busy} onClick={() => setAskDeleteDoc(item)}>
                       删除
                     </button>
@@ -579,6 +594,7 @@ export function KbPage() {
                 text={previewText}
                 wikiEnabled={!!library?.wiki_enabled}
                 busy={busy}
+                assetTick={assetTick}
                 onSaved={applyDoc}
                 onError={setError}
               />
@@ -597,6 +613,7 @@ export function KbPage() {
               text={previewText}
               wikiEnabled={!!library?.wiki_enabled}
               busy={busy}
+              assetTick={assetTick}
               onSaved={applyDoc}
               onError={setError}
             />
@@ -969,7 +986,15 @@ function FolderTree({
 }
 
 /** 预览里看图上的字，认错了可以改。 */
-function AssetWords({ docId, onError }: { docId: number; onError: (message: string) => void }) {
+function AssetWords({
+  docId,
+  refreshTick,
+  onError,
+}: {
+  docId: number;
+  refreshTick: number;
+  onError: (message: string) => void;
+}) {
   const [items, setItems] = useState<KbDocAsset[]>([]);
   const [drafts, setDrafts] = useState<Record<number, string>>({});
   const [savingId, setSavingId] = useState<number | null>(null);
@@ -986,7 +1011,7 @@ function AssetWords({ docId, onError }: { docId: number; onError: (message: stri
     return () => {
       alive = false;
     };
-  }, [docId, onError]);
+  }, [docId, refreshTick, onError]);
 
   if (!items.length) return null;
 
@@ -1032,6 +1057,7 @@ function PreviewPane({
   text,
   wikiEnabled,
   busy,
+  assetTick,
   onSaved,
   onError,
 }: {
@@ -1039,6 +1065,7 @@ function PreviewPane({
   text: string;
   wikiEnabled: boolean;
   busy: boolean;
+  assetTick: number;
   onSaved: (row: KbDocument) => void;
   onError: (message: string) => void;
 }) {
@@ -1070,7 +1097,7 @@ function PreviewPane({
         打开 / 下载
       </a>
 
-      <AssetWords docId={item.id} onError={onError} />
+      <AssetWords docId={item.id} refreshTick={assetTick} onError={onError} />
 
       <div className="mt-4 border-t border-[var(--line)] pt-3">
         <p className="mb-1 font-medium">
