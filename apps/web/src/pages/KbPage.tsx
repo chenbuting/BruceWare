@@ -19,8 +19,8 @@ import {
   fetchKbWikis,
   generateKbWiki,
   kbAssetFileUrl,
-  recognizeKbDocument,
   kbDocumentFileUrl,
+  recognizeKbAsset,
   renameKbFolder,
   saveKbAssetOcr,
   saveKbWiki,
@@ -69,6 +69,9 @@ function evidenceHint(mode: "" | KbEvidenceMode, libraryMode: KbEvidenceMode = "
 export function KbPage() {
   const location = useLocation();
   const uploadRef = useRef<HTMLInputElement>(null);
+  const visionStopRef = useRef(false);
+  const visionBusyRef = useRef(false);
+  const visionDocRef = useRef<number | null>(null);
   const [libraries, setLibraries] = useState<KbLibrary[]>([]);
   const [libraryId, setLibraryId] = useState<number | null>(null);
   const [folders, setFolders] = useState<KbFolder[]>([]);
@@ -82,6 +85,7 @@ export function KbPage() {
   const [preview, setPreview] = useState<KbDocument | null>(null);
   const [previewText, setPreviewText] = useState("");
   const [assetTick, setAssetTick] = useState(0);
+  const [visionDocId, setVisionDocId] = useState<number | null>(null);
   const [libName, setLibName] = useState("");
   const [folderName, setFolderName] = useState("");
   const [renameFolder, setRenameFolder] = useState<KbFolder | null>(null);
@@ -170,6 +174,56 @@ export function KbPage() {
     }
     return chain;
   }, [folderId, folders]);
+
+  async function recognizeAll(item: KbDocument) {
+    if (visionBusyRef.current) {
+      if (visionDocRef.current === item.id) {
+        visionStopRef.current = true;
+        setHint("正在停止，等这张认完…");
+      }
+      return;
+    }
+    visionBusyRef.current = true;
+    visionDocRef.current = item.id;
+    visionStopRef.current = false;
+    setVisionDocId(item.id);
+    setError("");
+    setHint("正在列出图片…");
+    try {
+      const data = await fetchKbDocumentAssets(item.id);
+      const pending = data.items.filter((one) => !one.ocr_text.trim());
+      if (!data.items.length) {
+        setError("这份资料没有可认的图");
+        return;
+      }
+      if (!pending.length) {
+        setHint("这些图都认过了");
+        return;
+      }
+      let done = 0;
+      const total = pending.length;
+      setHint(`识图 ${done} / ${total}`);
+      setAssetTick((n) => n + 1);
+      for (const asset of pending) {
+        if (visionStopRef.current) {
+          setHint(`已停止，已认 ${done} / ${total}`);
+          return;
+        }
+        await recognizeKbAsset(asset.id);
+        done += 1;
+        setHint(`识图 ${done} / ${total}`);
+        setAssetTick((n) => n + 1);
+      }
+      setHint(`已认完 ${done} 张`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "识图失败");
+    } finally {
+      visionStopRef.current = false;
+      visionBusyRef.current = false;
+      visionDocRef.current = null;
+      setVisionDocId(null);
+    }
+  }
 
   function run(task: () => Promise<void>) {
     setBusy(true);
@@ -528,6 +582,8 @@ export function KbPage() {
             {docs.map((item) => {
               const { Icon, color } = docIcon(item);
               const active = preview?.id === item.id;
+              const recognizing = visionDocId === item.id;
+              const rowBusy = busy || (visionDocId != null && !recognizing);
               return (
                 <div
                   key={item.id}
@@ -541,7 +597,7 @@ export function KbPage() {
                   <span className="flex shrink-0 gap-2 text-[var(--muted)]">
                     <button
                       type="button"
-                      disabled={busy}
+                      disabled={rowBusy}
                       onClick={() => {
                         setEditDoc(item);
                         setEditTitle(item.title);
@@ -550,20 +606,10 @@ export function KbPage() {
                     >
                       编辑
                     </button>
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() =>
-                        run(async () => {
-                          const data = await recognizeKbDocument(item.id);
-                          setHint(data.message);
-                          if (preview?.id === item.id) setAssetTick((n) => n + 1);
-                        })
-                      }
-                    >
-                      识图
+                    <button type="button" disabled={busy} onClick={() => void recognizeAll(item)}>
+                      {recognizing ? "停止" : "全部识图"}
                     </button>
-                    <button type="button" disabled={busy} onClick={() => setAskDeleteDoc(item)}>
+                    <button type="button" disabled={rowBusy} onClick={() => setAskDeleteDoc(item)}>
                       删除
                     </button>
                   </span>
@@ -595,6 +641,7 @@ export function KbPage() {
                 wikiEnabled={!!library?.wiki_enabled}
                 busy={busy}
                 assetTick={assetTick}
+                visionLocked={visionDocId != null}
                 onSaved={applyDoc}
                 onError={setError}
               />
@@ -614,6 +661,7 @@ export function KbPage() {
               wikiEnabled={!!library?.wiki_enabled}
               busy={busy}
               assetTick={assetTick}
+              visionLocked={visionDocId != null}
               onSaved={applyDoc}
               onError={setError}
             />
@@ -989,15 +1037,18 @@ function FolderTree({
 function AssetWords({
   docId,
   refreshTick,
+  visionLocked,
   onError,
 }: {
   docId: number;
   refreshTick: number;
+  visionLocked: boolean;
   onError: (message: string) => void;
 }) {
   const [items, setItems] = useState<KbDocAsset[]>([]);
   const [drafts, setDrafts] = useState<Record<number, string>>({});
   const [savingId, setSavingId] = useState<number | null>(null);
+  const [seeingId, setSeeingId] = useState<number | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -1015,21 +1066,31 @@ function AssetWords({
 
   if (!items.length) return null;
 
+  function applyAsset(row: KbDocAsset) {
+    setItems((list) => list.map((one) => (one.id === row.id ? row : one)));
+    setDrafts((map) => ({ ...map, [row.id]: row.ocr_text }));
+  }
+
   function save(item: KbDocAsset) {
     setSavingId(item.id);
     saveKbAssetOcr(item.id, drafts[item.id] ?? "")
-      .then((row) => {
-        setItems((list) => list.map((one) => (one.id === row.id ? row : one)));
-        setDrafts((map) => ({ ...map, [row.id]: row.ocr_text }));
-      })
+      .then(applyAsset)
       .catch((err: Error) => onError(err.message))
       .finally(() => setSavingId(null));
+  }
+
+  function seeOne(item: KbDocAsset) {
+    setSeeingId(item.id);
+    recognizeKbAsset(item.id)
+      .then(applyAsset)
+      .catch((err: Error) => onError(err.message))
+      .finally(() => setSeeingId(null));
   }
 
   return (
     <div className="mt-4 border-t border-[var(--line)] pt-3">
       <p className="mb-1 font-medium">图上的字</p>
-      <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">认错了可以改。保存后下次提问按改过的找。</p>
+      <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">认错了可以改。保存后下次提问按改过的找。也可以只认这一张。</p>
       {items.map((item) => (
         <div key={item.id} className="mb-3">
           <button type="button" className="mb-1 block max-w-full text-left" title={item.alt}>
@@ -1041,11 +1102,16 @@ function AssetWords({
             value={drafts[item.id] ?? ""}
             maxLength={2000}
             onChange={(e) => setDrafts((map) => ({ ...map, [item.id]: e.target.value }))}
-            placeholder="图上的字，没有就留空"
+            placeholder={seeingId === item.id ? "正在认这张…" : "图上的字，没有就留空"}
           />
-          <button type="button" className={`${btnClass} mt-1`} disabled={savingId === item.id} onClick={() => save(item)}>
-            {savingId === item.id ? "在存…" : "保存"}
-          </button>
+          <div className="mt-1 flex flex-wrap gap-2">
+            <button type="button" className={btnClass} disabled={visionLocked || seeingId != null} onClick={() => seeOne(item)}>
+              {seeingId === item.id ? "在认…" : "识图"}
+            </button>
+            <button type="button" className={btnClass} disabled={savingId === item.id} onClick={() => save(item)}>
+              {savingId === item.id ? "在存…" : "保存"}
+            </button>
+          </div>
         </div>
       ))}
     </div>
@@ -1058,6 +1124,7 @@ function PreviewPane({
   wikiEnabled,
   busy,
   assetTick,
+  visionLocked,
   onSaved,
   onError,
 }: {
@@ -1066,6 +1133,7 @@ function PreviewPane({
   wikiEnabled: boolean;
   busy: boolean;
   assetTick: number;
+  visionLocked: boolean;
   onSaved: (row: KbDocument) => void;
   onError: (message: string) => void;
 }) {
@@ -1097,7 +1165,7 @@ function PreviewPane({
         打开 / 下载
       </a>
 
-      <AssetWords docId={item.id} refreshTick={assetTick} onError={onError} />
+      <AssetWords docId={item.id} refreshTick={assetTick} visionLocked={visionLocked} onError={onError} />
 
       <div className="mt-4 border-t border-[var(--line)] pt-3">
         <p className="mb-1 font-medium">

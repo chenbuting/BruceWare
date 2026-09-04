@@ -25,7 +25,7 @@ from app.kb.assets import (
     rebuild_search_text,
     save_extracted_images,
 )
-from app.kb.vision import pending_vision_count, recognize_assets
+from app.kb.vision import pending_vision_count, recognize_assets, recognize_one_asset
 from app.kb.models import KbAsset, KbChunk, KbDocument, KbFolder, KbLibrary
 from app.kb.policy import dump_policy, parse_policy, resolve_mode
 from app.kb.search import folder_scope, snippet_of
@@ -660,6 +660,32 @@ def recognize_document(doc_id: int, db: Session = Depends(get_db)):
     if left:
         message += f"，还有 {left} 张，再点一次识图"
     return ok({"done": done, "left": left, "message": message})
+
+
+@router.post("/kb/assets/{asset_id}/vision")
+def recognize_asset(asset_id: int, db: Session = Depends(get_db)):
+    """认一张图，认完立刻返回，方便进度一条条填。"""
+
+    item = db.get(KbAsset, asset_id)
+    if item is None:
+        return fail("这张图不存在", 404)
+    row = db.get(KbDocument, item.document_id)
+    if row is None:
+        return fail("这份资料不存在", 404)
+    lib = _get_library(db, row.library_id)
+    if lib is None:
+        return fail("这个库不存在", 404)
+    if not parse_policy(lib)["vision_enabled"]:
+        return fail("这个库还没开启识图")
+    if not llm_public().get("has_key"):
+        return fail("请先在设置里填写 AI Key")
+    recognize_one_asset(row, item)
+    rebuild_search_text(db, row)
+    index_document(db, row)
+    row.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(item)
+    return ok(asset_edit_dict(item))
 
 
 @router.put("/kb/assets/{asset_id}")

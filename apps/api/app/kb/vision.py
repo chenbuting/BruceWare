@@ -60,6 +60,18 @@ def pending_vision_count(db: Session, document_id: int) -> int:
     return len(_pending(db, document_id))
 
 
+def recognize_one_asset(row: KbDocument, item: KbAsset) -> None:
+    """认一张图，马上写进 ocr_text。失败记下，方便一张一张填。"""
+
+    try:
+        path = abs_path(row.library_id, item.rel_path)
+        text = read_image_text(path.read_bytes())
+    except Exception:
+        item.ocr_text = OCR_SKIP
+        return
+    item.ocr_text = text or OCR_SKIP
+
+
 def recognize_assets(db: Session, row: KbDocument, limit: int) -> int:
     """认这份资料里还没识过的图。失败的记下，下次不再重试。返回认了几张。"""
 
