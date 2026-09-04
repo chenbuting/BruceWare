@@ -278,8 +278,8 @@ def pick_assets_by_meaning(question: str, items: list[KbAsset]) -> list[KbAsset]
     return picked
 
 
-def assets_for_docs(db: Session, doc_ids: list[int], question: str = "", per_doc: int = 4) -> dict[int, list[KbAsset]]:
-    """提问出处用：按意思带对得上的图，每份最多几张。没认过字的不带。"""
+def assets_for_docs(db: Session, doc_ids: list[int], question: str = "") -> dict[int, list[KbAsset]]:
+    """提问出处用：按意思带对得上的图。没认过字的不带。"""
 
     if not doc_ids:
         return {}
@@ -293,10 +293,7 @@ def assets_for_docs(db: Session, doc_ids: list[int], question: str = "", per_doc
     chosen = pick_assets_by_meaning(question, candidates)
     picked = {doc_id: [] for doc_id in grouped}
     for item in chosen:
-        bucket = picked.setdefault(item.document_id, [])
-        if len(bucket) >= per_doc:
-            continue
-        bucket.append(item)
+        picked.setdefault(item.document_id, []).append(item)
     return picked
 
 
