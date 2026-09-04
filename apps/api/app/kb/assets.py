@@ -230,7 +230,7 @@ def _parse_picked_ids(text: str, allowed: set[int]) -> list[int]:
 
 
 def pick_assets_by_meaning(question: str, items: list[KbAsset]) -> list[KbAsset]:
-    """按意思挑图：意思对上才要，标题不必一字不差。"""
+    """先看用户要不要图，再按意思挑。没要图就不带。"""
 
     q = question.strip()
     if not q or not items:
@@ -251,8 +251,10 @@ def pick_assets_by_meaning(question: str, items: list[KbAsset]) -> list[KbAsset]
     if not lines:
         return []
     prompt = (
-        "用户要找图。根据每张图上的文字，判断它是不是用户真正要的东西。\n"
-        "意思对上就可以，标题不必一字不差。\n"
+        "先理解用户这句是不是在要图、要原件、要看某份证件。\n"
+        "只问事实、只要文字答案、没有要看图或原件的意思：输出无。不要为了当证据而配图。\n"
+        "确实在要图：再按意思选真正符合的图。标题不必一字不差。\n"
+        "一句里又要图又要问数：只选要图的那部分，问事实的部分不配图。\n"
         "用户可能要好几样。有一样选一样，缺的不要拿别的证件凑。\n"
         "只是碰巧出现了相近的字、但不是同一类东西，不要选。\n"
         "不确定就不要选。\n"
@@ -265,7 +267,7 @@ def pick_assets_by_meaning(question: str, items: list[KbAsset]) -> list[KbAsset]
     try:
         answer = chat_complete(
             [
-                {"role": "system", "content": "你只负责判断哪些图符合用户要求，不回答问题本身。"},
+                {"role": "system", "content": "你先判断用户要不要图，再决定选哪些。不回答问题本身。"},
                 {"role": "user", "content": prompt},
             ],
             timeout=60,
