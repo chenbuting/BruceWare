@@ -223,6 +223,8 @@ export type InterviewSession = {
 
 export type KbEvidenceMode = "strict" | "loose";
 
+export type KbVisionEngine = "vision" | "ocr";
+
 export type KbLibrary = {
   id: number;
   name: string;
@@ -230,6 +232,7 @@ export type KbLibrary = {
   wiki_enabled: boolean;
   wiki_learn: boolean;
   vision_enabled: boolean;
+  vision_engine: KbVisionEngine;
   evidence_mode: KbEvidenceMode;
   rule: string;
   created_at: string;

@@ -12,3 +12,4 @@ pypdf==5.1.0
 python-multipart==0.0.20
 Pillow>=12.2.0
 paramiko==3.5.1
+rapidocr-onnxruntime>=1.4.4

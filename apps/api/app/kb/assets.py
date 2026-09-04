@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import io
 import json
+import re
 from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.ai import chat_complete, llm_public
 from app.kb.extract import extract_search_text
 from app.kb.models import KbAsset, KbDocument
-from app.kb.search import search_terms
 from app.kb.store import abs_path, kind_of, remove_file, write_bytes
 
 OCR_SKIP = "-"
@@ -198,24 +199,87 @@ def append_asset_alts(row: KbDocument, alts: list[str]) -> None:
     row.search_text = ((row.search_text or "") + " " + extra).strip()[:20000]
 
 
-def score_asset(question: str, item: KbAsset) -> float:
-    """问句和图上的字、图名有多贴。"""
+def _asset_caption(item: KbAsset, limit: int = 240) -> str:
+    """给选图模型看的一小段：图名 + 识图文字。"""
 
-    blob = f"{item.alt_text or ''} {ocr_for_search(item.ocr_text or '')}".lower()
-    q = question.strip().lower()
-    if not q or not blob.strip():
-        return 0.0
-    if q in blob:
-        return 2.0
-    terms = search_terms(question)
-    if not terms:
-        return 0.0
-    hit = sum(1 for term in terms if term in blob)
-    return hit / len(terms) if hit else 0.0
+    name = (item.alt_text or "").strip()
+    text = re.sub(r"\s+", " ", ocr_for_search(item.ocr_text or "")).strip()
+    if len(text) > limit:
+        text = text[:limit]
+    return f"{name} {text}".strip()
+
+
+def _parse_picked_ids(text: str, allowed: set[int]) -> list[int]:
+    """只收下模型点名的图编号，别的数字丢掉。"""
+
+    raw = (text or "").strip()
+    if not raw or raw in {"无", "没有", "none", "[]"}:
+        return []
+    found: list[int] = []
+    for match in re.findall(r"A(\d+)", raw, flags=re.I):
+        num = int(match)
+        if num in allowed and num not in found:
+            found.append(num)
+    if found:
+        return found
+    for match in re.findall(r"\d+", raw):
+        num = int(match)
+        if num in allowed and num not in found:
+            found.append(num)
+    return found
+
+
+def pick_assets_by_meaning(question: str, items: list[KbAsset]) -> list[KbAsset]:
+    """按意思挑图：意思对上才要，标题不必一字不差。"""
+
+    q = question.strip()
+    if not q or not items:
+        return []
+    if not llm_public().get("has_key"):
+        return []
+    by_id = {item.id: item for item in items if item.id}
+    if not by_id:
+        return []
+    lines = []
+    for item in items:
+        if not item.id:
+            continue
+        caption = _asset_caption(item)
+        if not caption:
+            continue
+        lines.append(f"[A{item.id}] {caption}")
+    if not lines:
+        return []
+    prompt = (
+        "用户要找图。根据每张图上的文字，判断它是不是用户真正要的东西。\n"
+        "意思对上就可以，标题不必一字不差。\n"
+        "用户可能要好几样。有一样选一样，缺的不要拿别的证件凑。\n"
+        "只是碰巧出现了相近的字、但不是同一类东西，不要选。\n"
+        "不确定就不要选。\n"
+        "只输出符合的编号，例如：A11,A4\n"
+        "一个都没有就输出：无\n"
+        "不要解释。\n\n"
+        f"用户问题：{q}\n\n"
+        + "\n".join(lines)
+    )
+    try:
+        answer = chat_complete(
+            [
+                {"role": "system", "content": "你只负责判断哪些图符合用户要求，不回答问题本身。"},
+                {"role": "user", "content": prompt},
+            ],
+            timeout=60,
+        )
+    except Exception:
+        return []
+    picked = []
+    for asset_id in _parse_picked_ids(answer, set(by_id)):
+        picked.append(by_id[asset_id])
+    return picked
 
 
 def assets_for_docs(db: Session, doc_ids: list[int], question: str = "", per_doc: int = 4) -> dict[int, list[KbAsset]]:
-    """提问出处用：优先带和问句对得上的图，每份最多几张。"""
+    """提问出处用：按意思带对得上的图，每份最多几张。没认过字的不带。"""
 
     if not doc_ids:
         return {}
@@ -225,12 +289,14 @@ def assets_for_docs(db: Session, doc_ids: list[int], question: str = "", per_doc
     grouped: dict[int, list[KbAsset]] = {}
     for row in rows:
         grouped.setdefault(row.document_id, []).append(row)
-    picked: dict[int, list[KbAsset]] = {}
-    for doc_id, items in grouped.items():
-        scored = [(score_asset(question, item), item) for item in items]
-        scored.sort(key=lambda pair: (-pair[0], pair[1].sort_order or 0, pair[1].id or 0))
-        matched = [item for score, item in scored if score > 0]
-        picked[doc_id] = matched[:per_doc]
+    candidates = [item for item in rows if ocr_for_search(item.ocr_text or "")]
+    chosen = pick_assets_by_meaning(question, candidates)
+    picked = {doc_id: [] for doc_id in grouped}
+    for item in chosen:
+        bucket = picked.setdefault(item.document_id, [])
+        if len(bucket) >= per_doc:
+            continue
+        bucket.append(item)
     return picked
 
 

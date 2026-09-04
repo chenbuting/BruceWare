@@ -27,6 +27,16 @@ def _for_vision(data: bytes) -> tuple[bytes, str]:
     return buf.getvalue(), "image/jpeg"
 
 
+def read_by_engine(data: bytes, engine: str) -> str:
+    """按库规则认一张：看图或本地 OCR。"""
+
+    if engine == "ocr":
+        from app.kb.ocr import read_ocr_text
+
+        return read_ocr_text(data)
+    return read_image_text(data)
+
+
 def read_image_text(data: bytes) -> str:
     """认一张图，返回短文本。"""
 
@@ -60,22 +70,26 @@ def pending_vision_count(db: Session, document_id: int) -> int:
     return len(_pending(db, document_id))
 
 
-def recognize_one_asset(row: KbDocument, item: KbAsset) -> None:
+def recognize_one_asset(row: KbDocument, item: KbAsset, engine: str = "vision") -> None:
     """认一张图，马上写进 ocr_text。失败记下，方便一张一张填。"""
 
     try:
         path = abs_path(row.library_id, item.rel_path)
-        text = read_image_text(path.read_bytes())
+        text = read_by_engine(path.read_bytes(), engine)
+    except ValueError:
+        raise
     except Exception:
         item.ocr_text = OCR_SKIP
         return
     item.ocr_text = text or OCR_SKIP
 
 
-def recognize_assets(db: Session, row: KbDocument, limit: int) -> int:
+def recognize_assets(db: Session, row: KbDocument, limit: int, engine: str = "vision") -> int:
     """认这份资料里还没识过的图。失败的记下，下次不再重试。返回认了几张。"""
 
-    if limit <= 0 or not llm_public().get("has_key"):
+    if limit <= 0:
+        return 0
+    if engine != "ocr" and not llm_public().get("has_key"):
         return 0
     pending = _pending(db, row.id)[:limit]
     used = 0
@@ -84,7 +98,9 @@ def recognize_assets(db: Session, row: KbDocument, limit: int) -> int:
         used += 1
         try:
             path = abs_path(row.library_id, item.rel_path)
-            text = read_image_text(path.read_bytes())
+            text = read_by_engine(path.read_bytes(), engine)
+        except ValueError:
+            raise
         except Exception:
             item.ocr_text = OCR_SKIP
             continue

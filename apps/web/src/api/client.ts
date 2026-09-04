@@ -10,6 +10,7 @@ import type {
   KbDocAsset,
   KbDocument,
   KbEvidenceMode,
+  KbVisionEngine,
   KbFolder,
   KbLibrary,
   KbWikiList,
@@ -523,6 +524,7 @@ export function updateKbLibraryPolicy(
   rule: string,
   wikiLearn = false,
   visionEnabled = false,
+  visionEngine: KbVisionEngine = "vision",
 ) {
   return request<KbLibrary>(`/api/v1/kb/libraries/${id}/policy`, {
     method: "PUT",
@@ -530,6 +532,7 @@ export function updateKbLibraryPolicy(
       wiki_enabled: wikiEnabled,
       wiki_learn: wikiLearn,
       vision_enabled: visionEnabled,
+      vision_engine: visionEngine,
       evidence_mode: evidenceMode,
       rule,
     }),

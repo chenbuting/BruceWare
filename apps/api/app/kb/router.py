@@ -25,6 +25,7 @@ from app.kb.assets import (
     rebuild_search_text,
     save_extracted_images,
 )
+from app.kb.ocr import ensure_ocr
 from app.kb.vision import pending_vision_count, recognize_assets, recognize_one_asset
 from app.kb.models import KbAsset, KbChunk, KbDocument, KbFolder, KbLibrary
 from app.kb.policy import dump_policy, parse_policy, resolve_mode
@@ -54,6 +55,7 @@ class PolicyIn(BaseModel):
     wiki_enabled: bool = False
     wiki_learn: bool = False
     vision_enabled: bool = False
+    vision_engine: str = "vision"
     evidence_mode: str = "strict"
     rule: str = Field(default="", max_length=500)
 
@@ -97,6 +99,7 @@ def _library_dict(row: KbLibrary) -> dict:
         "wiki_enabled": policy["wiki_enabled"],
         "wiki_learn": policy["wiki_learn"],
         "vision_enabled": policy["vision_enabled"],
+        "vision_engine": policy["vision_engine"],
         "evidence_mode": policy["evidence_mode"],
         "rule": policy["rule"],
         "created_at": _iso(row.created_at),
@@ -149,6 +152,24 @@ def _get_library(db: Session, library_id: int) -> KbLibrary | None:
     return db.get(KbLibrary, library_id)
 
 
+def _ready_vision(lib: KbLibrary):
+    """识图前检查。通过返回识别方式，否则返回错误响应。"""
+
+    policy = parse_policy(lib)
+    if not policy["vision_enabled"]:
+        return None, fail("这个库还没开启识图")
+    engine = policy["vision_engine"]
+    if engine == "ocr":
+        try:
+            ensure_ocr()
+        except ValueError as exc:
+            return None, fail(str(exc))
+        return engine, None
+    if not llm_public().get("has_key"):
+        return None, fail("请先在设置里填写 AI Key")
+    return engine, None
+
+
 def _folder_in_library(db: Session, library_id: int, folder_id: int | None) -> bool:
     if folder_id is None:
         return True
@@ -196,7 +217,9 @@ def update_library_policy(library_id: int, body: PolicyIn, db: Session = Depends
     if row is None:
         return fail("这个库不存在", 404)
     mode = body.evidence_mode if body.evidence_mode in {"strict", "loose"} else "strict"
-    row.policy_json = dump_policy(body.wiki_enabled, mode, body.rule, body.wiki_learn, body.vision_enabled)
+    row.policy_json = dump_policy(
+        body.wiki_enabled, mode, body.rule, body.wiki_learn, body.vision_enabled, body.vision_engine
+    )
     db.commit()
     db.refresh(row)
     return ok(_library_dict(row))
@@ -635,17 +658,19 @@ def recognize_document(doc_id: int, db: Session = Depends(get_db)):
     lib = _get_library(db, row.library_id)
     if lib is None:
         return fail("这个库不存在", 404)
-    if not parse_policy(lib)["vision_enabled"]:
-        return fail("这个库还没开启识图")
-    if not llm_public().get("has_key"):
-        return fail("请先在设置里填写 AI Key")
+    engine, err = _ready_vision(lib)
+    if err is not None:
+        return err
     _fill_assets(row, db)
     db.flush()
     if not list_doc_assets(db, row.id):
         return fail("这份资料没有可认的图")
     if pending_vision_count(db, row.id) == 0:
         return ok({"done": 0, "left": 0, "message": "这些图都认过了"})
-    done = recognize_assets(db, row, 8)
+    try:
+        done = recognize_assets(db, row, 8, engine)
+    except ValueError as exc:
+        return fail(str(exc))
     rebuild_search_text(db, row)
     index_document(db, row)
     row.updated_at = datetime.utcnow()
@@ -670,11 +695,13 @@ def recognize_asset(asset_id: int, db: Session = Depends(get_db)):
     lib = _get_library(db, row.library_id)
     if lib is None:
         return fail("这个库不存在", 404)
-    if not parse_policy(lib)["vision_enabled"]:
-        return fail("这个库还没开启识图")
-    if not llm_public().get("has_key"):
-        return fail("请先在设置里填写 AI Key")
-    recognize_one_asset(row, item)
+    engine, err = _ready_vision(lib)
+    if err is not None:
+        return err
+    try:
+        recognize_one_asset(row, item, engine)
+    except ValueError as exc:
+        return fail(str(exc))
     rebuild_search_text(db, row)
     index_document(db, row)
     row.updated_at = datetime.utcnow()

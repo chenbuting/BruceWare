@@ -29,7 +29,7 @@ import {
   updateKbLibraryPolicy,
   uploadKbDocument,
 } from "@/api/client";
-import type { KbAskResult, KbDocAsset, KbDocument, KbEvidenceMode, KbFolder, KbLibrary, KbWikiList } from "@/api/types";
+import type { KbAskResult, KbDocAsset, KbDocument, KbEvidenceMode, KbFolder, KbLibrary, KbVisionEngine, KbWikiList } from "@/api/types";
 import { ConfirmModal, Modal } from "@/components/Modal";
 import { PdfPreview } from "@/components/PdfPreview";
 
@@ -107,6 +107,7 @@ export function KbPage() {
   const [wikiEnabled, setWikiEnabled] = useState(false);
   const [wikiLearn, setWikiLearn] = useState(false);
   const [visionEnabled, setVisionEnabled] = useState(false);
+  const [visionEngine, setVisionEngine] = useState<KbVisionEngine>("vision");
   const [libMode, setLibMode] = useState<KbEvidenceMode>("strict");
   const [libRule, setLibRule] = useState("");
   const [wikiList, setWikiList] = useState<KbWikiList | null>(null);
@@ -333,6 +334,7 @@ export function KbPage() {
       setWikiEnabled(!!library.wiki_enabled);
       setWikiLearn(!!library.wiki_learn);
       setVisionEnabled(!!library.vision_enabled);
+      setVisionEngine(library.vision_engine === "ocr" ? "ocr" : "vision");
       setLibMode(library.evidence_mode || "strict");
       setLibRule(library.rule || "");
     }
@@ -744,10 +746,25 @@ export function KbPage() {
               <input type="checkbox" checked={visionEnabled} onChange={(e) => setVisionEnabled(e.target.checked)} />
               开启识图
             </label>
+            {visionEnabled ? (
+              <div className="mb-2 flex flex-wrap items-center gap-2 text-[13px]">
+                <span className="text-[var(--muted)]">识别方式</span>
+                <select
+                  className={inputClass}
+                  value={visionEngine}
+                  onChange={(e) => setVisionEngine(e.target.value === "ocr" ? "ocr" : "vision")}
+                >
+                  <option value="vision">看图（准，慢，要 Key）</option>
+                  <option value="ocr">OCR（快，不要 Key）</option>
+                </select>
+              </div>
+            ) : null}
             <p className="mb-3 text-[12px] leading-5 text-[var(--muted)]">
-              开了才认图上的字，才能搜「营业执照」这类。默认关，费时间和 Key。
+              开了才认图上的字，才能搜「营业执照」这类。默认关。
               <br />
               开了只表示允许识图。上传不会自动认，要点列表「全部识图」或预览里单张「识图」。
+              <br />
+              看图：用对话模型看图，能说出这是什么证件。OCR：本机抄字，更快，红章可能认不全。
             </p>
             <div className="mb-2 flex flex-wrap items-center gap-2 text-[13px]">
               <span className="text-[var(--muted)]">回答风格</span>
@@ -776,7 +793,15 @@ export function KbPage() {
               onClick={() =>
                 run(async () => {
                   if (!library) return;
-                  const row = await updateKbLibraryPolicy(library.id, wikiEnabled, libMode, libRule, wikiLearn, visionEnabled);
+                  const row = await updateKbLibraryPolicy(
+                    library.id,
+                    wikiEnabled,
+                    libMode,
+                    libRule,
+                    wikiLearn,
+                    visionEnabled,
+                    visionEngine,
+                  );
                   setLibraries((items) => items.map((item) => (item.id === row.id ? row : item)));
                   setHint("已保存库规则");
                 })
