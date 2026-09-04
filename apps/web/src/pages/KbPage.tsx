@@ -47,6 +47,11 @@ function evidenceLabel(mode: KbEvidenceMode) {
   return mode === "loose" ? "宽松概述" : "严格出处";
 }
 
+/** 这次回答带上的相关图，用来直接画在回答里。 */
+function relatedAskImages(result: KbAskResult) {
+  return result.citations.flatMap((hit) => (hit.images || []).map((img) => ({ ...img, docId: hit.id })));
+}
+
 function evidenceHint(mode: "" | KbEvidenceMode, libraryMode: KbEvidenceMode = "strict") {
   if (!mode) {
     return `按库规则：这次跟库里设的走，当前是${evidenceLabel(libraryMode)}。`;
@@ -397,30 +402,35 @@ export function KbPage() {
           {askResult ? (
             <div className="mt-2 border-t border-[var(--line)] pt-2 text-[13px] leading-6">
               <p className="whitespace-pre-wrap">{askResult.answer}</p>
-              {askResult.citations.length ? (
-                <div className="mt-2 text-[var(--muted)]">
-                  <p>出处</p>
-                  {askResult.citations.map((hit) => (
-                    <div key={hit.id} className="mt-1">
-                      <button type="button" className="underline hover:text-[var(--text)]" onClick={() => onOpenCitation(hit.id)}>
-                        {hit.title}
-                      </button>
-                      {hit.images?.length ? (
-                        <div className="mt-1 flex flex-wrap gap-2">
-                          {hit.images.map((img) => (
-                            <button key={img.id} type="button" className="block" title={img.alt} onClick={() => onOpenCitation(hit.id)}>
-                              <img
-                                src={img.url || kbAssetFileUrl(img.id)}
-                                alt={img.alt}
-                                className="h-16 w-auto rounded border border-[var(--line)] object-cover"
-                              />
-                            </button>
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
+              {relatedAskImages(askResult).length ? (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {relatedAskImages(askResult).map((img) => (
+                    <button
+                      key={img.id}
+                      type="button"
+                      className="max-w-[12rem] text-left text-[12px] text-[var(--muted)]"
+                      title={img.alt}
+                      onClick={() => onOpenCitation(img.docId)}
+                    >
+                      <img
+                        src={img.url || kbAssetFileUrl(img.id)}
+                        alt={img.alt}
+                        className="max-h-40 w-auto rounded border border-[var(--line)] object-contain"
+                      />
+                      {img.alt ? <span className="mt-1 block">{img.alt}</span> : null}
+                    </button>
                   ))}
                 </div>
+              ) : null}
+              {askResult.citations.length ? (
+                <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[var(--muted)]">
+                  <span>出处</span>
+                  {askResult.citations.map((hit) => (
+                    <button key={hit.id} type="button" className="underline hover:text-[var(--text)]" onClick={() => onOpenCitation(hit.id)}>
+                      {hit.title}
+                    </button>
+                  ))}
+                </p>
               ) : null}
               {askResult.used_vector ? <p className="mt-2 text-[12px] text-[var(--muted)]">本次还用了向量检索，换说法也能对上。</p> : null}
               {askResult.wiki_update_hint ? <p className="mt-2 text-[12px] text-[var(--muted)]">{askResult.wiki_update_hint}</p> : null}
