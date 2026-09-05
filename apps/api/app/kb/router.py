@@ -49,6 +49,7 @@ from app.kb.vector import (
     ensure_chunks,
     hybrid_rank,
     index_document,
+    pack_ask_snippets,
     score_chunks,
     supplement_hits,
     update_chunk_text,
@@ -711,7 +712,9 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
         index_document(db, row)
     db.commit()
     chunk_best = score_chunks(db, library_id, search_q, {row.id for row in rows})
-    ranked_full = supplement_hits(search_q, rows, hybrid_rank(search_q, rows, chunk_best), chunk_best)
+    ranked_full = pack_ask_snippets(
+        search_q, supplement_hits(search_q, rows, hybrid_rank(search_q, rows, chunk_best), chunk_best)
+    )
     ranked = [(row, score) for row, score, _snippet in ranked_full]
     used_vector = bool(chunk_best)
     citations = []

@@ -16,6 +16,13 @@ _CHUNK_SIZE = 400
 _CHUNK_OVERLAP = 60
 _MAX_CHUNKS = 40
 _VEC_FLOOR = 0.28
+_PER_DOC_CHUNKS = 3
+_INDEX_GAP = 3
+_ASK_CHUNK_LIMIT = 10
+
+# 一份资料：最高分，以及候选块 (块序号, 分数, 正文)
+type ChunkPick = tuple[int, float, str]
+type DocHits = dict[int, tuple[float, list[ChunkPick]]]
 
 
 def split_chunks(text: str) -> list[str]:
@@ -163,8 +170,79 @@ def index_document(db: Session, row: KbDocument) -> bool:
     return True
 
 
-def score_chunks(db: Session, library_id: int, question: str, doc_ids: set[int] | None) -> dict[int, tuple[float, str]]:
-    """每份资料最高的向量分和对应片段。"""
+def _pick_spread(scored: list[ChunkPick], limit: int = _PER_DOC_CHUNKS, gap: int = _INDEX_GAP) -> list[ChunkPick]:
+    """按分数取块，彼此隔开，避免全挤在目录附近。"""
+
+    picked: list[ChunkPick] = []
+    for item in scored:
+        if any(abs(item[0] - prev[0]) < gap for prev in picked):
+            continue
+        picked.append(item)
+        if len(picked) >= limit:
+            break
+    return picked
+
+
+def _with_neighbors(by_index: dict[int, tuple[float, str]], picked: list[ChunkPick], best_index: int) -> list[ChunkPick]:
+    """最高分那块带上左右邻居，半句话能接上。"""
+
+    have = {item[0] for item in picked}
+    extra: list[ChunkPick] = []
+    for index in (best_index - 1, best_index + 1):
+        if index in by_index and index not in have:
+            score, text = by_index[index]
+            extra.append((index, score, text))
+            have.add(index)
+    merged = list(picked) + extra
+    merged.sort(key=lambda item: item[0])
+    return merged
+
+
+def _join_picks(picks: list[ChunkPick]) -> str:
+    return "\n\n".join(text.strip() for _index, _score, text in picks if (text or "").strip())
+
+
+def _priority_picks(picks: list[ChunkPick]) -> list[ChunkPick]:
+    """先保住最高分和它的邻居，再补其它分散块。"""
+
+    if not picks:
+        return []
+    best_index = max(picks, key=lambda item: item[1])[0]
+    best = [item for item in picks if item[0] == best_index]
+    neighbors = [item for item in picks if abs(item[0] - best_index) == 1]
+    others = [item for item in picks if item[0] != best_index and abs(item[0] - best_index) != 1]
+    others.sort(key=lambda item: item[1], reverse=True)
+    return best + neighbors + others
+
+
+def pack_ask_snippets(
+    question: str,
+    ranked: list[tuple[KbDocument, float, list[ChunkPick]]],
+    limit: int = _ASK_CHUNK_LIMIT,
+) -> list[tuple[KbDocument, float, str]]:
+    """每份先留一块，剩下来的名额给前面的资料。合计不超过上限。"""
+
+    queues = [_priority_picks(picks) for _row, _score, picks in ranked]
+    assigned: list[list[ChunkPick]] = [[] for _ in ranked]
+    budget = limit
+    for index, queue in enumerate(queues):
+        if queue and budget > 0:
+            assigned[index].append(queue.pop(0))
+            budget -= 1
+    for index, queue in enumerate(queues):
+        while queue and budget > 0:
+            assigned[index].append(queue.pop(0))
+            budget -= 1
+    packed: list[tuple[KbDocument, float, str]] = []
+    for (row, score, _picks), picks in zip(ranked, assigned):
+        picks.sort(key=lambda item: item[0])
+        snippet = _join_picks(picks) if picks else snippet_of(question, row)
+        packed.append((row, score, snippet))
+    return packed
+
+
+def score_chunks(db: Session, library_id: int, question: str, doc_ids: set[int] | None) -> DocHits:
+    """每份资料按向量挑出分散的几块，并带上最高分左右邻居。"""
 
     if not question.strip() or not llm_public().get("has_key"):
         return {}
@@ -174,36 +252,41 @@ def score_chunks(db: Session, library_id: int, question: str, doc_ids: set[int] 
         return {}
     stmt = select(KbChunk).where(KbChunk.library_id == library_id, KbChunk.profile == embedding_profile())
     rows = list(db.scalars(stmt).all())
-    best: dict[int, tuple[float, str]] = {}
+    grouped: dict[int, list[ChunkPick]] = {}
     for row in rows:
         if doc_ids is not None and row.document_id not in doc_ids:
             continue
         score = cosine(query_vec, _parse_vec(row.embedding))
-        if score < _VEC_FLOOR:
+        grouped.setdefault(row.document_id, []).append((row.chunk_index, score, row.text or ""))
+    best: DocHits = {}
+    for document_id, items in grouped.items():
+        by_index = {index: (score, text) for index, score, text in items}
+        candidates = [item for item in items if item[1] >= _VEC_FLOOR]
+        if not candidates:
             continue
-        prev = best.get(row.document_id)
-        if prev is None or score > prev[0]:
-            best[row.document_id] = (score, row.text)
+        candidates.sort(key=lambda item: item[1], reverse=True)
+        spread = _pick_spread(candidates)
+        selected = _with_neighbors(by_index, spread, candidates[0][0])
+        best[document_id] = (candidates[0][1], selected)
     return best
 
 
 def hybrid_rank(
     question: str,
     rows: list[KbDocument],
-    chunk_best: dict[int, tuple[float, str]],
+    chunk_best: DocHits,
     top_k: int = 6,
-) -> list[tuple[KbDocument, float, str]]:
-    """关键词和向量取高分，带回最相关的一段原文。"""
+) -> list[tuple[KbDocument, float, list[ChunkPick]]]:
+    """关键词和向量取高分，先带回候选块，稍后按上限再裁。"""
 
-    merged: list[tuple[KbDocument, float, str]] = []
+    merged: list[tuple[KbDocument, float, list[ChunkPick]]] = []
     for row in rows:
         kw = score_document(question, row)
-        vec, chunk = chunk_best.get(row.id, (0.0, ""))
+        vec, pieces = chunk_best.get(row.id, (0.0, []))
         score = max(kw, vec)
         if score <= 0:
             continue
-        snippet = chunk if chunk else snippet_of(question, row)
-        merged.append((row, score, snippet))
+        merged.append((row, score, pieces))
     merged.sort(key=lambda item: item[1], reverse=True)
     return merged[:top_k]
 
@@ -211,19 +294,19 @@ def hybrid_rank(
 def supplement_hits(
     question: str,
     rows: list[KbDocument],
-    ranked: list[tuple[KbDocument, float, str]],
-    chunk_best: dict[int, tuple[float, str]],
+    ranked: list[tuple[KbDocument, float, list[ChunkPick]]],
+    chunk_best: DocHits,
     top_k: int = 6,
-) -> list[tuple[KbDocument, float, str]]:
+) -> list[tuple[KbDocument, float, list[ChunkPick]]]:
     """问句里的实词前几份没盖住时，再按这些词补进来。已有的不丢。"""
 
-    blobs = [_haystack(row) for row, _score, _snip in ranked]
-    blobs.extend(snippet or "" for _row, _score, snippet in ranked)
+    blobs = [_haystack(row) for row, _score, _picks in ranked]
+    blobs.extend(text for _row, _score, picks in ranked for _index, _s, text in picks)
     missing = uncovered_terms(question, blobs)
     if not missing:
         return ranked
-    have = {row.id for row, _score, _snip in ranked}
-    extra: list[tuple[KbDocument, float, str]] = []
+    have = {row.id for row, _score, _picks in ranked}
+    extra: list[tuple[KbDocument, float, list[ChunkPick]]] = []
     for row in rows:
         if row.id in have:
             continue
@@ -231,10 +314,8 @@ def supplement_hits(
         if not any(term in blob for term in missing):
             continue
         kw = score_document(question, row)
-        vec, chunk = chunk_best.get(row.id, (0.0, ""))
-        score = max(kw, vec, 0.2)
-        snippet = chunk if chunk else snippet_of(" ".join(missing), row)
-        extra.append((row, score, snippet))
+        vec, pieces = chunk_best.get(row.id, (0.0, []))
+        extra.append((row, max(kw, vec, 0.2), pieces))
     extra.sort(key=lambda item: item[1], reverse=True)
     merged = list(ranked)
     for item in extra:
