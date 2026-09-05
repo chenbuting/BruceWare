@@ -6,6 +6,7 @@ import type {
   FilesStatus,
   FolderBrowse,
   InterviewSession,
+  KbAskHistoryItem,
   KbAskResult,
   KbDocAsset,
   KbDocument,
@@ -649,6 +650,7 @@ export function askKbLibrary(
   folderId: number | null,
   onlyFolder: boolean,
   evidenceMode: KbEvidenceMode | "",
+  history: KbAskHistoryItem[] = [],
 ) {
   return request<KbAskResult>(`/api/v1/kb/libraries/${libraryId}/ask`, {
     method: "POST",
@@ -657,6 +659,7 @@ export function askKbLibrary(
       folder_id: onlyFolder ? folderId : null,
       only_folder: onlyFolder && folderId != null,
       evidence_mode: evidenceMode || null,
+      history,
     }),
   });
 }

@@ -294,6 +294,12 @@ export type KbAskResult = {
   used_vector?: boolean;
 };
 
+/** 发给后端的上一轮问答，只帮听懂指代。 */
+export type KbAskHistoryItem = {
+  question: string;
+  answer: string;
+};
+
 export type KbDocument = {
   id: number;
   library_id: number;

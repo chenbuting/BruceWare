@@ -32,7 +32,7 @@ from app.kb.vision import pending_vision_count, recognize_assets, recognize_one_
 from app.kb.models import KbAsset, KbChunk, KbDocument, KbFolder, KbLibrary
 from app.kb.policy import dump_policy, parse_policy, resolve_mode
 from app.kb.search import folder_scope, snippet_of
-from app.kb.vector import clear_chunks, hybrid_rank, index_document, score_chunks
+from app.kb.vector import clear_chunks, hybrid_rank, index_document, score_chunks, supplement_hits
 from app.kb.wiki import ASK_WIKI_LIMIT, clip_summary, dump_wiki, learn_hint, parse_wiki, wiki_item
 from app.kb.store import (
     file_digest,
@@ -83,11 +83,25 @@ class DocumentPatch(BaseModel):
     folder_id: int | None = None
 
 
+# 本页连续问只带最近几轮，不落库。
+ASK_HISTORY_LIMIT = 6
+# 写回答固定上限，不跟着资料变多再改。
+ASK_ANSWER_TIMEOUT = 120
+
+
+class AskTurnIn(BaseModel):
+    """前端传来的上一轮问答，只用来听懂指代。"""
+
+    question: str = Field(default="", max_length=2000)
+    answer: str = Field(default="", max_length=8000)
+
+
 class AskIn(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     folder_id: int | None = None
     only_folder: bool = False
     evidence_mode: str | None = None
+    history: list[AskTurnIn] = Field(default_factory=list)
 
 
 def _iso(value: datetime | None) -> str:
@@ -530,7 +544,54 @@ def _ask_style(mode: str, rule: str) -> str:
     extra = (rule or "").strip()
     if extra:
         text += f" 额外规则：{extra}"
+    text += (
+        " 用 Markdown 排版：对比用表格，条目用列表。"
+        "若要展示图，把资料里「可展示的图」那一行 ![说明](地址) 原样插到对应句子旁边，不要改地址。"
+        "不需要配图就不要插入图片。"
+    )
     return text
+
+
+def _ask_history(items: list[AskTurnIn]) -> list[AskTurnIn]:
+    """只留最近几轮里问、答都有的。当前这句另算，所以最多再带 5 轮。"""
+
+    cleaned: list[AskTurnIn] = []
+    for item in items:
+        question = item.question.strip()
+        answer = item.answer.strip()
+        if question and answer:
+            cleaned.append(AskTurnIn(question=question, answer=answer[:4000]))
+    return cleaned[-(ASK_HISTORY_LIMIT - 1) :]
+
+
+def _search_question(question: str, history: list[AskTurnIn]) -> str:
+    """检索用上一句加这句，方便听懂「那有效期呢」。"""
+
+    prev = history[-1].question if history else ""
+    if prev and prev != question:
+        return f"{prev}\n{question}"
+    return question
+
+
+def _ask_messages(question: str, prompt: str, history: list[AskTurnIn]) -> list[dict]:
+    """历史只帮听懂指代，证据仍是本轮资料。"""
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是知识库助手，依据本轮资料原文和图上的说明作答，并标明出处。"
+                "用户可能接着上一句问。刚才的对话只用来听懂「那」「刚才」「这份」指什么。"
+                "编号、日期、金额、开户行、证书名称等事实必须依据本轮资料，不能拿上一轮回答当证据。"
+                "本轮资料没有就说资料里没有。"
+            ),
+        }
+    ]
+    for turn in history:
+        messages.append({"role": "user", "content": turn.question})
+        messages.append({"role": "assistant", "content": turn.answer})
+    messages.append({"role": "user", "content": f"问题：{question}\n\n{prompt}"})
+    return messages
 
 
 @router.post("/kb/libraries/{library_id}/ask")
@@ -545,6 +606,8 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
     question = body.question.strip()
     if not question:
         return fail("请先写问题")
+    history = _ask_history(body.history)
+    search_q = _search_question(question, history)
     policy = parse_policy(lib)
     mode = resolve_mode(policy["evidence_mode"], body.evidence_mode)
     folders = db.scalars(select(KbFolder).where(KbFolder.library_id == library_id)).all()
@@ -558,14 +621,14 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
         _fill_assets(row, db)
         index_document(db, row)
     db.commit()
-    chunk_best = score_chunks(db, library_id, question, {row.id for row in rows})
-    ranked_full = hybrid_rank(question, rows, chunk_best)
+    chunk_best = score_chunks(db, library_id, search_q, {row.id for row in rows})
+    ranked_full = supplement_hits(search_q, rows, hybrid_rank(search_q, rows, chunk_best), chunk_best)
     ranked = [(row, score) for row, score, _snippet in ranked_full]
     used_vector = bool(chunk_best)
     citations = []
     blocks = []
     use_notes = policy["wiki_enabled"] and mode == "loose"
-    pictures = assets_for_docs(db, [row.id for row, _score, _snip in ranked_full], question)
+    pictures = assets_for_docs(db, [row.id for row, _score, _snip in ranked_full], search_q)
     for index, (row, score, snippet) in enumerate(ranked_full, start=1):
         citations.append(
             {
@@ -575,10 +638,18 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
                 "images": [asset_dict(item) for item in pictures.get(row.id, [])],
             }
         )
-        block = f"【资料{index}】{row.title or row.file_name}\n{snippet or snippet_of(question, row)}"
+        block = f"【资料{index}】{row.title or row.file_name}\n{snippet or snippet_of(search_q, row)}"
         notes = asset_notes_for_ask(pictures.get(row.id, []))
         if notes:
             block += f"\n【图上的说明】\n{notes}"
+        shown = pictures.get(row.id, [])
+        if shown:
+            lines = []
+            for item in shown:
+                data = asset_dict(item)
+                name = (item.alt_text or "图").strip()
+                lines.append(f"![{name}]({data['url']})")
+            block += "\n【可展示的图】\n" + "\n".join(lines)
         if use_notes:
             note = parse_wiki(row)
             if note.summary:
@@ -612,12 +683,7 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
         + "\n\n".join(blocks)
     )
     try:
-        answer = chat_complete(
-            [
-                {"role": "system", "content": "你是知识库助手，依据用户资料作答，并标明出处。"},
-                {"role": "user", "content": f"问题：{question}\n\n{prompt}"},
-            ]
-        )
+        answer = chat_complete(_ask_messages(question, prompt, history), timeout=ASK_ANSWER_TIMEOUT)
     except ValueError as exc:
         return fail(str(exc))
     hint = ""

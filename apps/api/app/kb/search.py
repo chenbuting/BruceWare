@@ -79,6 +79,87 @@ def snippet_of(question: str, row: KbDocument, limit: int = 900) -> str:
     return body[start : start + limit]
 
 
+_FOCUS_SKIP = {
+    "什么",
+    "多少",
+    "哪个",
+    "哪些",
+    "怎么",
+    "如何",
+    "一下",
+    "这个",
+    "那个",
+    "还有",
+    "以及",
+    "请问",
+    "可以",
+    "是否",
+    "有没有",
+    "相关",
+    "资料",
+    "文件",
+}
+
+
+def focus_terms(question: str) -> list[str]:
+    """问句里比较实的词，用来看检索有没有盖住。不用二字切片，避免乱补。"""
+
+    cleaned = question.strip().lower()
+    if not cleaned:
+        return []
+    found = re.findall(r"[a-z0-9_]{2,}|[\u4e00-\u9fff]{2,}", cleaned)
+    terms: list[str] = []
+    for token in found:
+        if token in _FOCUS_SKIP:
+            continue
+        if re.fullmatch(r"[a-z0-9_]+", token):
+            if token not in terms:
+                terms.append(token)
+            continue
+        if 2 <= len(token) <= 6 and token not in terms:
+            terms.append(token)
+        if len(token) >= 4:
+            for index in range(0, len(token) - 3):
+                piece = token[index : index + 4]
+                if piece not in _FOCUS_SKIP and piece not in terms:
+                    terms.append(piece)
+    return terms[:16]
+
+
+def _term_in_blob(term: str, blob: str) -> bool:
+    if term in blob:
+        return True
+    if len(term) >= 3:
+        for index in range(len(term) - 2):
+            if term[index : index + 3] in blob:
+                return True
+    return False
+
+
+def uncovered_terms(question: str, blobs: list[str]) -> list[str]:
+    """前几份资料没盖住的实词。"""
+
+    hay = "\n".join(item.lower() for item in blobs if item)
+    return [term for term in focus_terms(question) if not _term_in_blob(term, hay)]
+
+
+def expand_snippet(question: str, row: KbDocument, piece: str = "", limit: int = 900) -> str:
+    """命中附近尽量给够，不额外砍短。"""
+
+    body = (row.search_text or "").strip()
+    needle = (piece or "").strip()[:40]
+    if body and needle:
+        pos = body.lower().find(needle.lower())
+        if pos >= 0:
+            start = max(0, pos - 80)
+            return body[start : start + limit]
+        extra = snippet_of(question, row, limit)
+        if extra and extra not in piece:
+            return f"{piece.strip()}\n{extra}"[:limit]
+        return (piece or "")[:limit]
+    return snippet_of(question, row, limit)
+
+
 def rank_documents(question: str, rows: list[KbDocument], top_k: int = 6) -> list[tuple[KbDocument, float]]:
     scored = [(row, score_document(question, row)) for row in rows]
     scored = [item for item in scored if item[1] > 0]

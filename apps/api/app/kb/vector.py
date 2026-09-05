@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.ai import embed_texts, embedding_profile, llm_public
 from app.kb.models import KbChunk, KbDocument
-from app.kb.search import score_document, snippet_of
+from app.kb.search import _haystack, expand_snippet, score_document, snippet_of, uncovered_terms
 
 _CHUNK_SIZE = 400
 _CHUNK_OVERLAP = 60
@@ -136,7 +136,44 @@ def hybrid_rank(
         score = max(kw, vec)
         if score <= 0:
             continue
-        snippet = chunk if vec >= kw and chunk else snippet_of(question, row)
+        raw = chunk if vec >= kw and chunk else ""
+        snippet = expand_snippet(question, row, raw)
         merged.append((row, score, snippet))
     merged.sort(key=lambda item: item[1], reverse=True)
     return merged[:top_k]
+
+
+def supplement_hits(
+    question: str,
+    rows: list[KbDocument],
+    ranked: list[tuple[KbDocument, float, str]],
+    chunk_best: dict[int, tuple[float, str]],
+    top_k: int = 6,
+) -> list[tuple[KbDocument, float, str]]:
+    """问句里的实词前几份没盖住时，再按这些词补进来。已有的不丢。"""
+
+    blobs = [_haystack(row) for row, _score, _snip in ranked]
+    blobs.extend(snippet or "" for _row, _score, snippet in ranked)
+    missing = uncovered_terms(question, blobs)
+    if not missing:
+        return ranked
+    have = {row.id for row, _score, _snip in ranked}
+    extra: list[tuple[KbDocument, float, str]] = []
+    for row in rows:
+        if row.id in have:
+            continue
+        blob = _haystack(row)
+        if not any(term in blob for term in missing):
+            continue
+        kw = score_document(question, row)
+        vec, chunk = chunk_best.get(row.id, (0.0, ""))
+        score = max(kw, vec, 0.2)
+        snippet = expand_snippet(" ".join(missing), row, chunk if vec >= kw and chunk else "")
+        extra.append((row, score, snippet))
+    extra.sort(key=lambda item: item[1], reverse=True)
+    merged = list(ranked)
+    for item in extra:
+        merged.append(item)
+        if len(merged) >= top_k + 4:
+            break
+    return merged

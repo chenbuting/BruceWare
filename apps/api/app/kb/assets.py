@@ -15,6 +15,44 @@ from app.kb.extract import extract_search_text
 from app.kb.models import KbAsset, KbDocument
 from app.kb.store import abs_path, kind_of, remove_file, write_bytes
 
+# 这句是不是在要看图或原件。只决定跑不跑选图，不决定选哪张。
+_IMAGE_INTENT = re.compile(
+    r"(?:"
+    r"图片|配图|截图|扫描件|照片|附图|图文|有图|原件|原图|"
+    r"看看.{0,8}(?:图|照|件|证)|"
+    r"(?:给|发|传|看|出|列|要|拿).{0,10}(?:图|照|扫描|原件|证件|证照|证书|执照)|"
+    r"(?:证件|证照|证书|执照|扫描件).{0,8}(?:图|原件|看看|给我)|"
+    r"那张|这张|刚才那"
+    r")",
+    re.I,
+)
+_MEANING_SKIP = {
+    "什么",
+    "多少",
+    "哪个",
+    "哪些",
+    "怎么",
+    "如何",
+    "一下",
+    "这个",
+    "那个",
+    "还有",
+    "以及",
+    "请问",
+    "可以",
+    "是否",
+    "有没有",
+    "看看",
+    "给我",
+    "出来",
+    "相关",
+    "资料",
+    "文件",
+    "图片",
+    "原件",
+    "扫描件",
+}
+
 OCR_SKIP = "-"
 
 _MIN_SIDE = 80
@@ -229,12 +267,57 @@ def _parse_picked_ids(text: str, allowed: set[int]) -> list[int]:
     return found
 
 
-def pick_assets_by_meaning(question: str, items: list[KbAsset]) -> list[KbAsset]:
-    """先看用户要不要图，再按意思挑。没要图就不带。"""
+def user_wants_images(question: str) -> bool:
+    """这句是不是在要看图或原件。"""
 
-    q = question.strip()
-    if not q or not items:
+    return bool(_IMAGE_INTENT.search((question or "").strip()))
+
+
+def _meaning_terms(question: str) -> list[str]:
+    """问句里用来对图意的词，不用二字切片。"""
+
+    found = re.findall(r"[a-z0-9_]{2,}|[\u4e00-\u9fff]{2,}", question.strip().lower())
+    terms: list[str] = []
+    for token in found:
+        if token in _MEANING_SKIP:
+            continue
+        if token not in terms:
+            terms.append(token)
+        if len(token) >= 4:
+            for index in range(0, len(token) - 3):
+                piece = token[index : index + 4]
+                if piece not in _MEANING_SKIP and piece not in terms:
+                    terms.append(piece)
+    long_terms = [item for item in terms if len(item) >= 3]
+    return long_terms or [item for item in terms if len(item) >= 2]
+
+
+def _asset_meaning_text(item: KbAsset) -> str:
+    """只对图意、关键词、图名，不对图上全文，避免二字乱撞。"""
+
+    parts = parse_asset_note(ocr_for_search(item.ocr_text or ""))
+    return f"{item.alt_text or ''} {parts['caption']} {parts['keywords']}".lower()
+
+
+def match_assets_by_meaning(question: str, items: list[KbAsset]) -> list[KbAsset]:
+    """问句和图意、关键词对得上的都留下。"""
+
+    terms = _meaning_terms(question)
+    if not terms:
         return []
+    picked: list[KbAsset] = []
+    for item in items:
+        blob = _asset_meaning_text(item).strip()
+        if not blob:
+            continue
+        if any(term in blob for term in terms):
+            picked.append(item)
+    return picked
+
+
+def _pick_assets_by_llm(question: str, items: list[KbAsset]) -> list[KbAsset]:
+    """字面对不上时再让模型挑。失败当这次没图，不拖死回答。"""
+
     if not llm_public().get("has_key"):
         return []
     by_id = {item.id: item for item in items if item.id}
@@ -251,23 +334,20 @@ def pick_assets_by_meaning(question: str, items: list[KbAsset]) -> list[KbAsset]
     if not lines:
         return []
     prompt = (
-        "先理解用户这句是不是在要图、要原件、要看某份证件。\n"
-        "只问事实、只要文字答案、没有要看图或原件的意思：输出无。不要为了当证据而配图。\n"
-        "确实在要图：再按意思选真正符合的图。标题不必一字不差。\n"
-        "一句里又要图又要问数：只选要图的那部分，问事实的部分不配图。\n"
+        "用户确实在要图。按意思选真正符合的图。标题不必一字不差。\n"
         "用户可能要好几样。有一样选一样，缺的不要拿别的证件凑。\n"
         "只是碰巧出现了相近的字、但不是同一类东西，不要选。\n"
         "不确定就不要选。\n"
         "只输出符合的编号，例如：A11,A4\n"
         "一个都没有就输出：无\n"
         "不要解释。\n\n"
-        f"用户问题：{q}\n\n"
+        f"用户问题：{question}\n\n"
         + "\n".join(lines)
     )
     try:
         answer = chat_complete(
             [
-                {"role": "system", "content": "你先判断用户要不要图，再决定选哪些。不回答问题本身。"},
+                {"role": "system", "content": "你只选图，不回答问题本身。"},
                 {"role": "user", "content": prompt},
             ],
             timeout=60,
@@ -278,6 +358,20 @@ def pick_assets_by_meaning(question: str, items: list[KbAsset]) -> list[KbAsset]
     for asset_id in _parse_picked_ids(answer, set(by_id)):
         picked.append(by_id[asset_id])
     return picked
+
+
+def pick_assets_by_meaning(question: str, items: list[KbAsset]) -> list[KbAsset]:
+    """没要图就不跑选图。对得上的直接带；对不上再问模型，失败就不带图。"""
+
+    q = question.strip()
+    if not q or not items:
+        return []
+    if not user_wants_images(q):
+        return []
+    matched = match_assets_by_meaning(q, items)
+    if matched:
+        return matched
+    return _pick_assets_by_llm(q, items)
 
 
 def asset_notes_for_ask(items: list[KbAsset], limit: int = 500) -> str:

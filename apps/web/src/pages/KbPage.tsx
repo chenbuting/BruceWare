@@ -30,6 +30,7 @@ import {
   uploadKbDocument,
 } from "@/api/client";
 import type { KbAskResult, KbDocAsset, KbDocument, KbEvidenceMode, KbFolder, KbLibrary, KbVisionEngine, KbWikiList } from "@/api/types";
+import { answerHasAsset, KbAnswerContent } from "@/components/KbAnswerContent";
 import { ConfirmModal, Modal } from "@/components/Modal";
 import { PdfPreview } from "@/components/PdfPreview";
 
@@ -50,9 +51,73 @@ function evidenceLabel(mode: KbEvidenceMode) {
   return mode === "loose" ? "宽松概述" : "严格出处";
 }
 
+const ASK_TURN_LIMIT = 6;
+
+type AskTurn = {
+  question: string;
+  result: KbAskResult;
+};
+
 /** 这次回答带上的相关图，用来直接画在回答里。 */
 function relatedAskImages(result: KbAskResult) {
   return result.citations.flatMap((hit) => (hit.images || []).map((img) => ({ ...img, docId: hit.id })));
+}
+
+/** 一问一答，点出处回资料预览。 */
+function AskTurnView({
+  turn,
+  onOpenCitation,
+}: {
+  turn: AskTurn;
+  onOpenCitation: (id: number) => void;
+}) {
+  const images = relatedAskImages(turn.result).filter((img) => !answerHasAsset(turn.result.answer, img.id));
+  return (
+    <div className="border-b border-[var(--line)] pb-4 last:border-b-0">
+      <p className="text-[12px] text-[var(--muted)]">问</p>
+      <p className="whitespace-pre-wrap">{turn.question}</p>
+      <p className="mt-3 text-[12px] text-[var(--muted)]">答</p>
+      <KbAnswerContent
+        text={turn.result.answer}
+        onOpenAsset={(assetId) => {
+          const hit = turn.result.citations.find((item) => (item.images || []).some((img) => img.id === assetId));
+          if (hit) onOpenCitation(hit.id);
+        }}
+      />
+      {images.length ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {images.map((img) => (
+            <button
+              key={img.id}
+              type="button"
+              className="max-w-[12rem] text-left text-[12px] text-[var(--muted)]"
+              title={img.alt}
+              onClick={() => onOpenCitation(img.docId)}
+            >
+              <img
+                src={img.url || kbAssetFileUrl(img.id)}
+                alt={img.alt}
+                className="max-h-40 w-auto rounded border border-[var(--line)] object-contain"
+              />
+              {img.alt ? <span className="mt-1 block">{img.alt}</span> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {turn.result.citations.length ? (
+        <p className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[var(--muted)]">
+          <span>出处</span>
+          {turn.result.citations.map((hit) => (
+            <button key={hit.id} type="button" className="underline hover:text-[var(--text)]" onClick={() => onOpenCitation(hit.id)}>
+              {hit.title}
+            </button>
+          ))}
+        </p>
+      ) : null}
+      {turn.result.used_vector ? <p className="mt-2 text-[12px] text-[var(--muted)]">本次还用了向量检索，换说法也能对上。</p> : null}
+      {turn.result.wiki_update_hint ? <p className="mt-2 text-[12px] text-[var(--muted)]">{turn.result.wiki_update_hint}</p> : null}
+    </div>
+  );
 }
 
 function evidenceHint(mode: "" | KbEvidenceMode, libraryMode: KbEvidenceMode = "strict") {
@@ -69,6 +134,7 @@ function evidenceHint(mode: "" | KbEvidenceMode, libraryMode: KbEvidenceMode = "
 export function KbPage() {
   const location = useLocation();
   const uploadRef = useRef<HTMLInputElement>(null);
+  const askBottomRef = useRef<HTMLDivElement>(null);
   const visionStopRef = useRef(false);
   const visionBusyRef = useRef(false);
   const visionDocRef = useRef<number | null>(null);
@@ -101,7 +167,7 @@ export function KbPage() {
   const [manageLib, setManageLib] = useState(false);
   const [question, setQuestion] = useState("");
   const [onlyFolder, setOnlyFolder] = useState(false);
-  const [askResult, setAskResult] = useState<KbAskResult | null>(null);
+  const [askTurns, setAskTurns] = useState<AskTurn[]>([]);
   const [asking, setAsking] = useState(false);
   const [askMode, setAskMode] = useState<"" | KbEvidenceMode>("");
   const [wikiEnabled, setWikiEnabled] = useState(false);
@@ -236,22 +302,38 @@ export function KbPage() {
       .finally(() => setBusy(false));
   }
 
+  useEffect(() => {
+    askBottomRef.current?.scrollIntoView({ block: "end" });
+  }, [askTurns, asking]);
+
   function onAsk() {
-    if (libraryId == null) return;
+    if (libraryId == null || asking) return;
     const text = question.trim();
     if (!text) return;
+    const history = askTurns.slice(-(ASK_TURN_LIMIT - 1)).map((turn) => ({
+      question: turn.question,
+      answer: turn.result.answer,
+    }));
     setAsking(true);
     setError("");
     setHint("");
-    askKbLibrary(libraryId, text, folderId, onlyFolder, askMode)
+    setQuestion("");
+    askKbLibrary(libraryId, text, folderId, onlyFolder, askMode, history)
       .then(async (data) => {
-        setAskResult(data);
+        setAskTurns((prev) => [...prev, { question: text, result: data }].slice(-ASK_TURN_LIMIT));
         if (data.wiki_update_hint && preview) {
           applyDoc(await fetchKbDocument(preview.id));
         }
       })
       .catch((err: Error) => setError(err.message))
       .finally(() => setAsking(false));
+  }
+
+  function onClearAsk() {
+    setAskTurns([]);
+    setQuestion("");
+    setError("");
+    setHint("");
   }
 
   function onOpenCitation(id: number) {
@@ -270,7 +352,7 @@ export function KbPage() {
     setLibraryId(id);
     setFolderId(null);
     setPreview(null);
-    setAskResult(null);
+    setAskTurns([]);
     run(async () => {
       await loadFolders(id);
       await loadDocs(id, null);
@@ -453,54 +535,34 @@ export function KbPage() {
       {pageTab === "ask" && library ? (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-[var(--line)] bg-[var(--paper)]">
           <div className="min-h-0 flex-1 overflow-auto px-4 py-3 text-[13px] leading-6">
-            {askResult ? (
-              <>
-                <p className="whitespace-pre-wrap">{askResult.answer}</p>
-                {relatedAskImages(askResult).length ? (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {relatedAskImages(askResult).map((img) => (
-                      <button
-                        key={img.id}
-                        type="button"
-                        className="max-w-[12rem] text-left text-[12px] text-[var(--muted)]"
-                        title={img.alt}
-                        onClick={() => onOpenCitation(img.docId)}
-                      >
-                        <img
-                          src={img.url || kbAssetFileUrl(img.id)}
-                          alt={img.alt}
-                          className="max-h-40 w-auto rounded border border-[var(--line)] object-contain"
-                        />
-                        {img.alt ? <span className="mt-1 block">{img.alt}</span> : null}
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-                {askResult.citations.length ? (
-                  <p className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[var(--muted)]">
-                    <span>出处</span>
-                    {askResult.citations.map((hit) => (
-                      <button key={hit.id} type="button" className="underline hover:text-[var(--text)]" onClick={() => onOpenCitation(hit.id)}>
-                        {hit.title}
-                      </button>
-                    ))}
-                  </p>
-                ) : null}
-                {askResult.used_vector ? <p className="mt-2 text-[12px] text-[var(--muted)]">本次还用了向量检索，换说法也能对上。</p> : null}
-                {askResult.wiki_update_hint ? <p className="mt-2 text-[12px] text-[var(--muted)]">{askResult.wiki_update_hint}</p> : null}
-              </>
+            {askTurns.length ? (
+              <div className="space-y-4">
+                {askTurns.map((turn, index) => (
+                  <AskTurnView key={`${index}-${turn.question}`} turn={turn} onOpenCitation={onOpenCitation} />
+                ))}
+                {asking ? <p className="text-[var(--muted)]">在找…</p> : null}
+                <div ref={askBottomRef} />
+              </div>
             ) : (
-              <p className="pt-16 text-center text-[var(--muted)]">在下面提问，回答会出现在这里。点出处会回到资料预览。</p>
+              <p className="pt-16 text-center text-[var(--muted)]">
+                {asking ? "在找…" : "在下面提问，可以接着上一句问。刷新或点清空会没掉。点出处会回到资料预览。"}
+              </p>
             )}
           </div>
           <div className="shrink-0 border-t border-[var(--line)] px-3 py-2">
             <div className="flex flex-wrap items-end gap-2">
-              <input
-                className={`${inputClass} min-w-[12rem] flex-1`}
-                placeholder="问当前库里的资料"
+              <textarea
+                className={`${inputClass} min-h-[4.5rem] min-w-[12rem] flex-1 resize-y`}
+                rows={3}
+                placeholder="问当前库里的资料，可接着上一句。回车换行，Ctrl+Enter 提问"
                 value={question}
                 onChange={(e) => setQuestion(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && onAsk()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault();
+                    onAsk();
+                  }
+                }}
               />
               <label className="flex items-center gap-1 text-[13px] text-[var(--muted)]">
                 <input
@@ -518,6 +580,9 @@ export function KbPage() {
               </select>
               <button type="button" className={btnClass} disabled={asking || !question.trim()} onClick={onAsk}>
                 {asking ? "在找…" : "提问"}
+              </button>
+              <button type="button" className={btnClass} disabled={asking || !askTurns.length} onClick={onClearAsk}>
+                清空
               </button>
             </div>
             <p className="mt-1 text-[12px] leading-5 text-[var(--muted)]">{evidenceHint(askMode, library.evidence_mode || "strict")}</p>
