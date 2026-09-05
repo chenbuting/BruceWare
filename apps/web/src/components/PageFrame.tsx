@@ -20,7 +20,7 @@ export function PageFrame({
     <div
       className={`flex min-h-0 flex-1 flex-col bg-[var(--bg)] px-8 py-6 ${fill ? "overflow-hidden" : "overflow-auto"}`}
     >
-      <div className={`${wide ? "" : "max-w-[52rem]"} ${fill ? "flex min-h-0 flex-1 flex-col" : ""}`}>
+      <div className={`${wide ? "" : "max-w-[52rem]"} ${fill ? "flex h-full min-h-0 flex-1 flex-col" : ""}`}>
         {!hideHeader && title ? (
           <div className="mb-5">
             <h1>{title}</h1>

@@ -116,6 +116,7 @@ export function KbPage() {
   const [wikiSort, setWikiSort] = useState("updated_at");
   const [wikiOrder, setWikiOrder] = useState("desc");
   const [wikiPage, setWikiPage] = useState(1);
+  const [pageTab, setPageTab] = useState<"files" | "ask">("files");
 
   const library = libraries.find((item) => item.id === libraryId) || null;
 
@@ -192,7 +193,7 @@ export function KbPage() {
     setHint("正在列出图片…");
     try {
       const data = await fetchKbDocumentAssets(item.id);
-      const pending = data.items.filter((one) => !one.caption?.trim() && !one.keywords?.trim() && !one.ocr_text.trim());
+      const pending = data.items.filter((one) => !one.caption?.trim() && !one.keywords?.trim() && !one.ocr_text?.trim());
       if (!data.items.length) {
         setError("这份资料没有可认的图");
         return;
@@ -254,6 +255,7 @@ export function KbPage() {
   }
 
   function onOpenCitation(id: number) {
+    setPageTab("files");
     const found = docs.find((item) => item.id === id);
     if (found) {
       setPreview(found);
@@ -389,7 +391,7 @@ export function KbPage() {
   const searching = Boolean(query.trim() || tag.trim());
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3">
+    <div className="flex h-full min-h-0 flex-1 flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 flex-wrap items-center gap-3">
           <h1 className="shrink-0">知识库</h1>
@@ -407,6 +409,22 @@ export function KbPage() {
           <button type="button" className={btnClass} onClick={openManage}>
             管理库
           </button>
+          <div className="flex overflow-hidden rounded-md border border-[var(--line)] text-[13px]">
+            <button
+              type="button"
+              className={`px-3 py-1.5 ${pageTab === "files" ? "bg-[var(--bg)]" : "text-[var(--muted)] hover:bg-[var(--hover)]"}`}
+              onClick={() => setPageTab("files")}
+            >
+              资料
+            </button>
+            <button
+              type="button"
+              className={`border-l border-[var(--line)] px-3 py-1.5 ${pageTab === "ask" ? "bg-[var(--bg)]" : "text-[var(--muted)] hover:bg-[var(--hover)]"}`}
+              onClick={() => setPageTab("ask")}
+            >
+              提问
+            </button>
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-[13px]">
           <input
@@ -432,76 +450,84 @@ export function KbPage() {
       {error ? <p className="text-[13px] text-[var(--err)]">{error}</p> : null}
       {hint ? <p className="text-[13px] text-[var(--ok)]">{hint}</p> : null}
 
-      {library ? (
-        <div className="shrink-0 rounded-lg border border-[var(--line)] bg-[var(--paper)] px-3 py-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <input
-              className={`${inputClass} min-w-[12rem] flex-1`}
-              placeholder="问当前库里的资料"
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && onAsk()}
-            />
-            <label className="flex items-center gap-1 text-[13px] text-[var(--muted)]">
-              <input
-                type="checkbox"
-                checked={onlyFolder && folderId != null}
-                disabled={folderId == null}
-                onChange={(e) => setOnlyFolder(e.target.checked)}
-              />
-              只搜当前文件夹
-            </label>
-            <select className={inputClass} value={askMode} onChange={(e) => setAskMode(e.target.value as "" | KbEvidenceMode)}>
-              <option value="">按库规则（当前：{evidenceLabel(library.evidence_mode || "strict")}）</option>
-              <option value="strict">严格出处</option>
-              <option value="loose">宽松概述</option>
-            </select>
-            <button type="button" className={btnClass} disabled={asking || !question.trim()} onClick={onAsk}>
-              {asking ? "在找…" : "提问"}
-            </button>
+      {pageTab === "ask" && library ? (
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-[var(--line)] bg-[var(--paper)]">
+          <div className="min-h-0 flex-1 overflow-auto px-4 py-3 text-[13px] leading-6">
+            {askResult ? (
+              <>
+                <p className="whitespace-pre-wrap">{askResult.answer}</p>
+                {relatedAskImages(askResult).length ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {relatedAskImages(askResult).map((img) => (
+                      <button
+                        key={img.id}
+                        type="button"
+                        className="max-w-[12rem] text-left text-[12px] text-[var(--muted)]"
+                        title={img.alt}
+                        onClick={() => onOpenCitation(img.docId)}
+                      >
+                        <img
+                          src={img.url || kbAssetFileUrl(img.id)}
+                          alt={img.alt}
+                          className="max-h-40 w-auto rounded border border-[var(--line)] object-contain"
+                        />
+                        {img.alt ? <span className="mt-1 block">{img.alt}</span> : null}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+                {askResult.citations.length ? (
+                  <p className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[var(--muted)]">
+                    <span>出处</span>
+                    {askResult.citations.map((hit) => (
+                      <button key={hit.id} type="button" className="underline hover:text-[var(--text)]" onClick={() => onOpenCitation(hit.id)}>
+                        {hit.title}
+                      </button>
+                    ))}
+                  </p>
+                ) : null}
+                {askResult.used_vector ? <p className="mt-2 text-[12px] text-[var(--muted)]">本次还用了向量检索，换说法也能对上。</p> : null}
+                {askResult.wiki_update_hint ? <p className="mt-2 text-[12px] text-[var(--muted)]">{askResult.wiki_update_hint}</p> : null}
+              </>
+            ) : (
+              <p className="pt-16 text-center text-[var(--muted)]">在下面提问，回答会出现在这里。点出处会回到资料预览。</p>
+            )}
           </div>
-          <p className="mt-1 text-[12px] leading-5 text-[var(--muted)]">{evidenceHint(askMode, library.evidence_mode || "strict")}</p>
-          {askResult ? (
-            <div className="mt-2 border-t border-[var(--line)] pt-2 text-[13px] leading-6">
-              <p className="whitespace-pre-wrap">{askResult.answer}</p>
-              {relatedAskImages(askResult).length ? (
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {relatedAskImages(askResult).map((img) => (
-                    <button
-                      key={img.id}
-                      type="button"
-                      className="max-w-[12rem] text-left text-[12px] text-[var(--muted)]"
-                      title={img.alt}
-                      onClick={() => onOpenCitation(img.docId)}
-                    >
-                      <img
-                        src={img.url || kbAssetFileUrl(img.id)}
-                        alt={img.alt}
-                        className="max-h-40 w-auto rounded border border-[var(--line)] object-contain"
-                      />
-                      {img.alt ? <span className="mt-1 block">{img.alt}</span> : null}
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-              {askResult.citations.length ? (
-                <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[var(--muted)]">
-                  <span>出处</span>
-                  {askResult.citations.map((hit) => (
-                    <button key={hit.id} type="button" className="underline hover:text-[var(--text)]" onClick={() => onOpenCitation(hit.id)}>
-                      {hit.title}
-                    </button>
-                  ))}
-                </p>
-              ) : null}
-              {askResult.used_vector ? <p className="mt-2 text-[12px] text-[var(--muted)]">本次还用了向量检索，换说法也能对上。</p> : null}
-              {askResult.wiki_update_hint ? <p className="mt-2 text-[12px] text-[var(--muted)]">{askResult.wiki_update_hint}</p> : null}
+          <div className="shrink-0 border-t border-[var(--line)] px-3 py-2">
+            <div className="flex flex-wrap items-end gap-2">
+              <input
+                className={`${inputClass} min-w-[12rem] flex-1`}
+                placeholder="问当前库里的资料"
+                value={question}
+                onChange={(e) => setQuestion(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && onAsk()}
+              />
+              <label className="flex items-center gap-1 text-[13px] text-[var(--muted)]">
+                <input
+                  type="checkbox"
+                  checked={onlyFolder && folderId != null}
+                  disabled={folderId == null}
+                  onChange={(e) => setOnlyFolder(e.target.checked)}
+                />
+                只搜当前文件夹
+              </label>
+              <select className={inputClass} value={askMode} onChange={(e) => setAskMode(e.target.value as "" | KbEvidenceMode)}>
+                <option value="">按库规则（当前：{evidenceLabel(library.evidence_mode || "strict")}）</option>
+                <option value="strict">严格出处</option>
+                <option value="loose">宽松概述</option>
+              </select>
+              <button type="button" className={btnClass} disabled={asking || !question.trim()} onClick={onAsk}>
+                {asking ? "在找…" : "提问"}
+              </button>
             </div>
-          ) : null}
+            <p className="mt-1 text-[12px] leading-5 text-[var(--muted)]">{evidenceHint(askMode, library.evidence_mode || "strict")}</p>
+          </div>
         </div>
       ) : null}
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden rounded-lg border border-[var(--line)] bg-[var(--paper)] md:grid-cols-[220px_minmax(0,1fr)] xl:grid-cols-[220px_minmax(0,1fr)_300px]">
+      {pageTab === "files" ? (
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="grid min-h-[20rem] min-w-0 flex-1 grid-cols-1 overflow-hidden rounded-lg border border-[var(--line)] bg-[var(--paper)] md:grid-cols-[200px_minmax(0,1fr)] xl:grid-cols-[200px_minmax(240px,1fr)_minmax(320px,1fr)]">
         <aside className="flex min-h-0 flex-col border-b border-[var(--line)] md:border-b-0 md:border-r">
           <div className="border-b border-[var(--line)] px-3 py-2 text-[12px] text-[var(--muted)]">文件夹</div>
           <div className="min-h-0 flex-1 overflow-auto p-2">
@@ -596,25 +622,22 @@ export function KbPage() {
                     <span className="truncate">{item.title}</span>
                     {item.tags ? <span className="truncate text-[var(--muted)]">{item.tags}</span> : null}
                   </button>
-                  <span className="flex shrink-0 gap-2 text-[var(--muted)]">
-                    <button
-                      type="button"
-                      disabled={rowBusy}
-                      onClick={() => {
-                        setEditDoc(item);
-                        setEditTitle(item.title);
-                        setEditTags(item.tags);
-                      }}
-                    >
-                      编辑
-                    </button>
-                    <button type="button" disabled={busy} onClick={() => void recognizeAll(item)}>
-                      {recognizing ? "停止" : "全部识图"}
-                    </button>
+                    <span className="flex shrink-0 gap-2 text-[var(--muted)]">
+                      <button
+                        type="button"
+                        disabled={rowBusy}
+                        onClick={() => {
+                          setEditDoc(item);
+                          setEditTitle(item.title);
+                          setEditTags(item.tags);
+                        }}
+                      >
+                        编辑
+                      </button>
                     <button type="button" disabled={rowBusy} onClick={() => setAskDeleteDoc(item)}>
                       删除
                     </button>
-                  </span>
+                    </span>
                 </div>
               );
             })}
@@ -641,9 +664,12 @@ export function KbPage() {
                 item={preview}
                 text={previewText}
                 wikiEnabled={!!library?.wiki_enabled}
+                visionEnabled={!!library?.vision_enabled}
                 busy={busy}
                 assetTick={assetTick}
                 visionLocked={visionDocId != null}
+                recognizing={visionDocId === preview.id}
+                onRecognizeAll={() => void recognizeAll(preview)}
                 onSaved={applyDoc}
                 onError={setError}
               />
@@ -661,15 +687,20 @@ export function KbPage() {
               item={preview}
               text={previewText}
               wikiEnabled={!!library?.wiki_enabled}
+              visionEnabled={!!library?.vision_enabled}
               busy={busy}
               assetTick={assetTick}
               visionLocked={visionDocId != null}
+              recognizing={visionDocId === preview.id}
+              onRecognizeAll={() => void recognizeAll(preview)}
               onSaved={applyDoc}
               onError={setError}
             />
           </Modal>
         </div>
       )}
+      </div>
+      ) : null}
 
       {manageLib ? (
         <Modal title="管理知识库" wide onClose={() => setManageLib(false)}>
@@ -762,7 +793,7 @@ export function KbPage() {
             <p className="mb-3 text-[12px] leading-5 text-[var(--muted)]">
               开了才认图上的字，才能搜「营业执照」这类。默认关。
               <br />
-              开了只表示允许识图。上传不会自动认，要点列表「全部识图」或预览里单张「识图」。
+              开了只表示允许识图。上传不会自动认，要点预览里「全部识图」或单张「识图」。
               <br />
               看图：用对话模型看图，能说出这是什么证件。OCR：本机抄字，更快，红章可能认不全。
             </p>
@@ -1074,6 +1105,7 @@ function AssetWords({
   const [drafts, setDrafts] = useState<Record<number, { caption: string; keywords: string; words: string }>>({});
   const [savingId, setSavingId] = useState<number | null>(null);
   const [seeingId, setSeeingId] = useState<number | null>(null);
+  const [openId, setOpenId] = useState<number | null>(null);
 
   function noteOf(row: KbDocAsset) {
     return { caption: row.caption || "", keywords: row.keywords || "", words: row.ocr_text || "" };
@@ -1081,6 +1113,7 @@ function AssetWords({
 
   useEffect(() => {
     let alive = true;
+    setOpenId(null);
     fetchKbDocumentAssets(docId)
       .then((data) => {
         if (!alive) return;
@@ -1127,44 +1160,64 @@ function AssetWords({
   return (
     <div className="mt-4 border-t border-[var(--line)] pt-3">
       <p className="mb-1 font-medium">图的说明</p>
-      <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">图意是这张图是什么，关键词方便搜，图上的字是抄下来的。认错了可以改，保存后提问按改过的找。</p>
+      <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">点开一张再改。图意是这张图是什么，关键词方便搜，图上的字是抄下来的。</p>
       {items.map((item) => {
         const draft = drafts[item.id] || noteOf(item);
+        const open = openId === item.id;
         return (
-          <div key={item.id} className="mb-3">
-            <button type="button" className="mb-1 block max-w-full text-left" title={item.alt}>
-              <img src={item.url || kbAssetFileUrl(item.id)} alt={item.alt} className="max-h-28 w-auto rounded border border-[var(--line)] object-contain" />
+          <div key={item.id} className="mb-2 border-b border-[var(--line)] pb-2">
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 text-left"
+              title={item.alt}
+              onClick={() => setOpenId(open ? null : item.id)}
+            >
+              <img src={item.url || kbAssetFileUrl(item.id)} alt={item.alt} className="h-12 w-12 shrink-0 rounded border border-[var(--line)] object-contain" />
+              <span className="min-w-0 flex-1">
+                <span className="block text-[12px] text-[var(--muted)]">{item.alt || "图"}</span>
+                <span className="block truncate">{draft.caption || "还没写图意"}</span>
+              </span>
+              <span className="shrink-0 text-[12px] text-[var(--muted)]">{open ? "收起" : "改说明"}</span>
             </button>
-            {item.alt ? <p className="mb-1 text-[12px] text-[var(--muted)]">{item.alt}</p> : null}
-            <input
-              className={`${inputClass} mb-1 w-full`}
-              value={draft.caption}
-              maxLength={200}
-              onChange={(e) => patchDraft(item.id, "caption", e.target.value)}
-              placeholder={seeingId === item.id ? "正在认这张…" : "图意，没字的图也写是什么"}
-            />
-            <input
-              className={`${inputClass} mb-1 w-full`}
-              value={draft.keywords}
-              maxLength={200}
-              onChange={(e) => patchDraft(item.id, "keywords", e.target.value)}
-              placeholder="关键词，逗号分隔"
-            />
-            <textarea
-              className={`${inputClass} min-h-[4.5rem] w-full`}
-              value={draft.words}
-              maxLength={1500}
-              onChange={(e) => patchDraft(item.id, "words", e.target.value)}
-              placeholder="图上的字，没有就留空"
-            />
-            <div className="mt-1 flex flex-wrap gap-2">
-              <button type="button" className={btnClass} disabled={visionLocked || seeingId != null} onClick={() => seeOne(item)}>
-                {seeingId === item.id ? "在认…" : "识图"}
-              </button>
-              <button type="button" className={btnClass} disabled={savingId === item.id} onClick={() => save(item)}>
-                {savingId === item.id ? "在存…" : "保存"}
-              </button>
-            </div>
+            {open ? (
+              <div className="mt-2">
+                <input
+                  className={`${inputClass} mb-1 w-full`}
+                  value={draft.caption}
+                  maxLength={200}
+                  onChange={(e) => patchDraft(item.id, "caption", e.target.value)}
+                  placeholder={seeingId === item.id ? "正在认这张…" : "图意，没字的图也写是什么"}
+                />
+                <input
+                  className={`${inputClass} mb-1 w-full`}
+                  value={draft.keywords}
+                  maxLength={200}
+                  onChange={(e) => patchDraft(item.id, "keywords", e.target.value)}
+                  placeholder="关键词，逗号分隔"
+                />
+                <textarea
+                  className={`${inputClass} min-h-[4.5rem] w-full`}
+                  value={draft.words}
+                  maxLength={1500}
+                  onChange={(e) => patchDraft(item.id, "words", e.target.value)}
+                  placeholder="图上的字，没有就留空"
+                />
+                <div className="mt-1 flex flex-wrap gap-2">
+                  <button type="button" className={btnClass} disabled={visionLocked || seeingId != null} onClick={() => seeOne(item)}>
+                    {seeingId === item.id ? "在认…" : "识图"}
+                  </button>
+                  <button type="button" className={btnClass} disabled={savingId === item.id} onClick={() => save(item)}>
+                    {savingId === item.id ? "在存…" : "保存"}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-1">
+                <button type="button" className={btnClass} disabled={visionLocked || seeingId != null} onClick={() => seeOne(item)}>
+                  {seeingId === item.id ? "在认…" : "识图"}
+                </button>
+              </div>
+            )}
           </div>
         );
       })}
@@ -1176,18 +1229,24 @@ function PreviewPane({
   item,
   text,
   wikiEnabled,
+  visionEnabled,
   busy,
   assetTick,
   visionLocked,
+  recognizing,
+  onRecognizeAll,
   onSaved,
   onError,
 }: {
   item: KbDocument;
   text: string;
   wikiEnabled: boolean;
+  visionEnabled: boolean;
   busy: boolean;
   assetTick: number;
   visionLocked: boolean;
+  recognizing: boolean;
+  onRecognizeAll: () => void;
   onSaved: (row: KbDocument) => void;
   onError: (message: string) => void;
 }) {
@@ -1207,7 +1266,14 @@ function PreviewPane({
 
   return (
     <div className="text-[13px]">
-      <p className="mb-2 font-medium">{item.title}</p>
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <p className="font-medium">{item.title}</p>
+        {visionEnabled ? (
+          <button type="button" className={btnClass} disabled={busy || (visionLocked && !recognizing)} onClick={onRecognizeAll}>
+            {recognizing ? "停止" : "全部识图"}
+          </button>
+        ) : null}
+      </div>
       {item.tags ? <p className="mb-2 text-[var(--muted)]">{item.tags}</p> : null}
       {item.preview === "image" ? <img src={url} alt={item.title} className="max-h-[60vh] max-w-full object-contain" /> : null}
       {item.preview === "pdf" ? <PdfPreview url={url} /> : null}
