@@ -8,6 +8,7 @@ import type {
   InterviewSession,
   KbAskHistoryItem,
   KbAskResult,
+  KbChunk,
   KbSession,
   KbSessionDetail,
   KbDocAsset,
@@ -644,6 +645,17 @@ export function fetchKbDocument(id: number) {
 
 export function fetchKbDocumentText(id: number) {
   return request<{ text: string }>(`/api/v1/kb/documents/${id}/text`);
+}
+
+export function fetchKbDocumentChunks(id: number) {
+  return request<{ items: KbChunk[] }>(`/api/v1/kb/documents/${id}/chunks`);
+}
+
+export function saveKbChunk(id: number, text: string) {
+  return request<KbChunk>(`/api/v1/kb/chunks/${id}`, {
+    method: "PUT",
+    body: JSON.stringify({ text }),
+  });
 }
 
 export function askKbLibrary(

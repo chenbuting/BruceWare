@@ -268,6 +268,14 @@ export type KbAskImage = {
   url: string;
 };
 
+export type KbChunk = {
+  id: number;
+  index: number;
+  text: string;
+  edited: boolean;
+  preview: string;
+};
+
 export type KbDocAsset = {
   id: number;
   alt: string;

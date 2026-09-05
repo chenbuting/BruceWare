@@ -69,6 +69,7 @@ class KbChunk(Base):
     text = Column(Text, nullable=False, default="")
     embedding = Column(Text, nullable=False, default="")
     profile = Column(String(150), nullable=False, default="")
+    edited = Column(Integer, nullable=False, default=0)
 
 
 class KbAsset(Base):

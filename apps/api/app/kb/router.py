@@ -20,7 +20,7 @@ from app.kb.assets import (
     asset_dict,
     asset_edit_dict,
     asset_notes_for_ask,
-    assets_for_docs,
+    assets_for_ask,
     clear_assets,
     list_doc_assets,
     pack_asset_note,
@@ -43,7 +43,16 @@ from app.kb.sessions import (
 )
 from app.kb.policy import dump_policy, parse_policy, resolve_mode
 from app.kb.search import folder_scope, snippet_of
-from app.kb.vector import clear_chunks, hybrid_rank, index_document, score_chunks, supplement_hits
+from app.kb.vector import (
+    chunk_dict,
+    clear_chunks,
+    ensure_chunks,
+    hybrid_rank,
+    index_document,
+    score_chunks,
+    supplement_hits,
+    update_chunk_text,
+)
 from app.kb.wiki import ASK_WIKI_LIMIT, clip_summary, dump_wiki, learn_hint, parse_wiki, wiki_item
 from app.kb.store import (
     file_digest,
@@ -81,6 +90,10 @@ class AssetPatch(BaseModel):
     caption: str = Field(default="", max_length=200)
     keywords: str = Field(default="", max_length=200)
     ocr_text: str = Field(default="", max_length=1500)
+
+
+class ChunkPatch(BaseModel):
+    text: str = Field(default="", max_length=8000)
 
 
 class FolderIn(BaseModel):
@@ -563,6 +576,7 @@ def _ask_style(mode: str, rule: str) -> str:
         text += f" 额外规则：{extra}"
     text += (
         " 用 Markdown 排版：对比用表格，条目用列表。"
+        "问句里的简称（如 3C、CCC）和资料里的全称（如中国国家强制性产品认证）对得上就视为同一类，不要只因没写这三个字母就说没有。"
         "若要展示图，把资料里「可展示的图」那一行 ![说明](地址) 原样插到对应句子旁边，不要改地址。"
         "不需要配图就不要插入图片。"
     )
@@ -600,6 +614,7 @@ def _ask_messages(question: str, prompt: str, history: list[AskTurnIn]) -> list[
                 "你是知识库助手，依据本轮资料原文和图上的说明作答，并标明出处。"
                 "用户可能接着上一句问。刚才的对话只用来听懂「那」「刚才」「这份」指什么。"
                 "编号、日期、金额、开户行、证书名称等事实必须依据本轮资料，不能拿上一轮回答当证据。"
+                "简称和全称对得上就视为同一类。"
                 "本轮资料没有就说资料里没有。"
             ),
         }
@@ -702,21 +717,21 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
     citations = []
     blocks = []
     use_notes = policy["wiki_enabled"] and mode == "loose"
-    pictures = assets_for_docs(db, [row.id for row, _score, _snip in ranked_full], search_q)
+    note_pics, show_pics = assets_for_ask(db, [row.id for row, _score, _snip in ranked_full], search_q)
     for index, (row, score, snippet) in enumerate(ranked_full, start=1):
         citations.append(
             {
                 "id": row.id,
                 "title": row.title or row.file_name,
                 "score": round(score, 3),
-                "images": [asset_dict(item) for item in pictures.get(row.id, [])],
+                "images": [asset_dict(item) for item in show_pics.get(row.id, [])],
             }
         )
         block = f"【资料{index}】{row.title or row.file_name}\n{snippet or snippet_of(search_q, row)}"
-        notes = asset_notes_for_ask(pictures.get(row.id, []))
+        notes = asset_notes_for_ask(note_pics.get(row.id, []))
         if notes:
             block += f"\n【图上的说明】\n{notes}"
-        shown = pictures.get(row.id, [])
+        shown = show_pics.get(row.id, [])
         if shown:
             lines = []
             for item in shown:
@@ -789,6 +804,35 @@ def get_document(doc_id: int, db: Session = Depends(get_db)):
     if row is None:
         return fail("这份资料不存在", 404)
     return ok(_doc_dict(row))
+
+
+@router.get("/kb/documents/{doc_id}/chunks")
+def list_document_chunks(doc_id: int, db: Session = Depends(get_db)):
+    """预览里看切片、改字。"""
+
+    row = db.get(KbDocument, doc_id)
+    if row is None:
+        return fail("这份资料不存在", 404)
+    _fill_search_text(row)
+    items = ensure_chunks(db, row)
+    db.commit()
+    return ok({"items": [chunk_dict(item) for item in items]})
+
+
+@router.put("/kb/chunks/{chunk_id}")
+def update_document_chunk(chunk_id: int, body: ChunkPatch, db: Session = Depends(get_db)):
+    """改一块切片，并重算这一块的向量。"""
+
+    row = db.get(KbChunk, chunk_id)
+    if row is None:
+        return fail("这块切片不存在", 404)
+    text = body.text.strip()
+    if not text:
+        return fail("请先写下切片内容")
+    update_chunk_text(db, row, text)
+    db.commit()
+    db.refresh(row)
+    return ok(chunk_dict(row))
 
 
 @router.get("/kb/documents/{doc_id}/assets")

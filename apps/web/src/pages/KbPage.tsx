@@ -13,6 +13,7 @@ import {
   deleteKbWiki,
   fetchKbDocument,
   fetchKbDocumentAssets,
+  fetchKbDocumentChunks,
   fetchKbDocumentText,
   fetchKbDocuments,
   fetchKbFolders,
@@ -27,13 +28,14 @@ import {
   renameKbFolder,
   renameKbSession,
   saveKbAssetOcr,
+  saveKbChunk,
   saveKbWiki,
   updateKbDocument,
   updateKbLibrary,
   updateKbLibraryPolicy,
   uploadKbDocument,
 } from "@/api/client";
-import type { KbAskResult, KbDocAsset, KbDocument, KbEvidenceMode, KbFolder, KbLibrary, KbSession, KbVisionEngine, KbWikiList } from "@/api/types";
+import type { KbAskResult, KbChunk, KbDocAsset, KbDocument, KbEvidenceMode, KbFolder, KbLibrary, KbSession, KbVisionEngine, KbWikiList } from "@/api/types";
 import { answerHasAsset, KbAnswerContent } from "@/components/KbAnswerContent";
 import { ConfirmModal, Modal } from "@/components/Modal";
 import { PdfPreview } from "@/components/PdfPreview";
@@ -1417,6 +1419,91 @@ function AssetWords({
   );
 }
 
+/** 预览里看切片、改字。提问会尽量用这些块。 */
+function ChunkWords({ docId, onError }: { docId: number; onError: (message: string) => void }) {
+  const [items, setItems] = useState<KbChunk[]>([]);
+  const [drafts, setDrafts] = useState<Record<number, string>>({});
+  const [openId, setOpenId] = useState<number | null>(null);
+  const [savingId, setSavingId] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    setOpenId(null);
+    setLoading(true);
+    fetchKbDocumentChunks(docId)
+      .then((data) => {
+        if (!alive) return;
+        setItems(data.items);
+        setDrafts(Object.fromEntries(data.items.map((item) => [item.id, item.text])));
+      })
+      .catch((err: Error) => onError(err.message))
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [docId, onError]);
+
+  if (loading) {
+    return (
+      <div className="mt-4 border-t border-[var(--line)] pt-3">
+        <p className="font-medium">切片</p>
+        <p className="text-[12px] text-[var(--muted)]">正在列出…</p>
+      </div>
+    );
+  }
+  if (!items.length) return null;
+
+  function save(item: KbChunk) {
+    const text = (drafts[item.id] ?? item.text).trim();
+    if (!text) return;
+    setSavingId(item.id);
+    saveKbChunk(item.id, text)
+      .then((row) => {
+        setItems((list) => list.map((one) => (one.id === row.id ? row : one)));
+        setDrafts((map) => ({ ...map, [row.id]: row.text }));
+      })
+      .catch((err: Error) => onError(err.message))
+      .finally(() => setSavingId(null));
+  }
+
+  return (
+    <div className="mt-4 border-t border-[var(--line)] pt-3">
+      <p className="mb-1 font-medium">切片</p>
+      <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">提问时尽量用这些块。点开一块能改，改完会按这一块重新找。</p>
+      {items.map((item, order) => {
+        const open = openId === item.id;
+        const draft = drafts[item.id] ?? item.text;
+        return (
+          <div key={item.id} className="mb-2 border-b border-[var(--line)] pb-2">
+            <button type="button" className="flex w-full items-start gap-2 text-left" onClick={() => setOpenId(open ? null : item.id)}>
+              <span className="shrink-0 text-[12px] text-[var(--muted)]">第{order + 1}块</span>
+              <span className="min-w-0 flex-1 truncate">{item.preview || draft.slice(0, 80)}</span>
+              {item.edited ? <span className="shrink-0 text-[12px] text-[var(--muted)]">已改</span> : null}
+              <span className="shrink-0 text-[12px] text-[var(--muted)]">{open ? "收起" : "改"}</span>
+            </button>
+            {open ? (
+              <div className="mt-2">
+                <textarea
+                  className={`${inputClass} min-h-[6rem] w-full`}
+                  value={draft}
+                  maxLength={8000}
+                  onChange={(e) => setDrafts((map) => ({ ...map, [item.id]: e.target.value }))}
+                />
+                <button type="button" className={`${btnClass} mt-1`} disabled={savingId === item.id || !draft.trim()} onClick={() => save(item)}>
+                  {savingId === item.id ? "在存…" : "保存"}
+                </button>
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function PreviewPane({
   item,
   text,
@@ -1478,6 +1565,7 @@ function PreviewPane({
       </a>
 
       <AssetWords docId={item.id} refreshTick={assetTick} visionLocked={visionLocked} onError={onError} />
+      <ChunkWords docId={item.id} onError={onError} />
 
       <div className="mt-4 border-t border-[var(--line)] pt-3">
         <p className="mb-1 font-medium">

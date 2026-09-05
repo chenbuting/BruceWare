@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.core.ai import chat_complete, llm_public
 from app.kb.extract import extract_search_text
 from app.kb.models import KbAsset, KbDocument
+from app.kb.search import alias_needles
 from app.kb.store import abs_path, kind_of, remove_file, write_bytes
 
 # 这句是不是在要看图或原件。只决定跑不跑选图，不决定选哪张。
@@ -51,7 +52,17 @@ _MEANING_SKIP = {
     "图片",
     "原件",
     "扫描件",
+    "证书",
+    "证件",
+    "证照",
+    "认证",
+    "执照",
+    "证明",
 }
+
+_NOTE_INTENT = re.compile(
+    r"有没有|有无|是否有|有吗|多少|几张|几份|几本|编号|有效期|证书|证件|证照|认证|执照"
+)
 
 OCR_SKIP = "-"
 
@@ -289,30 +300,50 @@ def _meaning_terms(question: str) -> list[str]:
                 if piece not in _MEANING_SKIP and piece not in terms:
                     terms.append(piece)
     long_terms = [item for item in terms if len(item) >= 3]
-    return long_terms or [item for item in terms if len(item) >= 2]
-
-
-def _asset_meaning_text(item: KbAsset) -> str:
-    """只对图意、关键词、图名，不对图上全文，避免二字乱撞。"""
-
-    parts = parse_asset_note(ocr_for_search(item.ocr_text or ""))
-    return f"{item.alt_text or ''} {parts['caption']} {parts['keywords']}".lower()
+    abbrev = [item for item in terms if re.fullmatch(r"[a-z]*\d+[a-z0-9]*", item)]
+    return long_terms or abbrev or [item for item in terms if len(item) >= 2]
 
 
 def match_assets_by_meaning(question: str, items: list[KbAsset]) -> list[KbAsset]:
-    """问句和图意、关键词对得上的都留下。"""
+    """问句和图意、关键词对得上的都留下。简称也能对上全称。"""
 
-    terms = _meaning_terms(question)
+    terms = list(_meaning_terms(question))
+    for item in alias_needles(question):
+        if item not in terms:
+            terms.append(item)
     if not terms:
         return []
     picked: list[KbAsset] = []
     for item in items:
-        blob = _asset_meaning_text(item).strip()
-        if not blob:
+        parts = parse_asset_note(ocr_for_search(item.ocr_text or ""))
+        head = f"{item.alt_text or ''} {parts['caption']} {parts['keywords']}".lower()
+        words = (parts["words"] or "").lower()
+        if any(term in head for term in terms):
+            picked.append(item)
             continue
-        if any(term in blob for term in terms):
+        # 旧数据没有图意时，较长的全称对图上的字
+        if any(len(term) >= 4 and term in words for term in terms):
             picked.append(item)
     return picked
+
+
+def need_asset_notes(question: str) -> bool:
+    """问有没有、多少张、编号时，也要用图上的字。不一定出图。"""
+
+    text = (question or "").strip()
+    if not text:
+        return False
+    if user_wants_images(text):
+        return True
+    return bool(_NOTE_INTENT.search(text))
+
+
+def pick_assets_for_notes(question: str, items: list[KbAsset]) -> list[KbAsset]:
+    """给回答当原文的图上说明。只做字面对上，不再打一轮选图。"""
+
+    if not need_asset_notes(question) or not items:
+        return []
+    return match_assets_by_meaning(question, items)
 
 
 def _pick_assets_by_llm(question: str, items: list[KbAsset]) -> list[KbAsset]:
@@ -389,23 +420,32 @@ def asset_notes_for_ask(items: list[KbAsset], limit: int = 500) -> str:
     return "\n".join(lines)
 
 
-def assets_for_docs(db: Session, doc_ids: list[int], question: str = "") -> dict[int, list[KbAsset]]:
-    """提问出处用：按意思带对得上的图。没认过字的不带。"""
-
-    if not doc_ids:
-        return {}
-    rows = db.scalars(
-        select(KbAsset).where(KbAsset.document_id.in_(doc_ids)).order_by(KbAsset.sort_order.asc(), KbAsset.id.asc())
-    ).all()
-    grouped: dict[int, list[KbAsset]] = {}
-    for row in rows:
-        grouped.setdefault(row.document_id, []).append(row)
-    candidates = [item for item in rows if ocr_for_search(item.ocr_text or "")]
-    chosen = pick_assets_by_meaning(question, candidates)
-    picked = {doc_id: [] for doc_id in grouped}
+def _group_assets(doc_ids: list[int], chosen: list[KbAsset]) -> dict[int, list[KbAsset]]:
+    picked = {doc_id: [] for doc_id in doc_ids}
     for item in chosen:
         picked.setdefault(item.document_id, []).append(item)
     return picked
+
+
+def assets_for_ask(db: Session, doc_ids: list[int], question: str = "") -> tuple[dict[int, list[KbAsset]], dict[int, list[KbAsset]]]:
+    """说明用图、展示用图分开。没认过字的不带。"""
+
+    if not doc_ids:
+        return {}, {}
+    rows = db.scalars(
+        select(KbAsset).where(KbAsset.document_id.in_(doc_ids)).order_by(KbAsset.sort_order.asc(), KbAsset.id.asc())
+    ).all()
+    candidates = [item for item in rows if ocr_for_search(item.ocr_text or "")]
+    notes = _group_assets(doc_ids, pick_assets_for_notes(question, candidates))
+    shown = _group_assets(doc_ids, pick_assets_by_meaning(question, candidates))
+    return notes, shown
+
+
+def assets_for_docs(db: Session, doc_ids: list[int], question: str = "") -> dict[int, list[KbAsset]]:
+    """只要展示用的图。"""
+
+    _notes, shown = assets_for_ask(db, doc_ids, question)
+    return shown
 
 
 def asset_dict(row: KbAsset) -> dict:

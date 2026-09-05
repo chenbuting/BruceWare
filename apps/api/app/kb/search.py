@@ -60,23 +60,74 @@ def score_document(question: str, row: KbDocument) -> float:
     return min(1.0, hit / len(terms) + name_hit * 0.15)
 
 
+def alias_needles(question: str) -> list[str]:
+    """简称补全称，方便 3C 对上强制性产品认证。"""
+
+    q = (question or "").lower()
+    extra: list[str] = []
+    if re.search(r"3c|\bccc\b|强制性产品认证", q):
+        extra.extend(["3c", "ccc", "强制性产品认证", "强制性产品", "国家强制性"])
+    return extra
+
+
+def snippet_needles(question: str) -> list[str]:
+    """截文用的词：先简称和全称，再问句里比较实的词。"""
+
+    skip = _FOCUS_SKIP | {"我们", "们有", "有多", "少张", "书吗", "共有", "证书吗"}
+    terms: list[str] = []
+    for item in alias_needles(question):
+        if item not in terms:
+            terms.append(item)
+    for item in search_terms(question):
+        if item in skip or item in terms:
+            continue
+        terms.append(item)
+    terms.sort(key=lambda item: (0 if re.search(r"[a-z0-9]", item) else 1, -len(item)))
+    return terms[:20]
+
+
+def collect_snippet_windows(question: str, body: str, limit: int = 900, max_windows: int = 2) -> list[str]:
+    """目录一段、后面正文再一段。两段离得近就只留一段。"""
+
+    if not body:
+        return []
+    lower = body.lower()
+    scored: list[tuple[int, int]] = []
+    for term in snippet_needles(question):
+        start = 0
+        found = 0
+        while found < 6:
+            pos = lower.find(term, start)
+            if pos < 0:
+                break
+            scored.append((pos, len(term)))
+            start = pos + max(len(term), 1)
+            found += 1
+    if not scored:
+        return [body[:limit]]
+    scored.sort(key=lambda item: (-item[1], item[0]))
+    picked: list[int] = []
+    gap = int(limit * 0.7)
+    for pos, _weight in scored:
+        if any(abs(pos - prev) < gap for prev in picked):
+            continue
+        picked.append(pos)
+        if len(picked) >= max_windows:
+            break
+    picked.sort()
+    return [body[max(0, pos - 80) : max(0, pos - 80) + limit] for pos in picked]
+
+
 def snippet_of(question: str, row: KbDocument, limit: int = 900) -> str:
-    """截一段靠近问句的正文。"""
+    """截靠近问句的正文。目录和后面相关段都能带到。"""
 
     body = (row.search_text or "").strip()
     if not body:
         return (row.title or row.file_name or "")[:limit]
-    terms = search_terms(question)
-    lower = body.lower()
-    pos = -1
-    for term in terms:
-        pos = lower.find(term)
-        if pos >= 0:
-            break
-    if pos < 0:
+    windows = collect_snippet_windows(question, body, limit=limit)
+    if not windows:
         return body[:limit]
-    start = max(0, pos - 80)
-    return body[start : start + limit]
+    return "\n\n".join(windows)[: limit * 2 + 200]
 
 
 _FOCUS_SKIP = {
@@ -144,20 +195,13 @@ def uncovered_terms(question: str, blobs: list[str]) -> list[str]:
 
 
 def expand_snippet(question: str, row: KbDocument, piece: str = "", limit: int = 900) -> str:
-    """命中附近尽量给够，不额外砍短。"""
+    """命中附近尽量给够。向量命中的那段也留着。"""
 
-    body = (row.search_text or "").strip()
-    needle = (piece or "").strip()[:40]
-    if body and needle:
-        pos = body.lower().find(needle.lower())
-        if pos >= 0:
-            start = max(0, pos - 80)
-            return body[start : start + limit]
-        extra = snippet_of(question, row, limit)
-        if extra and extra not in piece:
-            return f"{piece.strip()}\n{extra}"[:limit]
-        return (piece or "")[:limit]
-    return snippet_of(question, row, limit)
+    text = snippet_of(question, row, limit)
+    extra = (piece or "").strip()
+    if extra and extra not in text:
+        return f"{extra}\n\n{text}"[: limit * 2 + 200]
+    return text
 
 
 def rank_documents(question: str, rows: list[KbDocument], top_k: int = 6) -> list[tuple[KbDocument, float]]:

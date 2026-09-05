@@ -61,6 +61,7 @@ def connect_database(url: str) -> None:
     _ensure_portal_columns(_Db.engine)
     _ensure_kb_columns(_Db.engine)
     _ensure_kb_asset_columns(_Db.engine)
+    _ensure_kb_chunk_columns(_Db.engine)
 
 
 def _ensure_resume_columns(engine: Engine) -> None:
@@ -113,6 +114,19 @@ def _ensure_kb_asset_columns(engine: Engine) -> None:
         return
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE kb_assets ADD COLUMN ocr_text TEXT DEFAULT ''"))
+
+
+def _ensure_kb_chunk_columns(engine: Engine) -> None:
+    """旧库补上切片是否人工改过。"""
+
+    inspector = inspect(engine)
+    if "kb_chunks" not in inspector.get_table_names():
+        return
+    cols = {item["name"] for item in inspector.get_columns("kb_chunks")}
+    if "edited" in cols:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE kb_chunks ADD COLUMN edited INTEGER DEFAULT 0"))
 
 
 def try_connect(url: str) -> tuple[bool, str]:

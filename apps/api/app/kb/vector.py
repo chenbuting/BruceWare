@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.ai import embed_texts, embedding_profile, llm_public
 from app.kb.models import KbChunk, KbDocument
-from app.kb.search import _haystack, expand_snippet, score_document, snippet_of, uncovered_terms
+from app.kb.search import _haystack, score_document, snippet_of, uncovered_terms
 
 _CHUNK_SIZE = 400
 _CHUNK_OVERLAP = 60
@@ -59,9 +59,75 @@ def clear_chunks(db: Session, document_id: int) -> None:
     db.execute(KbChunk.__table__.delete().where(KbChunk.document_id == document_id))
 
 
+def list_chunks(db: Session, document_id: int) -> list[KbChunk]:
+    return list(
+        db.scalars(select(KbChunk).where(KbChunk.document_id == document_id).order_by(KbChunk.chunk_index.asc(), KbChunk.id.asc())).all()
+    )
+
+
+def chunk_dict(row: KbChunk) -> dict:
+    preview = (row.text or "").replace("\n", " ").strip()
+    return {
+        "id": row.id,
+        "index": row.chunk_index,
+        "text": row.text or "",
+        "edited": bool(row.edited),
+        "preview": preview[:80],
+    }
+
+
+def ensure_chunks(db: Session, row: KbDocument) -> list[KbChunk]:
+    """没有切片时先切好。有 Key 就做向量；改过的块不会被整份重切冲掉。"""
+
+    existing = list_chunks(db, row.id)
+    if existing:
+        return existing
+    index_document(db, row)
+    existing = list_chunks(db, row.id)
+    if existing:
+        return existing
+    body = (row.search_text or "").strip()
+    parts = split_chunks(f"{row.title or ''} {row.tags or ''} {body}")
+    if not parts:
+        return []
+    for index, text in enumerate(parts):
+        db.add(
+            KbChunk(
+                library_id=row.library_id,
+                document_id=row.id,
+                chunk_index=index,
+                text=text,
+                embedding="",
+                profile="",
+                edited=0,
+            )
+        )
+    db.flush()
+    return list_chunks(db, row.id)
+
+
+def update_chunk_text(db: Session, row: KbChunk, text: str) -> KbChunk:
+    """改一块的字，并尽量重算这一块的向量。"""
+
+    row.text = (text or "").strip()
+    row.edited = 1
+    if row.text and llm_public().get("has_key"):
+        try:
+            vectors = embed_texts([row.text])
+            if vectors:
+                row.embedding = json.dumps(vectors[0], ensure_ascii=False)
+                row.profile = embedding_profile()
+        except ValueError:
+            pass
+    return row
+
+
 def index_document(db: Session, row: KbDocument) -> bool:
     """抽出正文后写入向量。失败返回 False，提问仍走关键词。"""
 
+    edited = db.scalar(select(KbChunk.id).where(KbChunk.document_id == row.id, KbChunk.edited == 1).limit(1))
+    if edited:
+        return True
     if not llm_public().get("has_key"):
         return False
     profile = embedding_profile()
@@ -136,8 +202,7 @@ def hybrid_rank(
         score = max(kw, vec)
         if score <= 0:
             continue
-        raw = chunk if vec >= kw and chunk else ""
-        snippet = expand_snippet(question, row, raw)
+        snippet = chunk if chunk else snippet_of(question, row)
         merged.append((row, score, snippet))
     merged.sort(key=lambda item: item[1], reverse=True)
     return merged[:top_k]
@@ -168,7 +233,7 @@ def supplement_hits(
         kw = score_document(question, row)
         vec, chunk = chunk_best.get(row.id, (0.0, ""))
         score = max(kw, vec, 0.2)
-        snippet = expand_snippet(" ".join(missing), row, chunk if vec >= kw and chunk else "")
+        snippet = chunk if chunk else snippet_of(" ".join(missing), row)
         extra.append((row, score, snippet))
     extra.sort(key=lambda item: item[1], reverse=True)
     merged = list(ranked)
