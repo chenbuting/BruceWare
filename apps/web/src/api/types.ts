@@ -292,6 +292,18 @@ export type KbAskResult = {
   evidence_mode?: KbEvidenceMode;
   wiki_update_hint?: string;
   used_vector?: boolean;
+  session_id?: number;
+};
+
+export type KbSession = {
+  id: number;
+  library_id: number;
+  title: string;
+  updated_at: string;
+};
+
+export type KbSessionDetail = KbSession & {
+  turns: { question: string; result: KbAskResult }[];
 };
 
 /** 发给后端的上一轮问答，只帮听懂指代。 */

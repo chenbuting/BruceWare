@@ -9,6 +9,7 @@ import {
   deleteKbDocument,
   deleteKbFolder,
   deleteKbLibrary,
+  deleteKbSession,
   deleteKbWiki,
   fetchKbDocument,
   fetchKbDocumentAssets,
@@ -16,12 +17,15 @@ import {
   fetchKbDocuments,
   fetchKbFolders,
   fetchKbLibraries,
+  fetchKbSession,
+  fetchKbSessions,
   fetchKbWikis,
   generateKbWiki,
   kbAssetFileUrl,
   kbDocumentFileUrl,
   recognizeKbAsset,
   renameKbFolder,
+  renameKbSession,
   saveKbAssetOcr,
   saveKbWiki,
   updateKbDocument,
@@ -29,7 +33,7 @@ import {
   updateKbLibraryPolicy,
   uploadKbDocument,
 } from "@/api/client";
-import type { KbAskResult, KbDocAsset, KbDocument, KbEvidenceMode, KbFolder, KbLibrary, KbVisionEngine, KbWikiList } from "@/api/types";
+import type { KbAskResult, KbDocAsset, KbDocument, KbEvidenceMode, KbFolder, KbLibrary, KbSession, KbVisionEngine, KbWikiList } from "@/api/types";
 import { answerHasAsset, KbAnswerContent } from "@/components/KbAnswerContent";
 import { ConfirmModal, Modal } from "@/components/Modal";
 import { PdfPreview } from "@/components/PdfPreview";
@@ -168,6 +172,11 @@ export function KbPage() {
   const [question, setQuestion] = useState("");
   const [onlyFolder, setOnlyFolder] = useState(false);
   const [askTurns, setAskTurns] = useState<AskTurn[]>([]);
+  const [sessions, setSessions] = useState<KbSession[]>([]);
+  const [sessionId, setSessionId] = useState<number | null>(null);
+  const [renameSession, setRenameSession] = useState<KbSession | null>(null);
+  const [renameSessionTo, setRenameSessionTo] = useState("");
+  const [askDeleteSession, setAskDeleteSession] = useState<KbSession | null>(null);
   const [asking, setAsking] = useState(false);
   const [askMode, setAskMode] = useState<"" | KbEvidenceMode>("");
   const [wikiEnabled, setWikiEnabled] = useState(false);
@@ -220,6 +229,16 @@ export function KbPage() {
     reloadAll().catch((err: Error) => setError(err.message));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname]);
+
+  useEffect(() => {
+    if (libraryId == null) {
+      setSessions([]);
+      return;
+    }
+    fetchKbSessions(libraryId)
+      .then((data) => setSessions(data.items))
+      .catch((err: Error) => setError(err.message));
+  }, [libraryId]);
 
   useEffect(() => {
     if (!preview || preview.preview !== "text") {
@@ -318,9 +337,14 @@ export function KbPage() {
     setError("");
     setHint("");
     setQuestion("");
-    askKbLibrary(libraryId, text, folderId, onlyFolder, askMode, history)
+    askKbLibrary(libraryId, text, folderId, onlyFolder, askMode, history, sessionId)
       .then(async (data) => {
-        setAskTurns((prev) => [...prev, { question: text, result: data }].slice(-ASK_TURN_LIMIT));
+        if (data.session_id) setSessionId(data.session_id);
+        setAskTurns((prev) => [...prev, { question: text, result: data }]);
+        if (libraryId != null) {
+          const listed = await fetchKbSessions(libraryId);
+          setSessions(listed.items);
+        }
         if (data.wiki_update_hint && preview) {
           applyDoc(await fetchKbDocument(preview.id));
         }
@@ -329,11 +353,22 @@ export function KbPage() {
       .finally(() => setAsking(false));
   }
 
-  function onClearAsk() {
+  function onNewAsk() {
+    setSessionId(null);
     setAskTurns([]);
     setQuestion("");
     setError("");
     setHint("");
+  }
+
+  function onOpenSession(id: number) {
+    setError("");
+    fetchKbSession(id)
+      .then((data) => {
+        setSessionId(data.id);
+        setAskTurns(data.turns.map((item) => ({ question: item.question, result: item.result })));
+      })
+      .catch((err: Error) => setError(err.message));
   }
 
   function onOpenCitation(id: number) {
@@ -353,6 +388,7 @@ export function KbPage() {
     setFolderId(null);
     setPreview(null);
     setAskTurns([]);
+    setSessionId(null);
     run(async () => {
       await loadFolders(id);
       await loadDocs(id, null);
@@ -533,7 +569,50 @@ export function KbPage() {
       {hint ? <p className="text-[13px] text-[var(--ok)]">{hint}</p> : null}
 
       {pageTab === "ask" && library ? (
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-[var(--line)] bg-[var(--paper)]">
+        <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden rounded-lg border border-[var(--line)] bg-[var(--paper)] md:grid-cols-[200px_minmax(0,1fr)]">
+          <aside className="flex min-h-0 flex-col border-b border-[var(--line)] md:border-b-0 md:border-r">
+            <div className="flex items-center justify-between gap-2 border-b border-[var(--line)] px-3 py-2">
+              <span className="text-[12px] text-[var(--muted)]">对话</span>
+              <button type="button" className={btnClass} disabled={asking} onClick={onNewAsk}>
+                新对话
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-auto p-2">
+              {sessions.length ? (
+                sessions.map((item) => (
+                  <div key={item.id} className={`mb-0.5 flex items-center gap-1 rounded-md ${sessionId === item.id ? "bg-[var(--bg)]" : "hover:bg-[var(--hover)]"}`}>
+                    <button
+                      type="button"
+                      className="min-w-0 flex-1 truncate px-2 py-1.5 text-left text-[13px]"
+                      onClick={() => onOpenSession(item.id)}
+                    >
+                      {item.title || "新对话"}
+                    </button>
+                    <button
+                      type="button"
+                      className="shrink-0 px-1 text-[12px] text-[var(--muted)] hover:text-[var(--text)]"
+                      onClick={() => {
+                        setRenameSession(item);
+                        setRenameSessionTo(item.title);
+                      }}
+                    >
+                      改
+                    </button>
+                    <button
+                      type="button"
+                      className="shrink-0 px-1 text-[12px] text-[var(--muted)] hover:text-[var(--err)]"
+                      onClick={() => setAskDeleteSession(item)}
+                    >
+                      删
+                    </button>
+                  </div>
+                ))
+              ) : (
+                <p className="px-2 py-3 text-[12px] text-[var(--muted)]">还没有留下的对话。</p>
+              )}
+            </div>
+          </aside>
+          <div className="flex min-h-0 min-w-0 flex-col">
           <div className="min-h-0 flex-1 overflow-auto px-4 py-3 text-[13px] leading-6">
             {askTurns.length ? (
               <div className="space-y-4">
@@ -545,7 +624,7 @@ export function KbPage() {
               </div>
             ) : (
               <p className="pt-16 text-center text-[var(--muted)]">
-                {asking ? "在找…" : "在下面提问，可以接着上一句问。刷新或点清空会没掉。点出处会回到资料预览。"}
+                {asking ? "在找…" : "在下面提问。对话会留下来，左边能打开。点出处会回到资料预览。"}
               </p>
             )}
           </div>
@@ -581,11 +660,12 @@ export function KbPage() {
               <button type="button" className={btnClass} disabled={asking || !question.trim()} onClick={onAsk}>
                 {asking ? "在找…" : "提问"}
               </button>
-              <button type="button" className={btnClass} disabled={asking || !askTurns.length} onClick={onClearAsk}>
-                清空
+              <button type="button" className={btnClass} disabled={asking} onClick={onNewAsk}>
+                新对话
               </button>
             </div>
             <p className="mt-1 text-[12px] leading-5 text-[var(--muted)]">{evidenceHint(askMode, library.evidence_mode || "strict")}</p>
+          </div>
           </div>
         </div>
       ) : null}
@@ -1044,10 +1124,57 @@ export function KbPage() {
         </Modal>
       ) : null}
 
+      {renameSession ? (
+        <Modal title="改对话名" onClose={() => setRenameSession(null)}>
+          <input className={`${inputClass} w-full`} value={renameSessionTo} onChange={(e) => setRenameSessionTo(e.target.value)} />
+          <div className="mt-4 flex gap-3">
+            <button
+              type="button"
+              className={btnClass}
+              disabled={busy || !renameSessionTo.trim()}
+              onClick={() => {
+                const target = renameSession;
+                run(async () => {
+                  await renameKbSession(target.id, renameSessionTo.trim());
+                  setRenameSession(null);
+                  if (libraryId != null) {
+                    const listed = await fetchKbSessions(libraryId);
+                    setSessions(listed.items);
+                  }
+                });
+              }}
+            >
+              保存
+            </button>
+          </div>
+        </Modal>
+      ) : null}
+
+      {askDeleteSession ? (
+        <ConfirmModal
+          title="删除这段对话？"
+          message="删了就打不开了。"
+          busy={busy}
+          onClose={() => setAskDeleteSession(null)}
+          onConfirm={() => {
+            const target = askDeleteSession;
+            run(async () => {
+              await deleteKbSession(target.id);
+              setAskDeleteSession(null);
+              if (sessionId === target.id) onNewAsk();
+              if (libraryId != null) {
+                const listed = await fetchKbSessions(libraryId);
+                setSessions(listed.items);
+              }
+            });
+          }}
+        />
+      ) : null}
+
       {askDeleteLib ? (
         <ConfirmModal
           title="删除这个库？"
-          message="库里的文件夹和文件都会删掉。"
+          message="库里的文件夹、文件和对话都会删掉。"
           busy={busy}
           onClose={() => setAskDeleteLib(false)}
           onConfirm={() => {

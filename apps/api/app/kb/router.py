@@ -30,6 +30,17 @@ from app.kb.assets import (
 from app.kb.ocr import ensure_ocr
 from app.kb.vision import pending_vision_count, recognize_assets, recognize_one_asset
 from app.kb.models import KbAsset, KbChunk, KbDocument, KbFolder, KbLibrary
+from app.kb.sessions import (
+    create_session,
+    delete_library_sessions,
+    delete_session,
+    ensure_session,
+    get_session,
+    list_sessions,
+    load_turns,
+    save_turn,
+    session_dict,
+)
 from app.kb.policy import dump_policy, parse_policy, resolve_mode
 from app.kb.search import folder_scope, snippet_of
 from app.kb.vector import clear_chunks, hybrid_rank, index_document, score_chunks, supplement_hits
@@ -102,6 +113,11 @@ class AskIn(BaseModel):
     only_folder: bool = False
     evidence_mode: str | None = None
     history: list[AskTurnIn] = Field(default_factory=list)
+    session_id: int | None = None
+
+
+class SessionIn(BaseModel):
+    title: str = Field(default="", max_length=120)
 
 
 def _iso(value: datetime | None) -> str:
@@ -302,6 +318,7 @@ def delete_library(library_id: int, db: Session = Depends(get_db)):
     row = _get_library(db, library_id)
     if row is None:
         return fail("这个库不存在", 404)
+    delete_library_sessions(db, library_id)
     db.execute(KbAsset.__table__.delete().where(KbAsset.library_id == library_id))
     db.execute(KbChunk.__table__.delete().where(KbChunk.library_id == library_id))
     db.execute(KbDocument.__table__.delete().where(KbDocument.library_id == library_id))
@@ -594,6 +611,63 @@ def _ask_messages(question: str, prompt: str, history: list[AskTurnIn]) -> list[
     return messages
 
 
+def _finish_ask(db, library_id: int, session_id: int | None, question: str, payload: dict):
+    """回答成功后写入当前会话，失败的提问不建空会话。"""
+
+    session = ensure_session(db, library_id, session_id, question)
+    save_turn(db, session, question, payload)
+    payload["session_id"] = session.id
+    return ok(payload)
+
+
+@router.get("/kb/libraries/{library_id}/sessions")
+def list_library_sessions(library_id: int, db: Session = Depends(get_db)):
+    if _get_library(db, library_id) is None:
+        return fail("这个库不存在", 404)
+    return ok({"items": [session_dict(row) for row in list_sessions(db, library_id)]})
+
+
+@router.post("/kb/libraries/{library_id}/sessions")
+def create_library_session(library_id: int, body: SessionIn, db: Session = Depends(get_db)):
+    if _get_library(db, library_id) is None:
+        return fail("这个库不存在", 404)
+    row = create_session(db, library_id, body.title)
+    db.commit()
+    db.refresh(row)
+    return ok(session_dict(row))
+
+
+@router.get("/kb/sessions/{session_id}")
+def get_library_session(session_id: int, db: Session = Depends(get_db)):
+    row = get_session(db, session_id)
+    if row is None:
+        return fail("这段对话不存在", 404)
+    data = session_dict(row)
+    data["turns"] = load_turns(db, row.id)
+    return ok(data)
+
+
+@router.put("/kb/sessions/{session_id}")
+def rename_library_session(session_id: int, body: SessionIn, db: Session = Depends(get_db)):
+    row = get_session(db, session_id)
+    if row is None:
+        return fail("这段对话不存在", 404)
+    title = body.title.strip() or "新对话"
+    row.title = title[:120]
+    db.commit()
+    db.refresh(row)
+    return ok(session_dict(row))
+
+
+@router.delete("/kb/sessions/{session_id}")
+def delete_library_session(session_id: int, db: Session = Depends(get_db)):
+    row = get_session(db, session_id)
+    if row is None:
+        return fail("这段对话不存在", 404)
+    delete_session(db, row)
+    return ok(True)
+
+
 @router.post("/kb/libraries/{library_id}/ask")
 def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
     """当前库关键词加向量检索，再按原文回答并带出处。"""
@@ -665,9 +739,13 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
         "used_vector": False,
     }
     if not ranked:
-        return ok(empty)
+        return _finish_ask(db, library_id, body.session_id, question, empty)
     if not llm_public().get("has_key"):
-        return ok(
+        return _finish_ask(
+            db,
+            library_id,
+            body.session_id,
+            question,
             {
                 "answer": "还没配 AI。先列出可能相关的资料，配好 Key 后再问可以写成回答。",
                 "citations": citations,
@@ -675,7 +753,7 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
                 "evidence_mode": mode,
                 "wiki_update_hint": "",
                 "used_vector": used_vector,
-            }
+            },
         )
     prompt = (
         _ask_style(mode, policy["rule"])
@@ -689,7 +767,11 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
     hint = ""
     if policy["wiki_enabled"] and policy["wiki_learn"] and citations:
         hint = _learn_wikis(question, ranked, db)
-    return ok(
+    return _finish_ask(
+        db,
+        library_id,
+        body.session_id,
+        question,
         {
             "answer": answer,
             "citations": citations,
@@ -697,7 +779,7 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
             "evidence_mode": mode,
             "wiki_update_hint": hint,
             "used_vector": used_vector,
-        }
+        },
     )
 
 

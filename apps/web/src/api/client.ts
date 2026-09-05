@@ -8,6 +8,8 @@ import type {
   InterviewSession,
   KbAskHistoryItem,
   KbAskResult,
+  KbSession,
+  KbSessionDetail,
   KbDocAsset,
   KbDocument,
   KbEvidenceMode,
@@ -651,6 +653,7 @@ export function askKbLibrary(
   onlyFolder: boolean,
   evidenceMode: KbEvidenceMode | "",
   history: KbAskHistoryItem[] = [],
+  sessionId: number | null = null,
 ) {
   return request<KbAskResult>(`/api/v1/kb/libraries/${libraryId}/ask`, {
     method: "POST",
@@ -660,8 +663,35 @@ export function askKbLibrary(
       only_folder: onlyFolder && folderId != null,
       evidence_mode: evidenceMode || null,
       history,
+      session_id: sessionId,
     }),
   });
+}
+
+export function fetchKbSessions(libraryId: number) {
+  return request<{ items: KbSession[] }>(`/api/v1/kb/libraries/${libraryId}/sessions`);
+}
+
+export function createKbSession(libraryId: number, title = "") {
+  return request<KbSession>(`/api/v1/kb/libraries/${libraryId}/sessions`, {
+    method: "POST",
+    body: JSON.stringify({ title }),
+  });
+}
+
+export function fetchKbSession(id: number) {
+  return request<KbSessionDetail>(`/api/v1/kb/sessions/${id}`);
+}
+
+export function renameKbSession(id: number, title: string) {
+  return request<KbSession>(`/api/v1/kb/sessions/${id}`, {
+    method: "PUT",
+    body: JSON.stringify({ title }),
+  });
+}
+
+export function deleteKbSession(id: number) {
+  return request<boolean>(`/api/v1/kb/sessions/${id}`, { method: "DELETE" });
 }
 
 export function generateKbWiki(id: number) {

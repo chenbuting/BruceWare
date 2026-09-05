@@ -84,3 +84,28 @@ class KbAsset(Base):
     sort_order = Column(Integer, nullable=False, default=0)
     alt_text = Column(String(200), nullable=False, default="")
     ocr_text = Column(Text, nullable=False, default="")
+
+
+class KbSession(Base):
+    """对着一个库的一段留下的对话。"""
+
+    __tablename__ = "kb_sessions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    library_id = Column(Integer, nullable=False, index=True)
+    title = Column(String(120), nullable=False, default="新对话")
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class KbSessionTurn(Base):
+    """一段对话里的一问一答。"""
+
+    __tablename__ = "kb_session_turns"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(Integer, nullable=False, index=True)
+    question = Column(Text, nullable=False, default="")
+    answer = Column(Text, nullable=False, default="")
+    result_json = Column(Text, nullable=False, default="")
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
