@@ -280,6 +280,21 @@ def pick_assets_by_meaning(question: str, items: list[KbAsset]) -> list[KbAsset]
     return picked
 
 
+def asset_notes_for_ask(items: list[KbAsset], limit: int = 500) -> str:
+    """命中图的图意和字，给回答当原文。"""
+
+    lines = []
+    for item in items:
+        text = ocr_for_search(item.ocr_text or "")
+        if not text:
+            continue
+        if len(text) > limit:
+            text = text[:limit]
+        name = (item.alt_text or "图").strip()
+        lines.append(f"【{name}】{text}")
+    return "\n".join(lines)
+
+
 def assets_for_docs(db: Session, doc_ids: list[int], question: str = "") -> dict[int, list[KbAsset]]:
     """提问出处用：按意思带对得上的图。没认过字的不带。"""
 
@@ -308,6 +323,54 @@ def asset_dict(row: KbAsset) -> dict:
     }
 
 
+def parse_asset_note(text: str) -> dict[str, str]:
+    """把存着的一段拆成图意、关键词、图上的字。旧数据整段落到字。"""
+
+    value = (text or "").strip()
+    empty = {"caption": "", "keywords": "", "words": ""}
+    if not value or value == OCR_SKIP:
+        return empty
+    caption_m = re.search(r"图意[：:]\s*(.*?)(?=\n关键词[：:]|\n图上的字[：:]|$)", value, flags=re.S)
+    keyword_m = re.search(r"关键词[：:]\s*(.*?)(?=\n图意[：:]|\n图上的字[：:]|$)", value, flags=re.S)
+    words_m = re.search(r"图上的字[：:]\s*(.*)\Z", value, flags=re.S)
+    if not (caption_m or keyword_m or words_m):
+        return {"caption": "", "keywords": "", "words": value}
+    words = (words_m.group(1) if words_m else "").strip()
+    if words in {"无", "没有"}:
+        words = ""
+    return {
+        "caption": (caption_m.group(1) if caption_m else "").strip()[:200],
+        "keywords": re.sub(r"\s+", " ", (keyword_m.group(1) if keyword_m else "").strip())[:200],
+        "words": words[:1500],
+    }
+
+
+def pack_asset_note(caption: str, keywords: str, words: str) -> str:
+    """三块写回一段，检索和提问仍读这一段。"""
+
+    cap = (caption or "").strip()
+    keys = (keywords or "").strip()
+    body = (words or "").strip()
+    if body in {"无", "没有"}:
+        body = ""
+    if not cap and not keys and not body:
+        return ""
+    lines = []
+    if cap:
+        lines.append(f"图意：{cap}")
+    if keys:
+        lines.append(f"关键词：{keys}")
+    lines.append(f"图上的字：{body or '无'}")
+    return "\n".join(lines)
+
+
+def normalize_asset_note(text: str) -> str:
+    """识图结果整理成统一三段。"""
+
+    parts = parse_asset_note(text)
+    return pack_asset_note(parts["caption"], parts["keywords"], parts["words"])
+
+
 def ocr_for_search(text: str) -> str:
     """空的或失败标记不进检索。"""
 
@@ -325,7 +388,10 @@ def ocr_for_edit(text: str) -> str:
 
 def asset_edit_dict(row: KbAsset) -> dict:
     data = asset_dict(row)
-    data["ocr_text"] = ocr_for_edit(row.ocr_text or "")
+    parts = parse_asset_note(ocr_for_edit(row.ocr_text or ""))
+    data["caption"] = parts["caption"]
+    data["keywords"] = parts["keywords"]
+    data["ocr_text"] = parts["words"]
     return data
 
 

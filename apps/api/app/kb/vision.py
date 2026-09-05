@@ -10,11 +10,17 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.ai import chat_complete, llm_public
-from app.kb.assets import OCR_SKIP
+from app.kb.assets import OCR_SKIP, normalize_asset_note
 from app.kb.models import KbAsset, KbDocument
 from app.kb.store import abs_path
 
-_PROMPT = "看这张图。写出图上能看清的字，并一句话说这是什么。看不清的不要编。只返回纯文本，不要标题。"
+_PROMPT = (
+    "看这张图。按下面三行写，看不清的不要编。没字的照片、示意图也要写图意。\n"
+    "图意：一句话说这是什么\n"
+    "关键词：三到六个词，逗号分隔\n"
+    "图上的字：能看清的文字；没有就写无\n"
+    "只返回纯文本。"
+)
 
 
 def _for_vision(data: bytes) -> tuple[bytes, str]:
@@ -54,7 +60,7 @@ def read_image_text(data: bytes) -> str:
         ],
         timeout=35,
     )
-    return (text or "").strip()[:400]
+    return (text or "").strip()[:800]
 
 
 def _pending(db: Session, document_id: int) -> list[KbAsset]:
@@ -81,7 +87,7 @@ def recognize_one_asset(row: KbDocument, item: KbAsset, engine: str = "vision") 
     except Exception:
         item.ocr_text = OCR_SKIP
         return
-    item.ocr_text = text or OCR_SKIP
+    item.ocr_text = normalize_asset_note(text) or OCR_SKIP
 
 
 def recognize_assets(db: Session, row: KbDocument, limit: int, engine: str = "vision") -> int:
@@ -107,8 +113,8 @@ def recognize_assets(db: Session, row: KbDocument, limit: int, engine: str = "vi
         if not text:
             item.ocr_text = OCR_SKIP
             continue
-        item.ocr_text = text
-        extras.append(text)
+        item.ocr_text = normalize_asset_note(text)
+        extras.append(item.ocr_text)
     extra = " ".join(part for part in extras if part and part not in (row.search_text or ""))
     if extra:
         row.search_text = ((row.search_text or "") + " " + extra).strip()[:20000]

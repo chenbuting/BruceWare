@@ -19,9 +19,11 @@ from app.kb.assets import (
     append_asset_alts,
     asset_dict,
     asset_edit_dict,
+    asset_notes_for_ask,
     assets_for_docs,
     clear_assets,
     list_doc_assets,
+    pack_asset_note,
     rebuild_search_text,
     save_extracted_images,
 )
@@ -65,7 +67,9 @@ class WikiIn(BaseModel):
 
 
 class AssetPatch(BaseModel):
-    ocr_text: str = Field(default="", max_length=2000)
+    caption: str = Field(default="", max_length=200)
+    keywords: str = Field(default="", max_length=200)
+    ocr_text: str = Field(default="", max_length=1500)
 
 
 class FolderIn(BaseModel):
@@ -520,9 +524,9 @@ def _ask_style(mode: str, rule: str) -> str:
     """拼给模型的回答约束。"""
 
     if mode == "loose":
-        text = "可以参考摘要帮助概括，但必须标明来自哪份资料。吃不准就回到原文，不要编造。"
+        text = "可以参考摘要帮助概括，但必须标明来自哪份资料。图上认下来的图意和字也算出处。吃不准就回到原文，不要编造。"
     else:
-        text = "必须依据原文片段作答，不能把摘要当证据。没有原文依据就说资料里没有。"
+        text = "必须依据原文片段和图上认下来的图意、文字作答，不能把摘要当证据。可以说见哪张图。没有这些依据就说资料里没有。"
     extra = (rule or "").strip()
     if extra:
         text += f" 额外规则：{extra}"
@@ -572,6 +576,9 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
             }
         )
         block = f"【资料{index}】{row.title or row.file_name}\n{snippet or snippet_of(question, row)}"
+        notes = asset_notes_for_ask(pictures.get(row.id, []))
+        if notes:
+            block += f"\n【图上的说明】\n{notes}"
         if use_notes:
             note = parse_wiki(row)
             if note.summary:
@@ -720,7 +727,7 @@ def update_asset(asset_id: int, body: AssetPatch, db: Session = Depends(get_db))
     row = db.get(KbDocument, item.document_id)
     if row is None:
         return fail("这份资料不存在", 404)
-    text = body.ocr_text.strip()
+    text = pack_asset_note(body.caption, body.keywords, body.ocr_text)
     item.ocr_text = text or OCR_SKIP
     rebuild_search_text(db, row)
     index_document(db, row)

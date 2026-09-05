@@ -616,10 +616,14 @@ export function fetchKbDocumentAssets(id: number) {
   return request<{ items: KbDocAsset[] }>(`/api/v1/kb/documents/${id}/assets`);
 }
 
-export function saveKbAssetOcr(id: number, ocrText: string) {
+export function saveKbAssetOcr(id: number, note: { caption?: string; keywords?: string; ocr_text?: string }) {
   return request<KbDocAsset>(`/api/v1/kb/assets/${id}`, {
     method: "PUT",
-    body: JSON.stringify({ ocr_text: ocrText }),
+    body: JSON.stringify({
+      caption: note.caption || "",
+      keywords: note.keywords || "",
+      ocr_text: note.ocr_text || "",
+    }),
   });
 }
 

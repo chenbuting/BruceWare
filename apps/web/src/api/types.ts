@@ -273,6 +273,8 @@ export type KbDocAsset = {
   alt: string;
   page: number;
   url: string;
+  caption: string;
+  keywords: string;
   ocr_text: string;
 };
 

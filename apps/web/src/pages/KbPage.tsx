@@ -192,7 +192,7 @@ export function KbPage() {
     setHint("正在列出图片…");
     try {
       const data = await fetchKbDocumentAssets(item.id);
-      const pending = data.items.filter((one) => !one.ocr_text.trim());
+      const pending = data.items.filter((one) => !one.caption?.trim() && !one.keywords?.trim() && !one.ocr_text.trim());
       if (!data.items.length) {
         setError("这份资料没有可认的图");
         return;
@@ -1071,9 +1071,13 @@ function AssetWords({
   onError: (message: string) => void;
 }) {
   const [items, setItems] = useState<KbDocAsset[]>([]);
-  const [drafts, setDrafts] = useState<Record<number, string>>({});
+  const [drafts, setDrafts] = useState<Record<number, { caption: string; keywords: string; words: string }>>({});
   const [savingId, setSavingId] = useState<number | null>(null);
   const [seeingId, setSeeingId] = useState<number | null>(null);
+
+  function noteOf(row: KbDocAsset) {
+    return { caption: row.caption || "", keywords: row.keywords || "", words: row.ocr_text || "" };
+  }
 
   useEffect(() => {
     let alive = true;
@@ -1081,7 +1085,7 @@ function AssetWords({
       .then((data) => {
         if (!alive) return;
         setItems(data.items);
-        setDrafts(Object.fromEntries(data.items.map((item) => [item.id, item.ocr_text])));
+        setDrafts(Object.fromEntries(data.items.map((item) => [item.id, noteOf(item)])));
       })
       .catch((err: Error) => onError(err.message));
     return () => {
@@ -1093,12 +1097,13 @@ function AssetWords({
 
   function applyAsset(row: KbDocAsset) {
     setItems((list) => list.map((one) => (one.id === row.id ? row : one)));
-    setDrafts((map) => ({ ...map, [row.id]: row.ocr_text }));
+    setDrafts((map) => ({ ...map, [row.id]: noteOf(row) }));
   }
 
   function save(item: KbDocAsset) {
+    const note = drafts[item.id] || noteOf(item);
     setSavingId(item.id);
-    saveKbAssetOcr(item.id, drafts[item.id] ?? "")
+    saveKbAssetOcr(item.id, { caption: note.caption, keywords: note.keywords, ocr_text: note.words })
       .then(applyAsset)
       .catch((err: Error) => onError(err.message))
       .finally(() => setSavingId(null));
@@ -1112,33 +1117,57 @@ function AssetWords({
       .finally(() => setSeeingId(null));
   }
 
+  function patchDraft(id: number, key: "caption" | "keywords" | "words", value: string) {
+    setDrafts((map) => {
+      const current = map[id] || { caption: "", keywords: "", words: "" };
+      return { ...map, [id]: { ...current, [key]: value } };
+    });
+  }
+
   return (
     <div className="mt-4 border-t border-[var(--line)] pt-3">
-      <p className="mb-1 font-medium">图上的字</p>
-      <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">认错了可以改。保存后下次提问按改过的找。也可以只认这一张。</p>
-      {items.map((item) => (
-        <div key={item.id} className="mb-3">
-          <button type="button" className="mb-1 block max-w-full text-left" title={item.alt}>
-            <img src={item.url || kbAssetFileUrl(item.id)} alt={item.alt} className="max-h-28 w-auto rounded border border-[var(--line)] object-contain" />
-          </button>
-          {item.alt ? <p className="mb-1 text-[12px] text-[var(--muted)]">{item.alt}</p> : null}
-          <textarea
-            className={`${inputClass} min-h-[4.5rem] w-full`}
-            value={drafts[item.id] ?? ""}
-            maxLength={2000}
-            onChange={(e) => setDrafts((map) => ({ ...map, [item.id]: e.target.value }))}
-            placeholder={seeingId === item.id ? "正在认这张…" : "图上的字，没有就留空"}
-          />
-          <div className="mt-1 flex flex-wrap gap-2">
-            <button type="button" className={btnClass} disabled={visionLocked || seeingId != null} onClick={() => seeOne(item)}>
-              {seeingId === item.id ? "在认…" : "识图"}
+      <p className="mb-1 font-medium">图的说明</p>
+      <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">图意是这张图是什么，关键词方便搜，图上的字是抄下来的。认错了可以改，保存后提问按改过的找。</p>
+      {items.map((item) => {
+        const draft = drafts[item.id] || noteOf(item);
+        return (
+          <div key={item.id} className="mb-3">
+            <button type="button" className="mb-1 block max-w-full text-left" title={item.alt}>
+              <img src={item.url || kbAssetFileUrl(item.id)} alt={item.alt} className="max-h-28 w-auto rounded border border-[var(--line)] object-contain" />
             </button>
-            <button type="button" className={btnClass} disabled={savingId === item.id} onClick={() => save(item)}>
-              {savingId === item.id ? "在存…" : "保存"}
-            </button>
+            {item.alt ? <p className="mb-1 text-[12px] text-[var(--muted)]">{item.alt}</p> : null}
+            <input
+              className={`${inputClass} mb-1 w-full`}
+              value={draft.caption}
+              maxLength={200}
+              onChange={(e) => patchDraft(item.id, "caption", e.target.value)}
+              placeholder={seeingId === item.id ? "正在认这张…" : "图意，没字的图也写是什么"}
+            />
+            <input
+              className={`${inputClass} mb-1 w-full`}
+              value={draft.keywords}
+              maxLength={200}
+              onChange={(e) => patchDraft(item.id, "keywords", e.target.value)}
+              placeholder="关键词，逗号分隔"
+            />
+            <textarea
+              className={`${inputClass} min-h-[4.5rem] w-full`}
+              value={draft.words}
+              maxLength={1500}
+              onChange={(e) => patchDraft(item.id, "words", e.target.value)}
+              placeholder="图上的字，没有就留空"
+            />
+            <div className="mt-1 flex flex-wrap gap-2">
+              <button type="button" className={btnClass} disabled={visionLocked || seeingId != null} onClick={() => seeOne(item)}>
+                {seeingId === item.id ? "在认…" : "识图"}
+              </button>
+              <button type="button" className={btnClass} disabled={savingId === item.id} onClick={() => save(item)}>
+                {savingId === item.id ? "在存…" : "保存"}
+              </button>
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
