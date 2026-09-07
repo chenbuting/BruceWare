@@ -1,7 +1,9 @@
 """调用兼容 OpenAI 的对话接口。"""
 
+import json
 import ssl
 import time
+from collections.abc import Iterator
 from io import BytesIO
 from typing import Any
 
@@ -189,6 +191,86 @@ def chat_complete(messages: list[dict[str, Any]], timeout: float = 90) -> str:
     except Exception as exc:
         raise ValueError("AI 返回格式不对") from exc
     return str(content or "").strip()
+
+
+def _stream_delta(obj: dict[str, Any]) -> str:
+    choices = obj.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    first = choices[0] if isinstance(choices[0], dict) else {}
+    delta = first.get("delta") if isinstance(first.get("delta"), dict) else {}
+    return str(delta.get("content") or "")
+
+
+def _iter_chat_stream(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float, verify) -> Iterator[str]:
+    """读兼容 OpenAI 的流式接口，一段段吐字。"""
+
+    with httpx.Client(timeout=httpx.Timeout(timeout, connect=20), verify=verify, follow_redirects=True) as client:
+        with client.stream("POST", url, json=payload, headers=headers) as res:
+            if res.status_code >= 400:
+                text = res.read().decode("utf-8", errors="replace")[:300]
+                raise ValueError(f"AI 接口返回 {res.status_code}：{text}")
+            for raw in res.iter_lines():
+                line = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+                line = line.strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if not data or data == "[DONE]":
+                    if data == "[DONE]":
+                        return
+                    continue
+                try:
+                    obj = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+                piece = _stream_delta(obj)
+                if piece:
+                    yield piece
+
+
+def chat_complete_stream(messages: list[dict[str, Any]], timeout: float = 90) -> Iterator[str]:
+    """流式对话，一段段返回助手文字。"""
+
+    cfg = load_llm()
+    if not cfg["api_key"]:
+        raise ValueError("请先在设置里填写 AI Key")
+    if not cfg["model"]:
+        raise ValueError("请先在设置里填写模型名")
+
+    url = _completions_url(cfg["base_url"])
+    payload = {
+        "model": cfg["model"],
+        "messages": messages,
+        "temperature": 0.6,
+        "stream": True,
+    }
+    headers = {
+        "Authorization": f"Bearer {cfg['api_key']}",
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+    }
+    last: Exception | None = None
+    got = False
+    for verify in (_ssl_context(), False):
+        try:
+            for piece in _iter_chat_stream(url, payload, headers, timeout, verify):
+                got = True
+                yield piece
+            return
+        except ValueError:
+            raise
+        except Exception as exc:
+            last = exc
+            if got or not _is_ssl_break(exc):
+                break
+            time.sleep(0.8)
+    text = str(last).lower() if last else ""
+    if "timeout" in text or "timed out" in text:
+        raise ValueError("AI 请求超时，请稍后再试。") from last
+    raise ValueError(f"AI 请求失败：{last}") from last
 
 
 def _images_root(base_url: str) -> str:

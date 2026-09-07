@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import json
+import zipfile
 from datetime import datetime
 from typing import Any, Literal
 from urllib.parse import quote
@@ -16,11 +18,24 @@ from app.core.config import get_settings
 from app.core.local_settings import load_local_settings, save_local_settings
 from app.core.response import fail, ok
 from app.db.session import get_database_url, get_db
+from app.kb.backup import (
+    dump_kb,
+    insert_kb_merge,
+    insert_kb_replace,
+    kb_file_entries,
+    payload_has_kb,
+    restore_kb_files,
+    wipe_kb_files,
+)
+from app.kb.store import abs_path
 from app.portal.models import PortalLink
 from app.resume.models import ResumeDoc, ResumeInterview, ResumeInterviewMessage
 
 router = APIRouter()
-BACKUP_VERSION = 1
+BACKUP_VERSION = 2
+OLD_BACKUP_VERSION = 1
+JSON_IMPORT_LIMIT = 20 * 1024 * 1024
+ZIP_IMPORT_LIMIT = 512 * 1024 * 1024
 
 
 def _iso(value: datetime | None) -> str:
@@ -94,6 +109,7 @@ def _dump(db: Session) -> dict[str, Any]:
             }
             for row in messages
         ],
+        **dump_kb(db),
     }
 
 
@@ -116,6 +132,18 @@ def _apply_modules(payload: dict[str, Any]) -> None:
             stored[key] = [str(item) for item in values if str(item).strip()]
     data["modules"] = stored
     save_local_settings(settings.repo_root, data)
+
+
+def _reset_kb_autoincrement(db: Session) -> None:
+    from app.kb.models import KbAsset, KbChunk, KbDocument, KbFolder, KbLibrary, KbSession, KbSessionTurn
+
+    _reset_autoincrement(db, "kb_libraries", KbLibrary.id)
+    _reset_autoincrement(db, "kb_folders", KbFolder.id)
+    _reset_autoincrement(db, "kb_documents", KbDocument.id)
+    _reset_autoincrement(db, "kb_chunks", KbChunk.id)
+    _reset_autoincrement(db, "kb_assets", KbAsset.id)
+    _reset_autoincrement(db, "kb_sessions", KbSession.id)
+    _reset_autoincrement(db, "kb_session_turns", KbSessionTurn.id)
 
 
 def _reset_autoincrement(db: Session, table: str, column) -> None:
@@ -195,10 +223,14 @@ def _insert_replace(db: Session, payload: dict[str, Any]) -> dict[str, int]:
     _reset_autoincrement(db, "resume_docs", ResumeDoc.id)
     _reset_autoincrement(db, "resume_interviews", ResumeInterview.id)
     _reset_autoincrement(db, "resume_interview_messages", ResumeInterviewMessage.id)
-    return {"portal": len(links), "resume": len(docs), "interview": len(interviews)}
+    counts = {"portal": len(links), "resume": len(docs), "interview": len(interviews), "kb_library": 0, "kb_document": 0}
+    if payload_has_kb(payload):
+        counts.update(insert_kb_replace(db, payload))
+        _reset_kb_autoincrement(db)
+    return counts
 
 
-def _insert_merge(db: Session, payload: dict[str, Any]) -> dict[str, int]:
+def _insert_merge(db: Session, payload: dict[str, Any]) -> tuple[dict[str, int], dict[int, int]]:
     links = _as_list(payload.get("portal_links"))
     docs = _as_list(payload.get("resume_docs"))
     interviews = _as_list(payload.get("resume_interviews"))
@@ -253,16 +285,58 @@ def _insert_merge(db: Session, payload: dict[str, Any]) -> dict[str, int]:
                 created_at=_dt(item.get("created_at")),
             )
         )
-    return {"portal": len(links), "resume": len(docs), "interview": len(interviews)}
+    counts = {"portal": len(links), "resume": len(docs), "interview": len(interviews), "kb_library": 0, "kb_document": 0}
+    lib_map: dict[int, int] = {}
+    if payload_has_kb(payload):
+        kb_counts, lib_map = insert_kb_merge(db, payload)
+        counts.update(kb_counts)
+    return counts, lib_map
+
+
+def _pack_zip(db: Session) -> bytes:
+    payload = _dump(db)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("backup.json", json.dumps(payload, ensure_ascii=False, indent=2))
+        for library_id, rel in kb_file_entries(db):
+            try:
+                path = abs_path(library_id, rel)
+            except ValueError:
+                continue
+            if path.is_file():
+                zf.write(path, f"files/{library_id}/{rel}")
+    return buf.getvalue()
+
+
+def _read_zip(raw: bytes) -> tuple[dict[str, Any], dict[tuple[int, str], bytes]]:
+    blobs: dict[tuple[int, str], bytes] = {}
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        try:
+            payload = json.loads(zf.read("backup.json").decode("utf-8-sig"))
+        except Exception as exc:
+            raise ValueError("这个备份读不出来") from exc
+        for info in zf.infolist():
+            name = info.filename.replace("\\", "/")
+            if info.is_dir() or name == "backup.json" or ".." in name:
+                continue
+            if not name.startswith("files/"):
+                continue
+            rest = name[6:]
+            parts = rest.split("/", 1)
+            if len(parts) != 2 or not parts[0].isdigit() or not parts[1]:
+                continue
+            blobs[(int(parts[0]), parts[1])] = zf.read(info)
+    if not isinstance(payload, dict):
+        raise ValueError("这个备份读不出来")
+    return payload, blobs
 
 
 @router.get("/settings/export")
 def export_backup(db: Session = Depends(get_db)):
-    payload = _dump(db)
-    filename = f"bruceware-backup-{datetime.utcnow().strftime('%Y%m%d')}.json"
+    filename = f"bruceware-backup-{datetime.utcnow().strftime('%Y%m%d')}.zip"
     return Response(
-        content=json.dumps(payload, ensure_ascii=False, indent=2),
-        media_type="application/json; charset=utf-8",
+        content=_pack_zip(db),
+        media_type="application/zip",
         headers={
             "Content-Disposition": f"attachment; filename=\"{filename}\"; filename*=UTF-8''{quote(filename)}",
         },
@@ -275,25 +349,45 @@ async def import_backup(
     mode: Literal["replace", "merge"] = Form(default="replace"),
     db: Session = Depends(get_db),
 ):
-    name = (file.filename or "").strip()
-    if name.startswith("~$") or not name.lower().endswith(".json"):
-        return fail("请上传备份文件（.json）")
+    name = (file.filename or "").strip().lower()
+    if name.startswith("~$") or not (name.endswith(".json") or name.endswith(".zip")):
+        return fail("请上传备份文件（.zip 或旧的 .json）")
     raw = await file.read()
     if not raw:
         return fail("文件是空的")
-    if len(raw) > 20 * 1024 * 1024:
-        return fail("文件太大")
+    blobs: dict[tuple[int, str], bytes] = {}
     try:
-        payload = json.loads(raw.decode("utf-8-sig"))
+        if name.endswith(".zip"):
+            if len(raw) > ZIP_IMPORT_LIMIT:
+                return fail("文件太大")
+            payload, blobs = _read_zip(raw)
+        else:
+            if len(raw) > JSON_IMPORT_LIMIT:
+                return fail("文件太大")
+            payload = json.loads(raw.decode("utf-8-sig"))
     except Exception:
         return fail("这个备份读不出来")
-    if not isinstance(payload, dict) or payload.get("version") != BACKUP_VERSION:
+    if not isinstance(payload, dict):
         return fail("不是这份软件的备份文件")
     try:
-        counts = _insert_replace(db, payload) if mode == "replace" else _insert_merge(db, payload)
+        version = int(payload.get("version") or 0)
+    except (TypeError, ValueError):
+        version = 0
+    if version not in (OLD_BACKUP_VERSION, BACKUP_VERSION):
+        return fail("不是这份软件的备份文件")
+    try:
+        lib_map: dict[int, int] | None = None
+        if mode == "replace":
+            counts = _insert_replace(db, payload)
+        else:
+            counts, lib_map = _insert_merge(db, payload)
         _apply_modules(payload)
         db.commit()
     except Exception:
         db.rollback()
         return fail("导入失败，数据没有改")
+    if payload_has_kb(payload):
+        if mode == "replace":
+            wipe_kb_files()
+        restore_kb_files(blobs, None if mode == "replace" else lib_map)
     return ok({"mode": mode, **counts})

@@ -1,17 +1,19 @@
 """知识库接口：多库、文件夹、上传、预览、提问。"""
 
+import json
 from datetime import datetime
+from threading import Thread
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.ai import chat_complete, llm_public
+from app.core.ai import chat_complete, chat_complete_stream, llm_public
 from app.core.response import fail, ok
-from app.db.session import get_db
+from app.db.session import get_db, new_session
 from app.kb.extract import extract_search_text
 from app.kb.assets import (
     OCR_SKIP,
@@ -528,14 +530,17 @@ def _fill_assets(row: KbDocument, db: Session, force: bool = False) -> None:
     append_asset_alts(row, alts)
 
 
-def _learn_wikis(question: str, ranked: list, db: Session) -> str:
+def _learn_wikis(question: str, doc_ids: list[int], db: Session) -> str:
     """按这次出处更新摘要。没出处不提示；一次最多 5 份。"""
 
-    if not ranked:
+    if not doc_ids:
         return ""
-    truncated = len(ranked) > ASK_WIKI_LIMIT
+    truncated = len(doc_ids) > ASK_WIKI_LIMIT
     titles: list[str] = []
-    for row, _score in ranked[:ASK_WIKI_LIMIT]:
+    for doc_id in doc_ids[:ASK_WIKI_LIMIT]:
+        row = db.get(KbDocument, doc_id)
+        if row is None:
+            continue
         snippet = snippet_of(question, row)
         if not (snippet or "").strip():
             continue
@@ -564,7 +569,19 @@ def _learn_wikis(question: str, ranked: list, db: Session) -> str:
         titles.append(row.title or row.file_name)
     if titles:
         db.commit()
-    return learn_hint(len(ranked), titles, truncated)
+    return learn_hint(len(doc_ids), titles, truncated)
+
+
+def _learn_wikis_job(question: str, doc_ids: list[int]) -> None:
+    """后台写摘要，自己开库，不挡提问返回。"""
+
+    db = new_session()
+    try:
+        _learn_wikis(question, doc_ids, db)
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()
 
 
 def _ask_kind(raw: str | None) -> str:
@@ -673,13 +690,35 @@ def _ask_messages(question: str, prompt: str, history: list[AskTurnIn], ask_kind
     return messages
 
 
-def _finish_ask(db, library_id: int, session_id: int | None, question: str, payload: dict):
+def _save_ask(db, library_id: int, session_id: int | None, question: str, payload: dict) -> dict:
     """回答成功后写入当前会话，失败的提问不建空会话。"""
 
     session = ensure_session(db, library_id, session_id, question)
     save_turn(db, session, question, payload)
     payload["session_id"] = session.id
-    return ok(payload)
+    return payload
+
+
+def _finish_ask(db, library_id: int, session_id: int | None, question: str, payload: dict):
+    return ok(_save_ask(db, library_id, session_id, question, payload))
+
+
+def _sse(obj: dict) -> str:
+    return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
+
+
+def _fill_cited_images(citations: list, ranked_full: list, note_pics: dict, show_pics: dict, answer: str, ask_kind: str) -> None:
+    pool = []
+    for row, _score, _snip in ranked_full:
+        pool.extend(note_pics.get(row.id, []))
+        if ask_kind != "checklist":
+            pool.extend(show_pics.get(row.id, []))
+    cited = pick_assets_cited_in_answer(pool, answer)
+    by_doc: dict[int, list] = {}
+    for item in cited:
+        by_doc.setdefault(item.document_id, []).append(item)
+    for hit in citations:
+        hit["images"] = [asset_dict(item) for item in by_doc.get(hit["id"], [])]
 
 
 @router.get("/kb/libraries/{library_id}/sessions")
@@ -730,18 +769,28 @@ def delete_library_session(session_id: int, db: Session = Depends(get_db)):
     return ok(True)
 
 
-@router.post("/kb/libraries/{library_id}/ask")
-def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
-    """当前库关键词加向量检索，再按原文回答并带出处。"""
+def _client_stopped(request: Request) -> bool:
+    """浏览器已经点了终止，这次回答不要再写入对话。"""
+
+    try:
+        import anyio
+
+        return bool(anyio.from_thread.run(request.is_disconnected))
+    except Exception:
+        return False
+
+
+def _prepare_ask(library_id: int, body: AskIn, db):
+    """先检索、拼提示。early 有值就不用喊模型。"""
 
     lib = _get_library(db, library_id)
     if lib is None:
-        return fail("这个库不存在", 404)
+        return None, fail("这个库不存在", 404)
     if body.only_folder and body.folder_id is not None and not _folder_in_library(db, library_id, body.folder_id):
-        return fail("文件夹不在这个库里")
+        return None, fail("文件夹不在这个库里")
     question = body.question.strip()
     if not question:
-        return fail("请先写问题")
+        return None, fail("请先写问题")
     history = _ask_history(body.history)
     search_q = _search_question(question, history)
     policy = parse_policy(lib)
@@ -775,7 +824,7 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
                 "id": row.id,
                 "title": row.title or row.file_name,
                 "score": round(score, 3),
-                "images": [asset_dict(item) for item in shown],
+                "images": [],
             }
         )
         block = f"【资料{index}】{row.title or row.file_name}\n{snippet or snippet_of(search_q, row)}"
@@ -805,14 +854,10 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
         "ask_kind": ask_kind,
     }
     if not ranked:
-        return _finish_ask(db, library_id, body.session_id, question, empty)
+        return {"early": empty, "question": question}, None
     if not llm_public().get("has_key"):
-        return _finish_ask(
-            db,
-            library_id,
-            body.session_id,
-            question,
-            {
+        return {
+            "early": {
                 "answer": "还没配 AI。先列出可能相关的资料，配好 Key 后再问可以写成回答。",
                 "citations": citations,
                 "used_llm": False,
@@ -821,7 +866,8 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
                 "used_vector": used_vector,
                 "ask_kind": ask_kind,
             },
-        )
+            "question": question,
+        }, None
     if ask_kind == "checklist":
         prompt = _checklist_style() + "\n\n" + "\n\n".join(blocks)
     else:
@@ -830,39 +876,112 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
             + "回答末尾用「依据：资料1、资料2」标出来源。\n\n"
             + "\n\n".join(blocks)
         )
+    return {
+        "early": None,
+        "question": question,
+        "messages": _ask_messages(question, prompt, history, ask_kind),
+        "citations": citations,
+        "ranked": ranked,
+        "ranked_full": ranked_full,
+        "note_pics": note_pics,
+        "show_pics": show_pics,
+        "mode": mode,
+        "ask_kind": ask_kind,
+        "used_vector": used_vector,
+        "should_learn": ask_kind == "answer" and policy["wiki_enabled"] and policy["wiki_learn"] and bool(citations),
+    }, None
+
+
+def _finalize_llm_ask(prep: dict, answer: str) -> dict:
+    citations = prep["citations"]
+    _fill_cited_images(citations, prep["ranked_full"], prep["note_pics"], prep["show_pics"], answer, prep["ask_kind"])
+    hint = ""
+    if prep["should_learn"]:
+        hint = "摘要正在后台更新，不影响这次回答。"
+        Thread(target=_learn_wikis_job, args=(prep["question"], [row.id for row, _score in prep["ranked"]]), daemon=True).start()
+    return {
+        "answer": answer,
+        "citations": citations,
+        "used_llm": True,
+        "evidence_mode": prep["mode"],
+        "wiki_update_hint": hint,
+        "used_vector": prep["used_vector"],
+        "ask_kind": prep["ask_kind"],
+    }
+
+
+def _stream_ask(prep: dict, library_id: int, session_id: int | None, request: Request, db):
+    """检索完以后一边出字一边推给页面。"""
+
+    if prep.get("early") is not None:
+        if _client_stopped(request):
+            return
+        payload = _save_ask(db, library_id, session_id, prep["question"], prep["early"])
+        yield _sse({"type": "done", "result": payload})
+        return
+    yield _sse(
+        {
+            "type": "start",
+            "citations": [{"id": hit["id"], "title": hit["title"], "score": hit["score"], "images": []} for hit in prep["citations"]],
+            "used_vector": prep["used_vector"],
+            "ask_kind": prep["ask_kind"],
+            "evidence_mode": prep["mode"],
+        }
+    )
+    parts: list[str] = []
     try:
-        answer = chat_complete(_ask_messages(question, prompt, history, ask_kind), timeout=ASK_ANSWER_TIMEOUT)
+        for piece in chat_complete_stream(prep["messages"], timeout=ASK_ANSWER_TIMEOUT):
+            if _client_stopped(request):
+                return
+            parts.append(piece)
+            yield _sse({"type": "delta", "text": piece})
+    except ValueError as exc:
+        yield _sse({"type": "error", "message": str(exc)})
+        return
+    if _client_stopped(request):
+        return
+    answer = "".join(parts).strip()
+    if not answer:
+        try:
+            answer = chat_complete(prep["messages"], timeout=ASK_ANSWER_TIMEOUT)
+        except ValueError as exc:
+            yield _sse({"type": "error", "message": str(exc)})
+            return
+        if _client_stopped(request):
+            return
+        yield _sse({"type": "delta", "text": answer})
+    payload = _save_ask(db, library_id, session_id, prep["question"], _finalize_llm_ask(prep, answer))
+    yield _sse({"type": "done", "result": payload})
+
+
+@router.post("/kb/libraries/{library_id}/ask")
+def ask_library(
+    library_id: int,
+    body: AskIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    stream: bool = Query(default=False),
+):
+    """当前库关键词加向量检索，再按原文回答并带出处。"""
+
+    prep, err = _prepare_ask(library_id, body, db)
+    if err is not None:
+        return err
+    if stream:
+        return StreamingResponse(
+            _stream_ask(prep, library_id, body.session_id, request, db),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+    if prep.get("early") is not None:
+        return _finish_ask(db, library_id, body.session_id, prep["question"], prep["early"])
+    try:
+        answer = chat_complete(prep["messages"], timeout=ASK_ANSWER_TIMEOUT)
     except ValueError as exc:
         return fail(str(exc))
-    hint = ""
-    if ask_kind == "answer" and policy["wiki_enabled"] and policy["wiki_learn"] and citations:
-        hint = _learn_wikis(question, ranked, db)
-    pool = []
-    for row, _score, _snip in ranked_full:
-        pool.extend(note_pics.get(row.id, []))
-        if ask_kind != "checklist":
-            pool.extend(show_pics.get(row.id, []))
-    cited = pick_assets_cited_in_answer(pool, answer)
-    by_doc: dict[int, list] = {}
-    for item in cited:
-        by_doc.setdefault(item.document_id, []).append(item)
-    for hit in citations:
-        hit["images"] = [asset_dict(item) for item in by_doc.get(hit["id"], [])]
-    return _finish_ask(
-        db,
-        library_id,
-        body.session_id,
-        question,
-        {
-            "answer": answer,
-            "citations": citations,
-            "used_llm": True,
-            "evidence_mode": mode,
-            "wiki_update_hint": hint,
-            "used_vector": used_vector,
-            "ask_kind": ask_kind,
-        },
-    )
+    if _client_stopped(request):
+        return fail("已停止")
+    return _finish_ask(db, library_id, body.session_id, prep["question"], _finalize_llm_ask(prep, answer))
 
 
 @router.get("/kb/documents/{doc_id}")

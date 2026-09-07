@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 
 import {
-  askKbLibrary,
+  askKbLibraryStream,
   createKbFolder,
   createKbLibrary,
   deleteKbDocument,
@@ -62,6 +62,7 @@ const ASK_TURN_LIMIT = 6;
 type AskTurn = {
   question: string;
   result: KbAskResult;
+  streaming?: boolean;
 };
 
 /** 这次回答带上的相关图，用来直接画在回答里。 */
@@ -102,13 +103,14 @@ function AskTurnView({
         </p>
       )}
       <KbAnswerContent
-        text={turn.result.answer}
+        text={turn.result.answer || (turn.streaming ? "在找资料…" : "")}
         onOpenAsset={(assetId) => {
           const hit = turn.result.citations.find((item) => (item.images || []).some((img) => img.id === assetId));
           if (hit) onOpenCitation(hit.id);
         }}
       />
-      {images.length ? (
+      {turn.streaming ? <span className="mt-1 inline-block animate-pulse text-[var(--muted)]">▍</span> : null}
+      {!turn.streaming && images.length ? (
         <div className="mt-3">
           {turn.result.ask_kind === "checklist" ? (
             <p className="mb-1 text-[12px] text-[var(--muted)]">清单里写到的图（点开看资料）</p>
@@ -137,7 +139,7 @@ function AskTurnView({
           </div>
         </div>
       ) : null}
-      {turn.result.citations.length ? (
+      {!turn.streaming && turn.result.citations.length ? (
         <div className="mt-3">
           <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[var(--muted)]">
             <span>出处</span>
@@ -154,8 +156,8 @@ function AskTurnView({
           </p>
         </div>
       ) : null}
-      {turn.result.used_vector ? <p className="mt-2 text-[12px] text-[var(--muted)]">本次还用了向量检索，换说法也能对上。</p> : null}
-      {turn.result.wiki_update_hint ? <p className="mt-2 text-[12px] text-[var(--muted)]">{turn.result.wiki_update_hint}</p> : null}
+      {!turn.streaming && turn.result.used_vector ? <p className="mt-2 text-[12px] text-[var(--muted)]">本次还用了向量检索，换说法也能对上。</p> : null}
+      {!turn.streaming && turn.result.wiki_update_hint ? <p className="mt-2 text-[12px] text-[var(--muted)]">{turn.result.wiki_update_hint}</p> : null}
     </div>
   );
 }
@@ -182,6 +184,9 @@ export function KbPage() {
   const location = useLocation();
   const uploadRef = useRef<HTMLInputElement>(null);
   const askBottomRef = useRef<HTMLDivElement>(null);
+  const askAbortRef = useRef<AbortController | null>(null);
+  const askTokenRef = useRef(0);
+  const lastAskTextRef = useRef("");
   const visionStopRef = useRef(false);
   const visionBusyRef = useRef(false);
   const visionDocRef = useRef<number | null>(null);
@@ -369,35 +374,129 @@ export function KbPage() {
     askBottomRef.current?.scrollIntoView({ block: "end" });
   }, [askTurns, asking]);
 
+  function isAskAborted(err: unknown) {
+    return err instanceof DOMException
+      ? err.name === "AbortError"
+      : err instanceof Error && (err.name === "AbortError" || /aborted|abort/i.test(err.message));
+  }
+
+  function stopAsk() {
+    askTokenRef.current += 1;
+    askAbortRef.current?.abort();
+    askAbortRef.current = null;
+    setAsking(false);
+    setAskTurns((prev) => prev.filter((item) => !item.streaming));
+  }
+
+  function onStopAsk() {
+    const text = lastAskTextRef.current;
+    stopAsk();
+    setError("");
+    setHint("已停止提问");
+    setQuestion((current) => (current.trim() ? current : text));
+  }
+
   function onAsk() {
     if (libraryId == null || asking) return;
     const text = question.trim();
     if (!text) return;
+    lastAskTextRef.current = text;
     const history = askTurns.slice(-(ASK_TURN_LIMIT - 1)).map((turn) => ({
       question: turn.question,
       answer: turn.result.answer,
     }));
+    const ctrl = new AbortController();
+    const token = askTokenRef.current + 1;
+    askTokenRef.current = token;
+    askAbortRef.current = ctrl;
     setAsking(true);
     setError("");
     setHint("");
     setQuestion("");
-    askKbLibrary(libraryId, text, folderId, onlyFolder, askMode, history, sessionId, askKind)
+    setAskTurns((prev) => [
+      ...prev,
+      {
+        question: text,
+        streaming: true,
+        result: { answer: "", citations: [], used_llm: true, ask_kind: askKind },
+      },
+    ]);
+    askKbLibraryStream(
+      libraryId,
+      text,
+      folderId,
+      onlyFolder,
+      askMode,
+      history,
+      sessionId,
+      askKind,
+      (event) => {
+        if (askTokenRef.current !== token) return;
+        setAskTurns((prev) => {
+          const next = [...prev];
+          const last = next[next.length - 1];
+          if (!last?.streaming || last.question !== text) return prev;
+          if (event.type === "start") {
+            next[next.length - 1] = {
+              ...last,
+              result: {
+                ...last.result,
+                citations: event.citations,
+                used_vector: event.used_vector,
+                ask_kind: event.ask_kind || last.result.ask_kind,
+                evidence_mode: event.evidence_mode,
+              },
+            };
+            return next;
+          }
+          next[next.length - 1] = {
+            ...last,
+            result: { ...last.result, answer: last.result.answer + event.text },
+          };
+          return next;
+        });
+      },
+      ctrl.signal,
+    )
       .then(async (data) => {
+        if (askTokenRef.current !== token || ctrl.signal.aborted) return;
         if (data.session_id) setSessionId(data.session_id);
-        setAskTurns((prev) => [...prev, { question: text, result: data }]);
+        setAskTurns((prev) => {
+          const next = [...prev];
+          const last = next[next.length - 1];
+          if (last?.question === text) {
+            next[next.length - 1] = { question: text, result: data };
+            return next;
+          }
+          return [...prev, { question: text, result: data }];
+        });
         if (libraryId != null) {
           const listed = await fetchKbSessions(libraryId);
+          if (askTokenRef.current !== token) return;
           setSessions(listed.items);
         }
         if (data.wiki_update_hint && preview) {
           applyDoc(await fetchKbDocument(preview.id));
         }
       })
-      .catch((err: Error) => setError(err.message))
-      .finally(() => setAsking(false));
+      .catch((err: Error) => {
+        if (askTokenRef.current !== token) return;
+        setAskTurns((prev) => prev.filter((item) => !item.streaming));
+        if (isAskAborted(err) || ctrl.signal.aborted) {
+          setQuestion((current) => (current.trim() ? current : text));
+          setHint("已停止提问");
+          return;
+        }
+        setError(err.message);
+      })
+      .finally(() => {
+        if (askAbortRef.current === ctrl) askAbortRef.current = null;
+        if (askTokenRef.current === token) setAsking(false);
+      });
   }
 
   function onNewAsk() {
+    stopAsk();
     setSessionId(null);
     setAskTurns([]);
     setQuestion("");
@@ -406,6 +505,7 @@ export function KbPage() {
   }
 
   function onOpenSession(id: number) {
+    stopAsk();
     setError("");
     fetchKbSession(id)
       .then((data) => {
@@ -428,6 +528,7 @@ export function KbPage() {
   }
 
   function onPickLibrary(id: number) {
+    stopAsk();
     setLibraryId(id);
     setFolderId(null);
     setPreview(null);
@@ -617,7 +718,7 @@ export function KbPage() {
           <aside className="flex min-h-0 flex-col border-b border-[var(--line)] md:border-b-0 md:border-r">
             <div className="flex items-center justify-between gap-2 border-b border-[var(--line)] px-3 py-2">
               <span className="text-[12px] text-[var(--muted)]">对话</span>
-              <button type="button" className={btnClass} disabled={asking} onClick={onNewAsk}>
+              <button type="button" className={btnClass} onClick={onNewAsk}>
                 新对话
               </button>
             </div>
@@ -663,7 +764,6 @@ export function KbPage() {
                 {askTurns.map((turn, index) => (
                   <AskTurnView key={`${index}-${turn.question}`} turn={turn} onOpenCitation={onOpenCitation} />
                 ))}
-                {asking ? <p className="text-[var(--muted)]">在找…</p> : null}
                 <div ref={askBottomRef} />
               </div>
             ) : (
@@ -737,10 +837,16 @@ export function KbPage() {
                 <option value="strict">严格出处</option>
                 <option value="loose">宽松概述</option>
               </select>
-              <button type="button" className={btnClass} disabled={asking || !question.trim()} onClick={onAsk}>
-                {asking ? "在找…" : "提问"}
-              </button>
-              <button type="button" className={btnClass} disabled={asking} onClick={onNewAsk}>
+              {asking ? (
+                <button type="button" className={btnClass} onClick={onStopAsk}>
+                  终止
+                </button>
+              ) : (
+                <button type="button" className={btnClass} disabled={!question.trim()} onClick={onAsk}>
+                  提问
+                </button>
+              )}
+              <button type="button" className={btnClass} onClick={onNewAsk}>
                 新对话
               </button>
             </div>

@@ -21,6 +21,8 @@ export default defineConfig({
       "/api": {
         target: "http://127.0.0.1:8000",
         changeOrigin: true,
+        timeout: 180000,
+        proxyTimeout: 180000,
       },
       "/health": {
         target: "http://127.0.0.1:8000",

@@ -159,13 +159,19 @@ def get_engine() -> Engine:
     return _Db.engine
 
 
-def get_db() -> Generator[Session, None, None]:
-    """提供一次数据库会话。"""
+def new_session() -> Session:
+    """自己开关的会话，给后台任务用。"""
 
     if _Db.SessionLocal is None:
         init_database()
     assert _Db.SessionLocal is not None
-    db = _Db.SessionLocal()
+    return _Db.SessionLocal()
+
+
+def get_db() -> Generator[Session, None, None]:
+    """提供一次数据库会话。"""
+
+    db = new_session()
     try:
         yield db
     finally:

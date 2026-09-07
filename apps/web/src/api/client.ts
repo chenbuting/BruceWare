@@ -331,7 +331,7 @@ export async function downloadBackup() {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = filenameFrom(res, "bruceware-backup.json");
+  link.download = filenameFrom(res, "bruceware-backup.zip");
   document.body.appendChild(link);
   link.click();
   link.remove();
@@ -342,10 +342,13 @@ export function importBackup(file: File, mode: "replace" | "merge") {
   const body = new FormData();
   body.append("file", file);
   body.append("mode", mode);
-  return request<{ mode: string; portal: number; resume: number; interview: number }>("/api/v1/settings/import", {
-    method: "POST",
-    body,
-  });
+  return request<{ mode: string; portal: number; resume: number; interview: number; kb_library: number; kb_document: number }>(
+    "/api/v1/settings/import",
+    {
+      method: "POST",
+      body,
+    },
+  );
 }
 
 export async function downloadResumeDoc(id: number, filename: string) {
@@ -658,6 +661,26 @@ export function saveKbChunk(id: number, text: string) {
   });
 }
 
+function askKbBody(
+  question: string,
+  folderId: number | null,
+  onlyFolder: boolean,
+  evidenceMode: KbEvidenceMode | "",
+  history: KbAskHistoryItem[],
+  sessionId: number | null,
+  askKind: "answer" | "checklist",
+) {
+  return JSON.stringify({
+    question,
+    folder_id: onlyFolder ? folderId : null,
+    only_folder: onlyFolder && folderId != null,
+    evidence_mode: evidenceMode || null,
+    ask_kind: askKind,
+    history,
+    session_id: sessionId,
+  });
+}
+
 export function askKbLibrary(
   libraryId: number,
   question: string,
@@ -667,19 +690,93 @@ export function askKbLibrary(
   history: KbAskHistoryItem[] = [],
   sessionId: number | null = null,
   askKind: "answer" | "checklist" = "answer",
+  signal?: AbortSignal,
 ) {
   return request<KbAskResult>(`/api/v1/kb/libraries/${libraryId}/ask`, {
     method: "POST",
-    body: JSON.stringify({
-      question,
-      folder_id: onlyFolder ? folderId : null,
-      only_folder: onlyFolder && folderId != null,
-      evidence_mode: evidenceMode || null,
-      ask_kind: askKind,
-      history,
-      session_id: sessionId,
-    }),
+    signal,
+    body: askKbBody(question, folderId, onlyFolder, evidenceMode, history, sessionId, askKind),
   });
+}
+
+export type KbAskStreamEvent =
+  | { type: "start"; citations: KbAskResult["citations"]; used_vector?: boolean; ask_kind?: KbAskResult["ask_kind"]; evidence_mode?: KbAskResult["evidence_mode"] }
+  | { type: "delta"; text: string };
+
+export async function askKbLibraryStream(
+  libraryId: number,
+  question: string,
+  folderId: number | null,
+  onlyFolder: boolean,
+  evidenceMode: KbEvidenceMode | "",
+  history: KbAskHistoryItem[] = [],
+  sessionId: number | null = null,
+  askKind: "answer" | "checklist" = "answer",
+  onEvent?: (event: KbAskStreamEvent) => void,
+  signal?: AbortSignal,
+) {
+  const res = await fetch(`/api/v1/kb/libraries/${libraryId}/ask?stream=1`, {
+    method: "POST",
+    signal,
+    headers: { "Content-Type": "application/json" },
+    body: askKbBody(question, folderId, onlyFolder, evidenceMode, history, sessionId, askKind),
+  });
+  if (!res.ok) {
+    let message = "请求失败";
+    try {
+      const body = (await res.json()) as ApiResult<null>;
+      message = body.message || message;
+    } catch {
+      /* 不是 JSON */
+    }
+    throw new Error(message);
+  }
+  if (!res.body) {
+    throw new Error("回答中断了");
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result: KbAskResult | null = null;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const chunks = buffer.split("\n\n");
+    buffer = chunks.pop() || "";
+    for (const chunk of chunks) {
+      const line = chunk.split("\n").find((item) => item.startsWith("data:"));
+      if (!line) continue;
+      let obj: { type?: string; text?: string; message?: string; result?: KbAskResult } & Partial<KbAskStreamEvent>;
+      try {
+        obj = JSON.parse(line.slice(5).trim());
+      } catch {
+        continue;
+      }
+      if (obj.type === "error") {
+        throw new Error(obj.message || "回答失败");
+      }
+      if (obj.type === "start") {
+        onEvent?.({
+          type: "start",
+          citations: (obj as { citations?: KbAskResult["citations"] }).citations || [],
+          used_vector: (obj as { used_vector?: boolean }).used_vector,
+          ask_kind: (obj as { ask_kind?: KbAskResult["ask_kind"] }).ask_kind,
+          evidence_mode: (obj as { evidence_mode?: KbAskResult["evidence_mode"] }).evidence_mode,
+        });
+      }
+      if (obj.type === "delta" && obj.text) {
+        onEvent?.({ type: "delta", text: obj.text });
+      }
+      if (obj.type === "done" && obj.result) {
+        result = obj.result;
+      }
+    }
+  }
+  if (!result) {
+    throw new Error("回答中断了");
+  }
+  return result;
 }
 
 export function fetchKbSessions(libraryId: number) {
