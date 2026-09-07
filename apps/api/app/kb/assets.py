@@ -441,6 +441,37 @@ def assets_for_ask(db: Session, doc_ids: list[int], question: str = "") -> tuple
     return notes, shown
 
 
+_FIG_NO = re.compile(r"图\s*(\d+)")
+
+
+def _figure_nos(text: str) -> set[str]:
+    """抽出完整图号，避免「图1」误配进「图10」。"""
+
+    return set(_FIG_NO.findall(text or ""))
+
+
+def pick_assets_cited_in_answer(items: list[KbAsset], answer: str, limit: int = 8) -> list[KbAsset]:
+    """只留清单出处里写到的图号。"""
+
+    cited = _figure_nos(answer)
+    if not cited or not items:
+        return []
+    order = {num: index for index, num in enumerate(_FIG_NO.findall(answer))}
+    picked: list[KbAsset] = []
+    seen: set[int] = set()
+    ranked = sorted(items, key=lambda item: min((order.get(num, 99) for num in _figure_nos(item.alt_text or "")), default=99))
+    for item in ranked:
+        if item.id in seen:
+            continue
+        if not (_figure_nos(item.alt_text or "") & cited):
+            continue
+        seen.add(item.id)
+        picked.append(item)
+        if len(picked) >= limit:
+            break
+    return picked
+
+
 def assets_for_docs(db: Session, doc_ids: list[int], question: str = "") -> dict[int, list[KbAsset]]:
     """只要展示用的图。"""
 

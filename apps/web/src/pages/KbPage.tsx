@@ -96,23 +96,32 @@ function AskTurnView({
         }}
       />
       {images.length ? (
-        <div className="mt-3 flex flex-wrap gap-2">
-          {images.map((img) => (
-            <button
-              key={img.id}
-              type="button"
-              className="max-w-[12rem] text-left text-[12px] text-[var(--muted)]"
-              title={img.alt}
-              onClick={() => onOpenCitation(img.docId)}
-            >
-              <img
-                src={img.url || kbAssetFileUrl(img.id)}
-                alt={img.alt}
-                className="max-h-40 w-auto rounded border border-[var(--line)] object-contain"
-              />
-              {img.alt ? <span className="mt-1 block">{img.alt}</span> : null}
-            </button>
-          ))}
+        <div className="mt-3">
+          {turn.result.ask_kind === "checklist" ? (
+            <p className="mb-1 text-[12px] text-[var(--muted)]">清单里写到的图（点开看资料）</p>
+          ) : null}
+          <div className="flex flex-wrap gap-2">
+            {images.map((img) => (
+              <button
+                key={img.id}
+                type="button"
+                className={`${turn.result.ask_kind === "checklist" ? "w-24" : "max-w-[12rem]"} text-left text-[12px] text-[var(--muted)]`}
+                title={img.alt}
+                onClick={() => onOpenCitation(img.docId)}
+              >
+                <img
+                  src={img.url || kbAssetFileUrl(img.id)}
+                  alt={img.alt}
+                  className={
+                    turn.result.ask_kind === "checklist"
+                      ? "h-24 w-24 rounded border border-[var(--line)] object-cover"
+                      : "max-h-40 w-auto rounded border border-[var(--line)] object-contain"
+                  }
+                />
+                {img.alt ? <span className={`mt-1 block ${turn.result.ask_kind === "checklist" ? "truncate" : ""}`}>{img.alt}</span> : null}
+              </button>
+            ))}
+          </div>
         </div>
       ) : null}
       {turn.result.citations.length ? (

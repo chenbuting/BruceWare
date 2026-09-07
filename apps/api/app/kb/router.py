@@ -21,6 +21,7 @@ from app.kb.assets import (
     asset_edit_dict,
     asset_notes_for_ask,
     assets_for_ask,
+    pick_assets_cited_in_answer,
     clear_assets,
     list_doc_assets,
     pack_asset_note,
@@ -578,11 +579,11 @@ def _checklist_style() -> str:
     return (
         "你在做核对清单，不是回答是否合规、能不能过。"
         "先按问句拆出要核对的要素，大约 3 到 8 项。"
-        "对每一项只根据本轮资料写：要素、命中或未命中、出处（资料序号和文件名）。"
+        "对每一项只根据本轮资料写：要素、命中或未命中、出处（资料序号、文件名；用到图上的字就写图号，如图56）。"
         "本轮没见到就写未命中，不要说整个库都没有，不要编第几章、第几页。"
         "不要写可以通过、存在风险、建议批准这类结论。"
         "用 Markdown 表格，表头为：要素 | 状态 | 出处 | 本轮见到的原文摘要。"
-        "摘要没有就写—。"
+        "摘要没有就写—。不要插入图片。"
     )
 
 
@@ -757,20 +758,20 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
     use_notes = policy["wiki_enabled"] and mode == "loose"
     note_pics, show_pics = assets_for_ask(db, [row.id for row, _score, _snip in ranked_full], search_q)
     for index, (row, score, snippet) in enumerate(ranked_full, start=1):
+        shown = [] if ask_kind == "checklist" else show_pics.get(row.id, [])
         citations.append(
             {
                 "id": row.id,
                 "title": row.title or row.file_name,
                 "score": round(score, 3),
-                "images": [asset_dict(item) for item in show_pics.get(row.id, [])],
+                "images": [asset_dict(item) for item in shown],
             }
         )
         block = f"【资料{index}】{row.title or row.file_name}\n{snippet or snippet_of(search_q, row)}"
         notes = asset_notes_for_ask(note_pics.get(row.id, []))
         if notes:
             block += f"\n【图上的说明】\n{notes}"
-        shown = show_pics.get(row.id, [])
-        if shown:
+        if ask_kind != "checklist" and shown:
             lines = []
             for item in shown:
                 data = asset_dict(item)
@@ -825,6 +826,16 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
     hint = ""
     if ask_kind == "answer" and policy["wiki_enabled"] and policy["wiki_learn"] and citations:
         hint = _learn_wikis(question, ranked, db)
+    if ask_kind == "checklist":
+        pool = []
+        for row, _score, _snip in ranked_full:
+            pool.extend(note_pics.get(row.id, []))
+        cited = pick_assets_cited_in_answer(pool, answer)
+        by_doc: dict[int, list] = {}
+        for item in cited:
+            by_doc.setdefault(item.document_id, []).append(item)
+        for hit in citations:
+            hit["images"] = [asset_dict(item) for item in by_doc.get(hit["id"], [])]
     return _finish_ask(
         db,
         library_id,
