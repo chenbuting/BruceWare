@@ -147,7 +147,7 @@ function askKindHint(kind: KbAskKind) {
   if (kind === "checklist") {
     return "当前是核对清单：按问句拆成几项对照，只出表，不说合不合格。「命中」=这轮资料里见到了这项。有没有、是多少请改用「回答」。";
   }
-  return "当前是回答：给结论和出处，只根据这轮找到的资料。要对好几项、做对照，请改用「核对清单」。";
+  return "当前是回答：正常对话，格式跟着你的问法走。要表就出表，要一句就说一句。固定的命中表请用「核对清单」。";
 }
 
 function evidenceHint(mode: "" | KbEvidenceMode, libraryMode: KbEvidenceMode = "strict") {
@@ -658,7 +658,7 @@ export function KbPage() {
                     <p className="text-center">先选下面的提问方式，再提问。对话会留下来，点出处回到资料预览。</p>
                     <p className="mt-3">
                       <span className="text-[var(--text)]">回答</span>
-                      ：问「有没有」「是多少」，给一句结论和出处。没见到会承认，不编第几章。
+                      ：正常对话，问什么答什么。要表就出表，不要成固定清单。没见到会承认。
                     </p>
                     <p className="mt-2">
                       <span className="text-[var(--text)]">核对清单</span>
