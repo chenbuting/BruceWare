@@ -1039,7 +1039,7 @@ export function KbPage() {
 
       {pageTab === "files" ? (
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <div className="grid min-h-[20rem] min-w-0 flex-1 grid-cols-1 overflow-hidden rounded-lg border border-[var(--line)] bg-[var(--paper)] md:grid-cols-[200px_minmax(0,1fr)] xl:grid-cols-[200px_minmax(240px,1fr)_minmax(320px,1fr)]">
+      <div className="grid min-h-[20rem] min-w-0 flex-1 grid-cols-1 overflow-hidden rounded-lg border border-[var(--line)] bg-[var(--paper)] md:grid-cols-[200px_minmax(0,1fr)]">
         <aside className="flex min-h-0 flex-col border-b border-[var(--line)] md:border-b-0 md:border-r">
           <div className="border-b border-[var(--line)] px-3 py-2 text-[12px] text-[var(--muted)]">文件夹</div>
           <div className="min-h-0 flex-1 overflow-auto p-2">
@@ -1060,7 +1060,7 @@ export function KbPage() {
           </div>
         </aside>
 
-        <section className="flex min-h-0 min-w-0 flex-col xl:border-r">
+        <section className="flex min-h-0 min-w-0 flex-col">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] px-3 py-2">
             <div className="flex min-w-0 flex-wrap items-center gap-1 text-[13px]">
               <button type="button" className="text-[var(--muted)] hover:text-[var(--text)]" onClick={() => onOpenFolder(null)}>
@@ -1076,6 +1076,7 @@ export function KbPage() {
               ))}
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[12px] text-[var(--muted)]">点资料名预览</span>
               <input className={`${inputClass} w-28`} placeholder="上传标签" value={uploadTags} onChange={(e) => setUploadTags(e.target.value)} />
               <button type="button" className={btnClass} disabled={busy || !library} onClick={() => uploadRef.current?.click()}>
                 上传
@@ -1167,50 +1168,25 @@ export function KbPage() {
             ) : null}
           </div>
         </section>
-
-        <aside className="hidden min-h-0 flex-col xl:flex">
-          <div className="border-b border-[var(--line)] px-3 py-2 text-[12px] text-[var(--muted)]">预览</div>
-          <div className="min-h-0 flex-1 overflow-auto p-3">
-            {preview ? (
-              <PreviewPane
-                item={preview}
-                text={previewText}
-                wikiEnabled={!!library?.wiki_enabled}
-                visionEnabled={!!library?.vision_enabled}
-                busy={busy}
-                assetTick={assetTick}
-                visionLocked={visionDocId != null}
-                recognizing={visionDocId === preview.id}
-                onRecognizeAll={() => void recognizeAll(preview)}
-                onSaved={applyDoc}
-                onError={setError}
-              />
-            ) : (
-              <p className="pt-8 text-center text-[13px] leading-6 text-[var(--muted)]">点一份资料，这里预览。</p>
-            )}
-          </div>
-        </aside>
       </div>
 
-      {preview && (
-        <div className="xl:hidden">
-          <Modal title={preview.title} wide onClose={() => setPreview(null)}>
-            <PreviewPane
-              item={preview}
-              text={previewText}
-              wikiEnabled={!!library?.wiki_enabled}
-              visionEnabled={!!library?.vision_enabled}
-              busy={busy}
-              assetTick={assetTick}
-              visionLocked={visionDocId != null}
-              recognizing={visionDocId === preview.id}
-              onRecognizeAll={() => void recognizeAll(preview)}
-              onSaved={applyDoc}
-              onError={setError}
-            />
-          </Modal>
-        </div>
-      )}
+      {preview ? (
+        <Modal title={preview.title} xlarge onClose={() => setPreview(null)}>
+          <PreviewPane
+            item={preview}
+            text={previewText}
+            wikiEnabled={!!library?.wiki_enabled}
+            visionEnabled={!!library?.vision_enabled}
+            busy={busy}
+            assetTick={assetTick}
+            visionLocked={visionDocId != null}
+            recognizing={visionDocId === preview.id}
+            onRecognizeAll={() => void recognizeAll(preview)}
+            onSaved={applyDoc}
+            onError={setError}
+          />
+        </Modal>
+      ) : null}
       </div>
       ) : null}
 
@@ -1279,7 +1255,7 @@ export function KbPage() {
             <p className="mb-3 text-[12px] leading-5 text-[var(--muted)]">
               Wiki 只是开关，打开后才允许写摘要，不会自动给全库写。
               <br />
-              要手写：关掉本框 → 点一份资料 → 右边预览滚到最下面 → 点「写摘要」或自己填。
+              要手写：关掉本框 → 点一份资料打开预览 → 滚到最下面 → 点「写摘要」或自己填。
               <br />
               「跟着提问更新」开着：问完后只改这次出处里最相关的最多 5 份摘要。没出处就不改、也不提示。
               <br />
@@ -1422,7 +1398,7 @@ export function KbPage() {
               ))}
               {!wikiList?.items.length ? (
                 <p className="px-2 py-6 text-center text-[13px] leading-5 text-[var(--muted)]">
-                  还没有摘要。请先保存规则并开启 Wiki，然后关掉本框，点一份资料，在预览最下面写。
+                  还没有摘要。请先保存规则并开启 Wiki，然后关掉本框，点一份资料，在预览弹框最下面写。
                 </p>
               ) : null}
             </div>
@@ -1678,6 +1654,8 @@ function AssetWords({
   const [savingId, setSavingId] = useState<number | null>(null);
   const [seeingId, setSeeingId] = useState<number | null>(null);
   const [openId, setOpenId] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [showAll, setShowAll] = useState(false);
 
   function noteOf(row: KbDocAsset) {
     return { caption: row.caption || "", keywords: row.keywords || "", words: row.ocr_text || "" };
@@ -1686,19 +1664,35 @@ function AssetWords({
   useEffect(() => {
     let alive = true;
     setOpenId(null);
+    setShowAll(false);
+    setLoading(true);
     fetchKbDocumentAssets(docId)
       .then((data) => {
         if (!alive) return;
         setItems(data.items);
         setDrafts(Object.fromEntries(data.items.map((item) => [item.id, noteOf(item)])));
       })
-      .catch((err: Error) => onError(err.message));
+      .catch((err: Error) => onError(err.message))
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
     return () => {
       alive = false;
     };
   }, [docId, refreshTick, onError]);
 
+  if (loading) {
+    return (
+      <div className="mt-4 border-t border-[var(--line)] pt-3">
+        <p className="font-medium">图的说明</p>
+        <p className="text-[12px] text-[var(--muted)]">正在列出…</p>
+      </div>
+    );
+  }
   if (!items.length) return null;
+
+  const limit = 8;
+  const visible = showAll ? items : items.slice(0, limit);
 
   function applyAsset(row: KbDocAsset) {
     setItems((list) => list.map((one) => (one.id === row.id ? row : one)));
@@ -1733,7 +1727,7 @@ function AssetWords({
     <div className="mt-4 border-t border-[var(--line)] pt-3">
       <p className="mb-1 font-medium">图的说明</p>
       <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">点开一张再改。图意是这张图是什么，关键词方便搜，图上的字是抄下来的。</p>
-      {items.map((item) => {
+      {visible.map((item) => {
         const draft = drafts[item.id] || noteOf(item);
         const open = openId === item.id;
         return (
@@ -1744,7 +1738,7 @@ function AssetWords({
               title={item.alt}
               onClick={() => setOpenId(open ? null : item.id)}
             >
-              <img src={item.url || kbAssetFileUrl(item.id)} alt={item.alt} className="h-12 w-12 shrink-0 rounded border border-[var(--line)] object-contain" />
+              <img src={item.url || kbAssetFileUrl(item.id)} alt={item.alt} loading="lazy" decoding="async" className="h-12 w-12 shrink-0 rounded border border-[var(--line)] object-contain" />
               <span className="min-w-0 flex-1">
                 <span className="block text-[12px] text-[var(--muted)]">{item.alt || "图"}</span>
                 <span className="block truncate">{draft.caption || "还没写图意"}</span>
@@ -1793,6 +1787,11 @@ function AssetWords({
           </div>
         );
       })}
+      {!showAll && items.length > limit ? (
+        <button type="button" className={`${btnClass} mb-2`} onClick={() => setShowAll(true)}>
+          还有 {items.length - limit} 张，展开
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -1910,9 +1909,15 @@ function PreviewPane({
   const url = kbDocumentFileUrl(item.id);
   const [draft, setDraft] = useState(item.wiki_summary || "");
   const [saving, setSaving] = useState(false);
+  const [showExtras, setShowExtras] = useState(false);
   useEffect(() => {
     setDraft(item.wiki_summary || "");
   }, [item.id, item.wiki_summary]);
+  useEffect(() => {
+    setShowExtras(false);
+    const timer = window.setTimeout(() => setShowExtras(true), 0);
+    return () => window.clearTimeout(timer);
+  }, [item.id]);
 
   function runWiki(task: () => Promise<void>) {
     setSaving(true);
@@ -1942,8 +1947,14 @@ function PreviewPane({
         打开 / 下载
       </a>
 
-      <AssetWords docId={item.id} refreshTick={assetTick} visionLocked={visionLocked} onError={onError} />
-      <ChunkWords docId={item.id} onError={onError} />
+      {showExtras ? (
+        <>
+          <AssetWords docId={item.id} refreshTick={assetTick} visionLocked={visionLocked} onError={onError} />
+          <ChunkWords docId={item.id} onError={onError} />
+        </>
+      ) : (
+        <p className="mt-4 text-[12px] text-[var(--muted)]">正在加载图和切片…</p>
+      )}
 
       <div className="mt-4 border-t border-[var(--line)] pt-3">
         <p className="mb-1 font-medium">

@@ -5,11 +5,13 @@ export function Modal({
   title,
   children,
   wide,
+  xlarge,
   onClose,
 }: {
   title: string;
   children: ReactNode;
   wide?: boolean;
+  xlarge?: boolean;
   onClose: () => void;
 }) {
   useEffect(() => {
@@ -20,9 +22,11 @@ export function Modal({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  const box = xlarge ? "max-h-[90vh] max-w-6xl" : wide ? "max-h-[90vh] max-w-3xl" : "max-w-[28rem]";
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgb(31_30_27_/_0.28)] px-4" onClick={onClose}>
-      <div className={`card w-full overflow-y-auto px-5 py-4 ${wide ? "max-h-[90vh] max-w-3xl" : "max-w-[28rem]"}`} onClick={(event) => event.stopPropagation()}>
+      <div className={`card w-full overflow-y-auto px-5 py-4 ${box}`} onClick={(event) => event.stopPropagation()}>
         <div className="mb-4 flex items-center justify-between gap-4">
           <div className="text-[13px] font-medium">{title}</div>
           <button type="button" className="text-[13px] text-[var(--muted)] hover:text-[var(--text)]" onClick={onClose}>
