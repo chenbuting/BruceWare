@@ -36,6 +36,8 @@ export function SettingsPage() {
   const [llmModel, setLlmModel] = useState("gpt-4o-mini");
   const [llmImageBase, setLlmImageBase] = useState("");
   const [llmImageModel, setLlmImageModel] = useState("gpt-image-1");
+  const [llmEmbeddingBase, setLlmEmbeddingBase] = useState("");
+  const [llmEmbeddingModel, setLlmEmbeddingModel] = useState("text-embedding-3-small");
   const [llmKey, setLlmKey] = useState("");
   const [llmImageKey, setLlmImageKey] = useState("");
   const [hasLlmKey, setHasLlmKey] = useState(false);
@@ -55,6 +57,7 @@ export function SettingsPage() {
   const [importMode, setImportMode] = useState<"replace" | "merge" | null>(null);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [askMove, setAskMove] = useState(false);
+  const [askSaveEmbed, setAskSaveEmbed] = useState(false);
   const backupRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -81,6 +84,8 @@ export function SettingsPage() {
       setLlmModel(data.llm.model || "gpt-4o-mini");
       setLlmImageBase(data.llm.image_base_url || "");
       setLlmImageModel(data.llm.image_model || "gpt-image-1");
+      setLlmEmbeddingBase(data.llm.embedding_base_url || "");
+      setLlmEmbeddingModel(data.llm.embedding_model || "text-embedding-3-small");
       setHasLlmKey(data.llm.has_key);
       setHasImageKey(data.llm.has_image_key);
       setLlmKey("");
@@ -195,6 +200,39 @@ export function SettingsPage() {
       setImportMode(null);
       if (backupRef.current) backupRef.current.value = "";
     }
+  }
+
+  function embeddingChanged() {
+    const saved = info?.llm;
+    if (!saved) return false;
+    return (
+      llmEmbeddingBase.trim() !== (saved.embedding_base_url || "").trim() ||
+      llmEmbeddingModel.trim() !== (saved.embedding_model || "text-embedding-3-small").trim()
+    );
+  }
+
+  function saveLlmNow() {
+    setBusy(true);
+    setError("");
+    setHint("");
+    setAskSaveEmbed(false);
+    saveLlm({
+      base_url: llmBase,
+      model: llmModel,
+      image_base_url: llmImageBase,
+      image_model: llmImageModel,
+      embedding_base_url: llmEmbeddingBase,
+      embedding_model: llmEmbeddingModel,
+      api_key: llmKey,
+      image_api_key: llmImageKey,
+    })
+      .then((data) => {
+        setInfo(data);
+        applyForm(data);
+        setHint("AI 已保存");
+      })
+      .catch((err: Error) => setError(err.message))
+      .finally(() => setBusy(false));
   }
 
   async function onSave() {
@@ -634,7 +672,7 @@ export function SettingsPage() {
           {!managing && visibleIds.includes("ai") ? (
             <Card title="AI" className="px-5 py-4">
               <p className="text-[13px] leading-6 text-[var(--muted)]">
-                对话和生图可以填不同地址。Key 不回显，不改请留空。生图 Key 不填就用对话的 Key。
+                对话、生图、向量可以填不同地址。Key 不回显，不改请留空。生图 Key、向量地址不填就用对话那套。
               </p>
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 <label className="sm:col-span-2">
@@ -661,6 +699,20 @@ export function SettingsPage() {
                   <span className="mb-1 block text-[var(--muted)]">生图 Key{hasImageKey ? "（已保存，不改请留空）" : ""}</span>
                   <input className={inputClass} type="password" value={llmImageKey} onChange={(e) => setLlmImageKey(e.target.value)} />
                 </label>
+                <div className="sm:col-span-2 rounded-md border-2 border-rose-600 bg-rose-50 px-3 py-3">
+                  <p className="text-[14px] font-semibold text-rose-900">改向量设置有风险</p>
+                  <p className="mt-1 text-[13px] leading-6 text-rose-900">
+                    换地址或模型后，知识库里已经算好的向量会作废。下次提问要整库重算，资料多会很慢，也更费接口。没把握不要改。Key 用对话的。
+                  </p>
+                  <label className="mt-3 block">
+                    <span className="mb-1 block text-rose-900">向量接口地址</span>
+                    <input className={inputClass} value={llmEmbeddingBase} onChange={(e) => setLlmEmbeddingBase(e.target.value)} placeholder="不填就用上面的对话地址" />
+                  </label>
+                  <label className="mt-3 block">
+                    <span className="mb-1 block text-rose-900">向量模型</span>
+                    <input className={inputClass} value={llmEmbeddingModel} onChange={(e) => setLlmEmbeddingModel(e.target.value)} />
+                  </label>
+                </div>
               </div>
               <div className="mt-5 flex gap-3">
                 <button
@@ -668,24 +720,11 @@ export function SettingsPage() {
                   className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 disabled:opacity-50"
                   disabled={busy}
                   onClick={() => {
-                    setBusy(true);
-                    setError("");
-                    setHint("");
-                    saveLlm({
-                      base_url: llmBase,
-                      model: llmModel,
-                      image_base_url: llmImageBase,
-                      image_model: llmImageModel,
-                      api_key: llmKey,
-                      image_api_key: llmImageKey,
-                    })
-                      .then((data) => {
-                        setInfo(data);
-                        applyForm(data);
-                        setHint("AI 已保存");
-                      })
-                      .catch((err: Error) => setError(err.message))
-                      .finally(() => setBusy(false));
+                    if (embeddingChanged()) {
+                      setAskSaveEmbed(true);
+                      return;
+                    }
+                    saveLlmNow();
                   }}
                 >
                   保存 AI
@@ -801,6 +840,22 @@ export function SettingsPage() {
               不搬
             </button>
             <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5" onClick={() => setAskMove(false)}>
+              取消
+            </button>
+          </div>
+        </Modal>
+      ) : null}
+
+      {askSaveEmbed ? (
+        <Modal title="确定改向量设置？" onClose={() => setAskSaveEmbed(false)}>
+          <p className="rounded-md border-2 border-rose-600 bg-rose-50 px-3 py-2 text-[13px] leading-6 text-rose-900">
+            已经算好的知识库向量会作废。下次提问要按新地址或新模型整库重算，资料多会很慢，也更费接口。没把握请取消。
+          </p>
+          <div className="mt-4 flex gap-3">
+            <button type="button" className="border border-rose-600 bg-rose-600 px-3 py-1.5 text-white disabled:opacity-50" disabled={busy} onClick={() => saveLlmNow()}>
+              仍然保存
+            </button>
+            <button type="button" className="border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5" onClick={() => setAskSaveEmbed(false)}>
               取消
             </button>
           </div>

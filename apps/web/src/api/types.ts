@@ -30,6 +30,8 @@ export type LlmInfo = {
   model: string;
   image_base_url: string;
   image_model: string;
+  embedding_base_url: string;
+  embedding_model: string;
   has_key: boolean;
   has_image_key: boolean;
 };
@@ -105,6 +107,8 @@ export type LlmWrite = {
   model: string;
   image_base_url: string;
   image_model: string;
+  embedding_base_url: string;
+  embedding_model: string;
   api_key: string;
   image_api_key: string;
 };

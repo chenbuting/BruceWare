@@ -83,6 +83,7 @@ def load_llm() -> dict[str, str]:
         "image_base_url": str(stored.get("image_base_url") or "").strip(),
         "image_api_key": str(stored.get("image_api_key") or "").strip(),
         "image_model": str(stored.get("image_model") or "gpt-image-1").strip() or "gpt-image-1",
+        "embedding_base_url": str(stored.get("embedding_base_url") or "").strip(),
         "embedding_model": str(stored.get("embedding_model") or "text-embedding-3-small").strip()
         or "text-embedding-3-small",
     }
@@ -95,6 +96,8 @@ def llm_public() -> dict[str, Any]:
         "model": cfg["model"],
         "image_base_url": cfg.get("image_base_url") or "",
         "image_model": cfg.get("image_model") or "gpt-image-1",
+        "embedding_base_url": cfg.get("embedding_base_url") or "",
+        "embedding_model": cfg.get("embedding_model") or "text-embedding-3-small",
         "has_key": bool(cfg["api_key"]),
         "has_image_key": bool(cfg.get("image_api_key")),
     }
@@ -121,9 +124,12 @@ def _embeddings_url(base_url: str) -> str:
 
 
 def embedding_profile() -> str:
-    """当前向量模型名，搬家时对得上才不用重算。"""
+    """当前向量模型；单独填了向量地址也会记上，对得上才不用重算。"""
 
-    return load_llm().get("embedding_model") or "text-embedding-3-small"
+    cfg = load_llm()
+    model = cfg.get("embedding_model") or "text-embedding-3-small"
+    extra = (cfg.get("embedding_base_url") or "").rstrip("/")
+    return f"{model}@{extra}" if extra else model
 
 
 def embed_texts(texts: list[str], timeout: float = 60) -> list[list[float]]:
@@ -135,7 +141,7 @@ def embed_texts(texts: list[str], timeout: float = 60) -> list[list[float]]:
     cfg = load_llm()
     if not cfg["api_key"]:
         raise ValueError("请先在设置里填写 AI Key")
-    url = _embeddings_url(cfg["base_url"])
+    url = _embeddings_url(cfg.get("embedding_base_url") or cfg["base_url"])
     payload = {"model": cfg.get("embedding_model") or "text-embedding-3-small", "input": cleaned}
     headers = {
         "Authorization": f"Bearer {cfg['api_key']}",

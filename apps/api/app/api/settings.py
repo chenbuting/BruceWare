@@ -137,6 +137,8 @@ class LlmForm(BaseModel):
     model: str = "gpt-4o-mini"
     image_base_url: str = ""
     image_model: str = "gpt-image-1"
+    embedding_base_url: str = ""
+    embedding_model: str = "text-embedding-3-small"
     api_key: str = Field(default="", description="留空表示不改原 Key")
     image_api_key: str = Field(default="", description="留空表示不改原生图 Key")
 
@@ -157,7 +159,8 @@ def save_llm(form: LlmForm):
         "image_model": form.image_model.strip() or "gpt-image-1",
         "api_key": key,
         "image_api_key": image_key,
-        "embedding_model": str(old.get("embedding_model") or "text-embedding-3-small"),
+        "embedding_base_url": form.embedding_base_url.strip(),
+        "embedding_model": form.embedding_model.strip() or "text-embedding-3-small",
     }
     save_local_settings(settings.repo_root, existing)
     return ok(_settings_payload())
