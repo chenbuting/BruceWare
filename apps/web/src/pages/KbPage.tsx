@@ -111,14 +111,17 @@ function AskTurnView({
         </div>
       ) : null}
       {turn.result.citations.length ? (
-        <p className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[var(--muted)]">
-          <span>出处</span>
-          {turn.result.citations.map((hit) => (
-            <button key={hit.id} type="button" className="underline hover:text-[var(--text)]" onClick={() => onOpenCitation(hit.id)}>
-              {hit.title}
-            </button>
-          ))}
-        </p>
+        <div className="mt-3">
+          <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[var(--muted)]">
+            <span>出处</span>
+            {turn.result.citations.map((hit) => (
+              <button key={hit.id} type="button" className="underline hover:text-[var(--text)]" onClick={() => onOpenCitation(hit.id)}>
+                {hit.title}
+              </button>
+            ))}
+          </p>
+          <p className="mt-1 text-[12px] leading-5 text-[var(--muted)]">本次依据以上资料，库里可能还有，没提到的不等于没有。</p>
+        </div>
       ) : null}
       {turn.result.used_vector ? <p className="mt-2 text-[12px] text-[var(--muted)]">本次还用了向量检索，换说法也能对上。</p> : null}
       {turn.result.wiki_update_hint ? <p className="mt-2 text-[12px] text-[var(--muted)]">{turn.result.wiki_update_hint}</p> : null}
