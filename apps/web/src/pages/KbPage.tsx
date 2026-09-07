@@ -1664,6 +1664,7 @@ function AssetWords({
   const [loading, setLoading] = useState(true);
   const [showAll, setShowAll] = useState(false);
   const [zoom, setZoom] = useState<number | null>(null);
+  const [editHint, setEditHint] = useState<{ text: string; ok: boolean } | null>(null);
 
   function noteOf(row: KbDocAsset) {
     return { caption: row.caption || "", keywords: row.keywords || "", words: row.ocr_text || "" };
@@ -1690,6 +1691,21 @@ function AssetWords({
     };
   }, [docId, refreshTick, onError]);
 
+  useEffect(() => {
+    setEditHint(null);
+  }, [openId]);
+
+  useEffect(() => {
+    if (openId == null || zoom != null) return;
+    function onKey(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.stopImmediatePropagation();
+      setOpenId(null);
+    }
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [openId, zoom]);
+
   if (loading) {
     return (
       <div className="mt-4 border-t border-[var(--line)] pt-3">
@@ -1714,7 +1730,9 @@ function AssetWords({
     saveKbAssetOcr(item.id, { caption: note.caption, keywords: note.keywords, ocr_text: note.words })
       .then((row) => {
         applyAsset(row);
-        onHint(row.vector_hint || (row.vector_ok ? "字已保存，向量已更新。" : "字已保存，向量没更新。"), !!row.vector_ok);
+        const text = row.vector_hint || (row.vector_ok ? "字已保存，向量已更新。" : "字已保存，向量没更新。");
+        onHint(text, !!row.vector_ok);
+        setEditHint({ text, ok: !!row.vector_ok });
       })
       .catch((err: Error) => onError(err.message))
       .finally(() => setSavingId(null));
@@ -1725,7 +1743,9 @@ function AssetWords({
     recognizeKbAsset(item.id)
       .then((row) => {
         applyAsset(row);
-        onHint(row.vector_hint || (row.vector_ok ? "已识图，向量已更新。" : "已识图，向量没更新。"), !!row.vector_ok);
+        const text = row.vector_hint || (row.vector_ok ? "已识图，向量已更新。" : "已识图，向量没更新。");
+        onHint(text, !!row.vector_ok);
+        setEditHint({ text, ok: !!row.vector_ok });
       })
       .catch((err: Error) => onError(err.message))
       .finally(() => setSeeingId(null));
@@ -1745,7 +1765,7 @@ function AssetWords({
   return (
     <div className="mt-4 border-t border-[var(--line)] pt-3">
       <p className="mb-1 font-medium">图的说明</p>
-      <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">点图放大。图意、关键词、图上的字要点「改说明」再写。</p>
+      <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">点图放大。点「改说明」会弹出框来写图意、关键词和图上的字。</p>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
         {visible.map((item) => {
           const draft = drafts[item.id] || noteOf(item);
@@ -1765,8 +1785,8 @@ function AssetWords({
               <p className="mt-1 truncate text-[12px] text-[var(--muted)]">{item.alt || "图"}</p>
               <p className="truncate">{draft.caption || "还没写图意"}</p>
               <div className="mt-1 flex flex-wrap gap-2 text-[12px]">
-                <button type="button" className="text-[var(--muted)] underline" onClick={() => setOpenId(open ? null : item.id)}>
-                  {open ? "收起" : "改说明"}
+                <button type="button" className="text-[var(--muted)] underline" onClick={() => setOpenId(item.id)}>
+                  改说明
                 </button>
                 <button type="button" className="text-[var(--muted)] underline disabled:opacity-50" disabled={visionLocked || seeingId != null} onClick={() => seeOne(item)}>
                   {seeingId === item.id ? "在认…" : "识图"}
@@ -1782,36 +1802,56 @@ function AssetWords({
         </button>
       ) : null}
       {editing && editDraft ? (
-        <div className="mt-3 rounded-md border border-[var(--line)] p-3">
-          <p className="mb-2 font-medium">{editing.alt || "图"} · 改说明</p>
-          <input
-            className={`${inputClass} mb-1 w-full`}
-            value={editDraft.caption}
-            maxLength={200}
-            onChange={(e) => patchDraft(editing.id, "caption", e.target.value)}
-            placeholder={seeingId === editing.id ? "正在认这张…" : "图意，没字的图也写是什么"}
-          />
-          <input
-            className={`${inputClass} mb-1 w-full`}
-            value={editDraft.keywords}
-            maxLength={200}
-            onChange={(e) => patchDraft(editing.id, "keywords", e.target.value)}
-            placeholder="关键词，逗号分隔"
-          />
-          <textarea
-            className={`${inputClass} min-h-[4.5rem] w-full`}
-            value={editDraft.words}
-            maxLength={1500}
-            onChange={(e) => patchDraft(editing.id, "words", e.target.value)}
-            placeholder="图上的字，没有就留空"
-          />
-          <div className="mt-2 flex flex-wrap gap-2">
-            <button type="button" className={btnClass} disabled={visionLocked || seeingId != null} onClick={() => seeOne(editing)}>
-              {seeingId === editing.id ? "在认…" : "识图"}
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-[rgb(31_30_27_/_0.4)] px-4" onClick={() => setOpenId(null)}>
+          <div className="card max-h-[90vh] w-full max-w-xl overflow-y-auto px-5 py-4" onClick={(event) => event.stopPropagation()}>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <p className="font-medium">{editing.alt || "图"} · 改说明</p>
+              <button type="button" className="text-[13px] text-[var(--muted)]" onClick={() => setOpenId(null)}>
+                关闭
+              </button>
+            </div>
+            <button
+              type="button"
+              className="mb-3 block"
+              title="点图放大"
+              onClick={() => setZoom(items.findIndex((row) => row.id === editing.id))}
+            >
+              <img
+                src={editing.url || kbAssetFileUrl(editing.id)}
+                alt={editing.alt}
+                className="max-h-40 max-w-full cursor-zoom-in object-contain"
+              />
             </button>
-            <button type="button" className={btnClass} disabled={savingId === editing.id} onClick={() => save(editing)}>
-              {savingId === editing.id ? "在存…" : "保存"}
-            </button>
+            {editHint ? <p className={`mb-2 text-[13px] ${editHint.ok ? "text-[var(--ok)]" : "text-amber-800"}`}>{editHint.text}</p> : null}
+            <input
+              className={`${inputClass} mb-1 w-full`}
+              value={editDraft.caption}
+              maxLength={200}
+              onChange={(e) => patchDraft(editing.id, "caption", e.target.value)}
+              placeholder={seeingId === editing.id ? "正在认这张…" : "图意，没字的图也写是什么"}
+            />
+            <input
+              className={`${inputClass} mb-1 w-full`}
+              value={editDraft.keywords}
+              maxLength={200}
+              onChange={(e) => patchDraft(editing.id, "keywords", e.target.value)}
+              placeholder="关键词，逗号分隔"
+            />
+            <textarea
+              className={`${inputClass} min-h-[4.5rem] w-full`}
+              value={editDraft.words}
+              maxLength={1500}
+              onChange={(e) => patchDraft(editing.id, "words", e.target.value)}
+              placeholder="图上的字，没有就留空"
+            />
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button type="button" className={btnClass} disabled={visionLocked || seeingId != null} onClick={() => seeOne(editing)}>
+                {seeingId === editing.id ? "在认…" : "识图"}
+              </button>
+              <button type="button" className={btnClass} disabled={savingId === editing.id} onClick={() => save(editing)}>
+                {savingId === editing.id ? "在存…" : "保存"}
+              </button>
+            </div>
           </div>
         </div>
       ) : null}

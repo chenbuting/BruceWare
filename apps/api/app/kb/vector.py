@@ -82,9 +82,19 @@ VECTOR_HINTS = {
 }
 
 
+def _fail_status(exc: BaseException) -> str:
+    text = str(exc).replace("\n", " ").strip()
+    return f"failed:{text[:160]}" if text else "failed"
+
+
 def vector_payload(status: str, *, chunk: bool = False) -> dict:
     """给保存接口带上向量有没有更新。"""
 
+    if status.startswith("failed:"):
+        return {
+            "vector_ok": False,
+            "vector_hint": f"字已保存，向量更新失败：{status[7:].strip()}",
+        }
     key = "updated_chunk" if status == "updated" and chunk else status
     return {
         "vector_ok": status == "updated",
@@ -144,8 +154,8 @@ def update_chunk_text(db: Session, row: KbChunk, text: str) -> tuple[KbChunk, st
         return row, "no_key"
     try:
         vectors = embed_texts([row.text])
-    except ValueError:
-        return row, "failed"
+    except Exception as exc:
+        return row, _fail_status(exc)
     if not vectors:
         return row, "failed"
     row.embedding = json.dumps(vectors[0], ensure_ascii=False)
@@ -174,10 +184,10 @@ def index_document(db: Session, row: KbDocument, force: bool = False) -> str:
         return "failed"
     try:
         vectors = embed_texts(parts)
-    except ValueError:
-        return "failed"
+    except Exception as exc:
+        return _fail_status(exc)
     if len(vectors) != len(parts):
-        return "failed"
+        return "failed:向量条数对不上"
     clear_chunks(db, row.id)
     for index, (text, vec) in enumerate(zip(parts, vectors)):
         db.add(

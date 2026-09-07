@@ -56,7 +56,6 @@ from app.kb.vector import (
     score_chunks,
     supplement_hits,
     update_chunk_text,
-    VECTOR_HINTS,
     vector_payload,
 )
 from app.kb.wiki import ASK_WIKI_LIMIT, clip_summary, dump_wiki, learn_hint, parse_wiki, wiki_item
@@ -1066,8 +1065,9 @@ def recognize_document(doc_id: int, db: Session = Depends(get_db)):
     message = f"已认 {done} 张"
     if left:
         message += f"，还有 {left} 张，再点一次识图"
-    message += "。" + VECTOR_HINTS.get(status, VECTOR_HINTS["failed"])
-    return ok({"done": done, "left": left, "message": message, **vector_payload(status)})
+    extra = vector_payload(status)
+    message += "。" + extra["vector_hint"]
+    return ok({"done": done, "left": left, "message": message, **extra})
 
 
 @router.post("/kb/assets/{asset_id}/vision")

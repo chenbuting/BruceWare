@@ -132,30 +132,58 @@ def embedding_profile() -> str:
     return f"{model}@{extra}" if extra else model
 
 
-def embed_texts(texts: list[str], timeout: float = 60) -> list[list[float]]:
-    """把几段文字变成向量。接口不支持就抛错，调用方退回关键词。"""
+def _embed_once(texts: list[str], timeout: float) -> list[list[float]]:
+    """调一次向量接口。一段就按字符串传，避免有的中转站不吃数组。"""
 
-    cleaned = [item.strip() for item in texts if (item or "").strip()]
-    if not cleaned:
-        return []
     cfg = load_llm()
     if not cfg["api_key"]:
         raise ValueError("请先在设置里填写 AI Key")
     url = _embeddings_url(cfg.get("embedding_base_url") or cfg["base_url"])
-    payload = {"model": cfg.get("embedding_model") or "text-embedding-3-small", "input": cleaned}
+    payload = {
+        "model": cfg.get("embedding_model") or "text-embedding-3-small",
+        "input": texts[0] if len(texts) == 1 else texts,
+    }
     headers = {
         "Authorization": f"Bearer {cfg['api_key']}",
         "Content-Type": "application/json",
     }
-    res = _post(url, timeout=timeout, json=payload, headers=headers, timeout_message="AI 请求超时，请稍后再试。")
+    res = _post(url, timeout=timeout, json=payload, headers=headers, timeout_message="向量请求超时，请稍后再试。")
     if res.status_code >= 400:
-        raise ValueError(f"向量接口返回 {res.status_code}：{res.text[:300]}")
+        raise ValueError(f"向量接口返回 {res.status_code}：{res.text[:180]}")
     data = res.json()
     try:
         items = sorted(data["data"], key=lambda item: int(item.get("index") or 0))
         return [list(item["embedding"]) for item in items]
     except Exception as exc:
         raise ValueError("向量接口返回格式不对") from exc
+
+
+def embed_texts(texts: list[str], timeout: float = 90) -> list[list[float]]:
+    """把几段文字变成向量。一次多段失败就改成一段一段算。"""
+
+    cleaned = [item.strip() for item in texts if (item or "").strip()]
+    if not cleaned:
+        return []
+    out: list[list[float]] = []
+    size = 8 if len(cleaned) > 1 else 1
+    index = 0
+    while index < len(cleaned):
+        batch = cleaned[index : index + size]
+        try:
+            vectors = _embed_once(batch, timeout)
+        except ValueError:
+            if size > 1:
+                size = 1
+                continue
+            raise
+        if len(vectors) != len(batch):
+            if size > 1:
+                size = 1
+                continue
+            raise ValueError("向量条数对不上")
+        out.extend(vectors)
+        index += len(batch)
+    return out
 
 
 def _completions_url(base_url: str) -> str:
