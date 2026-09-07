@@ -65,6 +65,29 @@ type AskTurn = {
   streaming?: boolean;
 };
 
+type SessionDraft = {
+  key: string;
+  sessionId: number | null;
+  turns: AskTurn[];
+  asking: boolean;
+  question: string;
+};
+
+type AskJob = {
+  key: string;
+  abort: AbortController;
+  question: string;
+  libraryId: number;
+};
+
+function emptyDraft(key: string, sessionId: number | null = null): SessionDraft {
+  return { key, sessionId, turns: [], asking: false, question: "" };
+}
+
+function draftKey(sessionId: number | null, localId = 0) {
+  return sessionId != null ? `s:${sessionId}` : `n:${localId}`;
+}
+
 /** 这次回答带上的相关图，用来直接画在回答里。 */
 function relatedAskImages(result: KbAskResult) {
   return result.citations.flatMap((hit) => (hit.images || []).map((img) => ({ ...img, docId: hit.id })));
@@ -184,9 +207,13 @@ export function KbPage() {
   const location = useLocation();
   const uploadRef = useRef<HTMLInputElement>(null);
   const askBottomRef = useRef<HTMLDivElement>(null);
-  const askAbortRef = useRef<AbortController | null>(null);
-  const askTokenRef = useRef(0);
-  const lastAskTextRef = useRef("");
+  const jobsRef = useRef<Map<string, AskJob>>(new Map());
+  const draftsRef = useRef<Record<string, SessionDraft>>({ "n:0": emptyDraft("n:0") });
+  const currentKeyRef = useRef("n:0");
+  const libraryIdRef = useRef<number | null>(null);
+  const newDraftSeq = useRef(0);
+  const [drafts, setDrafts] = useState<Record<string, SessionDraft>>({ "n:0": emptyDraft("n:0") });
+  const [currentKey, setCurrentKey] = useState("n:0");
   const visionStopRef = useRef(false);
   const visionBusyRef = useRef(false);
   const visionDocRef = useRef<number | null>(null);
@@ -243,6 +270,7 @@ export function KbPage() {
   const [pageTab, setPageTab] = useState<"files" | "ask">("files");
 
   const library = libraries.find((item) => item.id === libraryId) || null;
+  libraryIdRef.current = libraryId;
 
   async function loadLibraries(preferId?: number | null) {
     const data = await fetchKbLibraries();
@@ -380,47 +408,127 @@ export function KbPage() {
       : err instanceof Error && (err.name === "AbortError" || /aborted|abort/i.test(err.message));
   }
 
-  function stopAsk() {
-    askTokenRef.current += 1;
-    askAbortRef.current?.abort();
-    askAbortRef.current = null;
-    setAsking(false);
-    setAskTurns((prev) => prev.filter((item) => !item.streaming));
+  function publishDrafts() {
+    setDrafts({ ...draftsRef.current });
+  }
+
+  function updateDraft(key: string, updater: (draft: SessionDraft) => SessionDraft) {
+    const prev = draftsRef.current[key] || emptyDraft(key);
+    const next = updater(prev);
+    draftsRef.current = { ...draftsRef.current, [key]: next };
+    publishDrafts();
+    if (currentKeyRef.current === key) {
+      setAskTurns(next.turns);
+      setAsking(next.asking);
+      setSessionId(next.sessionId);
+    }
+  }
+
+  function persistView() {
+    const key = currentKeyRef.current;
+    const prev = draftsRef.current[key] || emptyDraft(key, sessionId);
+    draftsRef.current[key] = {
+      ...prev,
+      question,
+      sessionId,
+      turns: prev.asking ? prev.turns : askTurns,
+      asking: prev.asking,
+    };
+  }
+
+  function showDraft(key: string) {
+    const draft = draftsRef.current[key] || emptyDraft(key);
+    currentKeyRef.current = key;
+    setCurrentKey(key);
+    setSessionId(draft.sessionId);
+    setAskTurns(draft.turns);
+    setAsking(draft.asking);
+    setQuestion(draft.question);
+  }
+
+  function abortJob(key: string, restoreQuestion: boolean) {
+    const job = jobsRef.current.get(key);
+    jobsRef.current.delete(key);
+    job?.abort.abort();
+    updateDraft(key, (draft) => ({
+      ...draft,
+      asking: false,
+      turns: draft.turns.filter((item) => !item.streaming),
+    }));
+    if (restoreQuestion && job && currentKeyRef.current === key) {
+      setQuestion((current) => (current.trim() ? current : job.question));
+    }
+  }
+
+  function stopAllAsks() {
+    for (const job of jobsRef.current.values()) {
+      job.abort.abort();
+    }
+    jobsRef.current.clear();
+    draftsRef.current = { "n:0": emptyDraft("n:0") };
+    publishDrafts();
+    currentKeyRef.current = "n:0";
+    setCurrentKey("n:0");
+  }
+
+  function adoptSession(oldKey: string, nextSessionId: number) {
+    const newKey = draftKey(nextSessionId);
+    const draft = draftsRef.current[oldKey];
+    if (!draft) return newKey;
+    const copy = { ...draftsRef.current };
+    delete copy[oldKey];
+    copy[newKey] = { ...draft, key: newKey, sessionId: nextSessionId };
+    draftsRef.current = copy;
+    const job = jobsRef.current.get(oldKey);
+    jobsRef.current.delete(oldKey);
+    if (job) {
+      job.key = newKey;
+      jobsRef.current.set(newKey, job);
+    }
+    publishDrafts();
+    if (currentKeyRef.current === oldKey) {
+      currentKeyRef.current = newKey;
+      setCurrentKey(newKey);
+      setSessionId(nextSessionId);
+    }
+    return newKey;
   }
 
   function onStopAsk() {
-    const text = lastAskTextRef.current;
-    stopAsk();
+    abortJob(currentKeyRef.current, true);
     setError("");
     setHint("已停止提问");
-    setQuestion((current) => (current.trim() ? current : text));
   }
 
   function onAsk() {
     if (libraryId == null || asking) return;
     const text = question.trim();
     if (!text) return;
-    lastAskTextRef.current = text;
+    const key = currentKeyRef.current;
     const history = askTurns.slice(-(ASK_TURN_LIMIT - 1)).map((turn) => ({
       question: turn.question,
       answer: turn.result.answer,
     }));
     const ctrl = new AbortController();
-    const token = askTokenRef.current + 1;
-    askTokenRef.current = token;
-    askAbortRef.current = ctrl;
-    setAsking(true);
+    const route = { key };
+    jobsRef.current.set(key, { key, abort: ctrl, question: text, libraryId });
     setError("");
     setHint("");
     setQuestion("");
-    setAskTurns((prev) => [
-      ...prev,
-      {
-        question: text,
-        streaming: true,
-        result: { answer: "", citations: [], used_llm: true, ask_kind: askKind },
-      },
-    ]);
+    updateDraft(key, (draft) => ({
+      ...draft,
+      asking: true,
+      question: "",
+      sessionId,
+      turns: [
+        ...draft.turns,
+        {
+          question: text,
+          streaming: true,
+          result: { answer: "", citations: [], used_llm: true, ask_kind: askKind },
+        },
+      ],
+    }));
     askKbLibraryStream(
       libraryId,
       text,
@@ -431,88 +539,140 @@ export function KbPage() {
       sessionId,
       askKind,
       (event) => {
-        if (askTokenRef.current !== token) return;
-        setAskTurns((prev) => {
-          const next = [...prev];
-          const last = next[next.length - 1];
-          if (!last?.streaming || last.question !== text) return prev;
-          if (event.type === "start") {
-            next[next.length - 1] = {
-              ...last,
-              result: {
-                ...last.result,
-                citations: event.citations,
-                used_vector: event.used_vector,
-                ask_kind: event.ask_kind || last.result.ask_kind,
-                evidence_mode: event.evidence_mode,
-              },
-            };
-            return next;
+        if (!jobsRef.current.has(route.key)) return;
+        updateDraft(route.key, (draft) => {
+          const turns = [...draft.turns];
+          let index = -1;
+          for (let i = turns.length - 1; i >= 0; i -= 1) {
+            if (turns[i].streaming && turns[i].question === text) {
+              index = i;
+              break;
+            }
           }
-          next[next.length - 1] = {
-            ...last,
-            result: { ...last.result, answer: last.result.answer + event.text },
-          };
-          return next;
+          if (index < 0) return draft;
+          const last = turns[index];
+          turns[index] =
+            event.type === "start"
+              ? {
+                  ...last,
+                  result: {
+                    ...last.result,
+                    citations: event.citations,
+                    used_vector: event.used_vector,
+                    ask_kind: event.ask_kind || last.result.ask_kind,
+                    evidence_mode: event.evidence_mode,
+                  },
+                }
+              : { ...last, result: { ...last.result, answer: last.result.answer + event.text } };
+          return { ...draft, turns };
         });
       },
       ctrl.signal,
     )
       .then(async (data) => {
-        if (askTokenRef.current !== token || ctrl.signal.aborted) return;
-        if (data.session_id) setSessionId(data.session_id);
-        setAskTurns((prev) => {
-          const next = [...prev];
-          const last = next[next.length - 1];
-          if (last?.question === text) {
-            next[next.length - 1] = { question: text, result: data };
-            return next;
+        if (ctrl.signal.aborted || !jobsRef.current.has(route.key)) return;
+        if (data.session_id && route.key.startsWith("n:")) {
+          route.key = adoptSession(route.key, data.session_id);
+        }
+        updateDraft(route.key, (draft) => {
+          const turns = [...draft.turns];
+          let index = -1;
+          for (let i = turns.length - 1; i >= 0; i -= 1) {
+            if (turns[i].question === text) {
+              index = i;
+              break;
+            }
           }
-          return [...prev, { question: text, result: data }];
+          const done = { question: text, result: data };
+          if (index >= 0) turns[index] = done;
+          else turns.push(done);
+          return { ...draft, asking: false, sessionId: data.session_id ?? draft.sessionId, turns };
         });
-        if (libraryId != null) {
+        jobsRef.current.delete(route.key);
+        if (libraryIdRef.current === libraryId) {
           const listed = await fetchKbSessions(libraryId);
-          if (askTokenRef.current !== token) return;
-          setSessions(listed.items);
+          if (libraryIdRef.current === libraryId) setSessions(listed.items);
         }
         if (data.wiki_update_hint && preview) {
           applyDoc(await fetchKbDocument(preview.id));
         }
       })
       .catch((err: Error) => {
-        if (askTokenRef.current !== token) return;
-        setAskTurns((prev) => prev.filter((item) => !item.streaming));
-        if (isAskAborted(err) || ctrl.signal.aborted) {
-          setQuestion((current) => (current.trim() ? current : text));
-          setHint("已停止提问");
+        if (ctrl.signal.aborted || !jobsRef.current.has(route.key)) {
+          if (currentKeyRef.current === route.key && isAskAborted(err)) {
+            setQuestion((current) => (current.trim() ? current : text));
+            setHint("已停止提问");
+          }
           return;
         }
-        setError(err.message);
-      })
-      .finally(() => {
-        if (askAbortRef.current === ctrl) askAbortRef.current = null;
-        if (askTokenRef.current === token) setAsking(false);
+        jobsRef.current.delete(route.key);
+        updateDraft(route.key, (draft) => ({
+          ...draft,
+          asking: false,
+          turns: draft.turns.filter((item) => !item.streaming),
+        }));
+        if (isAskAborted(err)) {
+          if (currentKeyRef.current === route.key) {
+            setQuestion((current) => (current.trim() ? current : text));
+            setHint("已停止提问");
+          }
+          return;
+        }
+        if (currentKeyRef.current === route.key) setError(err.message);
       });
   }
 
   function onNewAsk() {
-    stopAsk();
-    setSessionId(null);
-    setAskTurns([]);
-    setQuestion("");
+    persistView();
+    const cur = draftsRef.current[currentKeyRef.current];
+    if (cur && cur.sessionId == null && !cur.asking && cur.turns.length === 0) {
+      setQuestion("");
+      setError("");
+      setHint("");
+      return;
+    }
+    newDraftSeq.current += 1;
+    const key = draftKey(null, newDraftSeq.current);
+    draftsRef.current[key] = emptyDraft(key);
+    publishDrafts();
+    showDraft(key);
     setError("");
     setHint("");
   }
 
   function onOpenSession(id: number) {
-    stopAsk();
+    persistView();
+    const key = draftKey(id);
+    const existing = draftsRef.current[key];
+    currentKeyRef.current = key;
+    setCurrentKey(key);
     setError("");
+    if (existing) {
+      setSessionId(id);
+      setAskTurns(existing.turns);
+      setAsking(existing.asking);
+      setQuestion(existing.question);
+      if (existing.asking) return;
+    } else {
+      setSessionId(id);
+      setAsking(false);
+    }
     fetchKbSession(id)
       .then((data) => {
-        setSessionId(data.id);
-        setAskTurns(data.turns.map((item) => ({ question: item.question, result: item.result })));
+        if (draftsRef.current[key]?.asking) return;
+        updateDraft(key, (draft) => ({
+          ...draft,
+          sessionId: id,
+          asking: false,
+          turns: data.turns.map((item) => ({ question: item.question, result: item.result })),
+        }));
+        if (currentKeyRef.current === key) {
+          setQuestion(draftsRef.current[key]?.question || "");
+        }
       })
-      .catch((err: Error) => setError(err.message));
+      .catch((err: Error) => {
+        if (currentKeyRef.current === key) setError(err.message);
+      });
   }
 
   function onOpenCitation(id: number) {
@@ -528,12 +688,14 @@ export function KbPage() {
   }
 
   function onPickLibrary(id: number) {
-    stopAsk();
+    stopAllAsks();
     setLibraryId(id);
     setFolderId(null);
     setPreview(null);
     setAskTurns([]);
     setSessionId(null);
+    setAsking(false);
+    setQuestion("");
     run(async () => {
       await loadFolders(id);
       await loadDocs(id, null);
@@ -723,6 +885,23 @@ export function KbPage() {
               </button>
             </div>
             <div className="min-h-0 flex-1 overflow-auto p-2">
+              {Object.values(drafts)
+                .filter((draft) => draft.sessionId == null && (draft.asking || draft.turns.length > 0))
+                .map((draft) => (
+                  <div key={draft.key} className={`mb-0.5 flex items-center gap-1 rounded-md ${currentKey === draft.key ? "bg-[var(--bg)]" : "hover:bg-[var(--hover)]"}`}>
+                    <button
+                      type="button"
+                      className="min-w-0 flex-1 truncate px-2 py-1.5 text-left text-[13px]"
+                      onClick={() => {
+                        persistView();
+                        showDraft(draft.key);
+                      }}
+                    >
+                      {(draft.turns[0]?.question || "新对话").slice(0, 24)}
+                      {draft.asking ? <span className="ml-1 text-[12px] text-[var(--muted)]">在找</span> : null}
+                    </button>
+                  </div>
+                ))}
               {sessions.length ? (
                 sessions.map((item) => (
                   <div key={item.id} className={`mb-0.5 flex items-center gap-1 rounded-md ${sessionId === item.id ? "bg-[var(--bg)]" : "hover:bg-[var(--hover)]"}`}>
@@ -732,6 +911,7 @@ export function KbPage() {
                       onClick={() => onOpenSession(item.id)}
                     >
                       {item.title || "新对话"}
+                      {drafts[`s:${item.id}`]?.asking ? <span className="ml-1 text-[12px] text-[var(--muted)]">在找</span> : null}
                     </button>
                     <button
                       type="button"
@@ -752,7 +932,7 @@ export function KbPage() {
                     </button>
                   </div>
                 ))
-              ) : (
+              ) : Object.values(drafts).some((draft) => draft.sessionId == null && (draft.asking || draft.turns.length > 0)) ? null : (
                 <p className="px-2 py-3 text-[12px] text-[var(--muted)]">还没有留下的对话。</p>
               )}
             </div>
@@ -1346,9 +1526,22 @@ export function KbPage() {
           onConfirm={() => {
             const target = askDeleteSession;
             run(async () => {
+              abortJob(`s:${target.id}`, false);
+              const copy = { ...draftsRef.current };
+              delete copy[`s:${target.id}`];
+              if (currentKeyRef.current === `s:${target.id}`) {
+                newDraftSeq.current += 1;
+                const key = draftKey(null, newDraftSeq.current);
+                copy[key] = emptyDraft(key);
+                draftsRef.current = copy;
+                publishDrafts();
+                showDraft(key);
+              } else {
+                draftsRef.current = copy;
+                publishDrafts();
+              }
               await deleteKbSession(target.id);
               setAskDeleteSession(null);
-              if (sessionId === target.id) onNewAsk();
               if (libraryId != null) {
                 const listed = await fetchKbSessions(libraryId);
                 setSessions(listed.items);
