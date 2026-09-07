@@ -377,9 +377,9 @@ export function KbPage() {
           setHint(`已停止，已认 ${done} / ${total}`);
           return;
         }
-        await recognizeKbAsset(asset.id);
+        const row = await recognizeKbAsset(asset.id);
         done += 1;
-        setHint(`识图 ${done} / ${total}`);
+        setHint(row.vector_hint ? `识图 ${done} / ${total}。${row.vector_hint}` : `识图 ${done} / ${total}`);
         setAssetTick((n) => n + 1);
       }
       setHint(`已认完 ${done} 张`);
@@ -1187,6 +1187,7 @@ export function KbPage() {
             recognizing={visionDocId === preview.id}
             onRecognizeAll={() => void recognizeAll(preview)}
             onSaved={applyDoc}
+            onHint={setHint}
             onError={setError}
           />
         </Modal>
@@ -1646,11 +1647,13 @@ function AssetWords({
   docId,
   refreshTick,
   visionLocked,
+  onHint,
   onError,
 }: {
   docId: number;
   refreshTick: number;
   visionLocked: boolean;
+  onHint: (message: string, ok: boolean) => void;
   onError: (message: string) => void;
 }) {
   const [items, setItems] = useState<KbDocAsset[]>([]);
@@ -1709,7 +1712,10 @@ function AssetWords({
     const note = drafts[item.id] || noteOf(item);
     setSavingId(item.id);
     saveKbAssetOcr(item.id, { caption: note.caption, keywords: note.keywords, ocr_text: note.words })
-      .then(applyAsset)
+      .then((row) => {
+        applyAsset(row);
+        onHint(row.vector_hint || (row.vector_ok ? "字已保存，向量已更新。" : "字已保存，向量没更新。"), !!row.vector_ok);
+      })
       .catch((err: Error) => onError(err.message))
       .finally(() => setSavingId(null));
   }
@@ -1717,7 +1723,10 @@ function AssetWords({
   function seeOne(item: KbDocAsset) {
     setSeeingId(item.id);
     recognizeKbAsset(item.id)
-      .then(applyAsset)
+      .then((row) => {
+        applyAsset(row);
+        onHint(row.vector_hint || (row.vector_ok ? "已识图，向量已更新。" : "已识图，向量没更新。"), !!row.vector_ok);
+      })
       .catch((err: Error) => onError(err.message))
       .finally(() => setSeeingId(null));
   }
@@ -1812,7 +1821,7 @@ function AssetWords({
 }
 
 /** 预览里看切片、改字。提问会尽量用这些块。 */
-function ChunkWords({ docId, onError }: { docId: number; onError: (message: string) => void }) {
+function ChunkWords({ docId, onHint, onError }: { docId: number; onHint: (message: string, ok: boolean) => void; onError: (message: string) => void }) {
   const [items, setItems] = useState<KbChunk[]>([]);
   const [drafts, setDrafts] = useState<Record<number, string>>({});
   const [openId, setOpenId] = useState<number | null>(null);
@@ -1856,6 +1865,7 @@ function ChunkWords({ docId, onError }: { docId: number; onError: (message: stri
       .then((row) => {
         setItems((list) => list.map((one) => (one.id === row.id ? row : one)));
         setDrafts((map) => ({ ...map, [row.id]: row.text }));
+        onHint(row.vector_hint || (row.vector_ok ? "字已保存，这一块的向量已更新。" : "字已保存，向量没更新。"), !!row.vector_ok);
       })
       .catch((err: Error) => onError(err.message))
       .finally(() => setSavingId(null));
@@ -1909,6 +1919,7 @@ function PreviewPane({
   recognizing,
   onRecognizeAll,
   onSaved,
+  onHint,
   onError,
 }: {
   item: KbDocument;
@@ -1921,6 +1932,7 @@ function PreviewPane({
   recognizing: boolean;
   onRecognizeAll: () => void;
   onSaved: (row: KbDocument) => void;
+  onHint: (message: string) => void;
   onError: (message: string) => void;
 }) {
   const url = kbDocumentFileUrl(item.id);
@@ -1928,19 +1940,27 @@ function PreviewPane({
   const [saving, setSaving] = useState(false);
   const [showExtras, setShowExtras] = useState(false);
   const [zoomFile, setZoomFile] = useState(false);
+  const [vectorNote, setVectorNote] = useState<{ text: string; ok: boolean } | null>(null);
+
+  function tellVector(message: string, ok: boolean) {
+    setVectorNote({ text: message, ok });
+    onHint(message);
+  }
   useEffect(() => {
     setDraft(item.wiki_summary || "");
   }, [item.id, item.wiki_summary]);
   useEffect(() => {
     setShowExtras(false);
     setZoomFile(false);
+    setVectorNote(null);
     const timer = window.setTimeout(() => setShowExtras(true), 0);
     return () => window.clearTimeout(timer);
   }, [item.id]);
 
-  function runWiki(task: () => Promise<void>) {
+  function runWiki(task: () => Promise<void>, hint: string) {
     setSaving(true);
     task()
+      .then(() => tellVector(hint, false))
       .catch((err: Error) => onError(err.message))
       .finally(() => setSaving(false));
   }
@@ -1956,6 +1976,7 @@ function PreviewPane({
         ) : null}
       </div>
       {item.tags ? <p className="mb-2 text-[var(--muted)]">{item.tags}</p> : null}
+      {vectorNote ? <p className={`mb-2 ${vectorNote.ok ? "text-[var(--ok)]" : "text-amber-800"}`}>{vectorNote.text}</p> : null}
       {item.preview === "image" ? (
         <button type="button" className="block max-w-full" title="点图放大" onClick={() => setZoomFile(true)}>
           <img src={url} alt={item.title} className="max-h-[40vh] max-w-full cursor-zoom-in object-contain" />
@@ -1972,8 +1993,8 @@ function PreviewPane({
 
       {showExtras ? (
         <>
-          <AssetWords docId={item.id} refreshTick={assetTick} visionLocked={visionLocked} onError={onError} />
-          <ChunkWords docId={item.id} onError={onError} />
+          <AssetWords docId={item.id} refreshTick={assetTick} visionLocked={visionLocked} onHint={tellVector} onError={onError} />
+          <ChunkWords docId={item.id} onHint={tellVector} onError={onError} />
         </>
       ) : (
         <p className="mt-4 text-[12px] text-[var(--muted)]">正在加载图和切片…</p>
@@ -2005,7 +2026,7 @@ function PreviewPane({
                 onClick={() =>
                   runWiki(async () => {
                     onSaved(await generateKbWiki(item.id));
-                  })
+                  }, "摘要已保存。摘要不进向量，提问不靠它。")
                 }
               >
                 {item.has_wiki ? "更新" : "写摘要"}
@@ -2017,7 +2038,7 @@ function PreviewPane({
                 onClick={() =>
                   runWiki(async () => {
                     onSaved(await saveKbWiki(item.id, draft));
-                  })
+                  }, "摘要已保存。摘要不进向量，提问不靠它。")
                 }
               >
                 保存
@@ -2030,7 +2051,7 @@ function PreviewPane({
                   onClick={() =>
                     runWiki(async () => {
                       onSaved(await deleteKbWiki(item.id));
-                    })
+                    }, "摘要已删。摘要不进向量，提问不靠它。")
                   }
                 >
                   删除

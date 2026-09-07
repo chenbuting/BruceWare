@@ -56,6 +56,8 @@ from app.kb.vector import (
     score_chunks,
     supplement_hits,
     update_chunk_text,
+    VECTOR_HINTS,
+    vector_payload,
 )
 from app.kb.wiki import ASK_WIKI_LIMIT, clip_summary, dump_wiki, learn_hint, parse_wiki, wiki_item
 from app.kb.store import (
@@ -1015,10 +1017,10 @@ def update_document_chunk(chunk_id: int, body: ChunkPatch, db: Session = Depends
     text = body.text.strip()
     if not text:
         return fail("请先写下切片内容")
-    update_chunk_text(db, row, text)
+    _, status = update_chunk_text(db, row, text)
     db.commit()
     db.refresh(row)
-    return ok(chunk_dict(row))
+    return ok({**chunk_dict(row), **vector_payload(status, chunk=True)})
 
 
 @router.get("/kb/documents/{doc_id}/assets")
@@ -1057,14 +1059,15 @@ def recognize_document(doc_id: int, db: Session = Depends(get_db)):
     except ValueError as exc:
         return fail(str(exc))
     rebuild_search_text(db, row)
-    index_document(db, row)
+    status = index_document(db, row, force=True)
     row.updated_at = datetime.utcnow()
     db.commit()
     left = pending_vision_count(db, row.id)
     message = f"已认 {done} 张"
     if left:
         message += f"，还有 {left} 张，再点一次识图"
-    return ok({"done": done, "left": left, "message": message})
+    message += "。" + VECTOR_HINTS.get(status, VECTOR_HINTS["failed"])
+    return ok({"done": done, "left": left, "message": message, **vector_payload(status)})
 
 
 @router.post("/kb/assets/{asset_id}/vision")
@@ -1088,11 +1091,11 @@ def recognize_asset(asset_id: int, db: Session = Depends(get_db)):
     except ValueError as exc:
         return fail(str(exc))
     rebuild_search_text(db, row)
-    index_document(db, row)
+    status = index_document(db, row, force=True)
     row.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(item)
-    return ok(asset_edit_dict(item))
+    return ok({**asset_edit_dict(item), **vector_payload(status)})
 
 
 @router.put("/kb/assets/{asset_id}")
@@ -1108,11 +1111,11 @@ def update_asset(asset_id: int, body: AssetPatch, db: Session = Depends(get_db))
     text = pack_asset_note(body.caption, body.keywords, body.ocr_text)
     item.ocr_text = text or OCR_SKIP
     rebuild_search_text(db, row)
-    index_document(db, row)
+    status = index_document(db, row, force=True)
     row.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(item)
-    return ok(asset_edit_dict(item))
+    return ok({**asset_edit_dict(item), **vector_payload(status)})
 
 
 def _save_wiki(row: KbDocument, summary: str, db: Session):

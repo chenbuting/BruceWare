@@ -72,6 +72,26 @@ def list_chunks(db: Session, document_id: int) -> list[KbChunk]:
     )
 
 
+VECTOR_HINTS = {
+    "updated": "字已保存，这份资料的向量已更新。",
+    "updated_chunk": "字已保存，这一块的向量已更新。",
+    "no_key": "字已保存，但没填 AI Key，向量没更新。",
+    "failed": "字已保存，向量更新失败，提问可能还按旧的找。",
+    "skipped_edited": "字已保存，能按关键词搜。但这份有手改过的切片，没整份重算向量。",
+    "skipped": "字已保存，向量没有重算。",
+}
+
+
+def vector_payload(status: str, *, chunk: bool = False) -> dict:
+    """给保存接口带上向量有没有更新。"""
+
+    key = "updated_chunk" if status == "updated" and chunk else status
+    return {
+        "vector_ok": status == "updated",
+        "vector_hint": VECTOR_HINTS.get(key, VECTOR_HINTS["failed"]),
+    }
+
+
 def chunk_dict(row: KbChunk) -> dict:
     preview = (row.text or "").replace("\n", " ").strip()
     return {
@@ -113,47 +133,51 @@ def ensure_chunks(db: Session, row: KbDocument) -> list[KbChunk]:
     return list_chunks(db, row.id)
 
 
-def update_chunk_text(db: Session, row: KbChunk, text: str) -> KbChunk:
-    """改一块的字，并尽量重算这一块的向量。"""
+def update_chunk_text(db: Session, row: KbChunk, text: str) -> tuple[KbChunk, str]:
+    """改一块的字，并尽量重算这一块的向量。返回这块和结果：updated / no_key / failed。"""
 
     row.text = (text or "").strip()
     row.edited = 1
-    if row.text and llm_public().get("has_key"):
-        try:
-            vectors = embed_texts([row.text])
-            if vectors:
-                row.embedding = json.dumps(vectors[0], ensure_ascii=False)
-                row.profile = embedding_profile()
-        except ValueError:
-            pass
-    return row
+    if not row.text:
+        return row, "failed"
+    if not llm_public().get("has_key"):
+        return row, "no_key"
+    try:
+        vectors = embed_texts([row.text])
+    except ValueError:
+        return row, "failed"
+    if not vectors:
+        return row, "failed"
+    row.embedding = json.dumps(vectors[0], ensure_ascii=False)
+    row.profile = embedding_profile()
+    return row, "updated"
 
 
-def index_document(db: Session, row: KbDocument) -> bool:
-    """抽出正文后写入向量。失败返回 False，提问仍走关键词。"""
+def index_document(db: Session, row: KbDocument, force: bool = False) -> str:
+    """抽出正文后写入向量。返回 updated / skipped / skipped_edited / no_key / failed。"""
 
     edited = db.scalar(select(KbChunk.id).where(KbChunk.document_id == row.id, KbChunk.edited == 1).limit(1))
     if edited:
-        return True
+        return "skipped_edited"
     if not llm_public().get("has_key"):
-        return False
+        return "no_key"
     profile = embedding_profile()
-    if (row.embedding_profile or "") == profile:
+    if not force and (row.embedding_profile or "") == profile:
         exists = db.scalar(select(KbChunk.id).where(KbChunk.document_id == row.id).limit(1))
         if exists:
-            return True
+            return "skipped"
     body = (row.search_text or "").strip()
     if not body:
-        return False
+        return "failed"
     parts = split_chunks(f"{row.title or ''} {row.tags or ''} {body}")
     if not parts:
-        return False
+        return "failed"
     try:
         vectors = embed_texts(parts)
     except ValueError:
-        return False
+        return "failed"
     if len(vectors) != len(parts):
-        return False
+        return "failed"
     clear_chunks(db, row.id)
     for index, (text, vec) in enumerate(zip(parts, vectors)):
         db.add(
@@ -167,7 +191,7 @@ def index_document(db: Session, row: KbDocument) -> bool:
             )
         )
     row.embedding_profile = profile
-    return True
+    return "updated"
 
 
 def _pick_spread(scored: list[ChunkPick], limit: int = _PER_DOC_CHUNKS, gap: int = _INDEX_GAP) -> list[ChunkPick]:

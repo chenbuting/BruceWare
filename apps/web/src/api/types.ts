@@ -278,6 +278,8 @@ export type KbChunk = {
   text: string;
   edited: boolean;
   preview: string;
+  vector_ok?: boolean;
+  vector_hint?: string;
 };
 
 export type KbDocAsset = {
@@ -288,6 +290,8 @@ export type KbDocAsset = {
   caption: string;
   keywords: string;
   ocr_text: string;
+  vector_ok?: boolean;
+  vector_hint?: string;
 };
 
 export type KbAskHit = {
