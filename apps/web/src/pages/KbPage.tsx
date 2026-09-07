@@ -85,9 +85,13 @@ function AskTurnView({
       <p className="mt-3 text-[12px] text-[var(--muted)]">{turn.result.ask_kind === "checklist" ? "核对清单" : "答"}</p>
       {turn.result.ask_kind === "checklist" ? (
         <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">
-          这是对照表，不是一句结论。「命中」表示本轮资料里见到了这一项，不表示你问的就是编号或日期。可能有漏，请以原文为准。
+          这是对照表，不是一句结论。命中=本轮见到，未命中=本轮没见到，不是库里没有。可能有漏，请以原文为准。
         </p>
-      ) : null}
+      ) : (
+        <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">
+          【确凿】对得上本轮原文。【推断】只在宽松时出现，须核对原文。【缺失】只表示本轮没见到。
+        </p>
+      )}
       <KbAnswerContent
         text={turn.result.answer}
         onOpenAsset={(assetId) => {
@@ -134,7 +138,11 @@ function AskTurnView({
               </button>
             ))}
           </p>
-          <p className="mt-1 text-[12px] leading-5 text-[var(--muted)]">本次依据以上资料，库里可能还有，没提到的不等于没有。</p>
+          <p className="mt-1 text-[12px] leading-5 text-[var(--muted)]">
+            {turn.result.ask_kind === "checklist"
+              ? "本表只展示本轮检索命中情况，合不合格请对照原文自行判断。没提到的不等于没有。"
+              : "本次依据以上资料，库里可能还有，没提到的不等于没有。"}
+          </p>
         </div>
       ) : null}
       {turn.result.used_vector ? <p className="mt-2 text-[12px] text-[var(--muted)]">本次还用了向量检索，换说法也能对上。</p> : null}
@@ -145,9 +153,9 @@ function AskTurnView({
 
 function askKindHint(kind: KbAskKind) {
   if (kind === "checklist") {
-    return "当前是核对清单：按问句拆成几项对照，只出表，不说合不合格。「命中」=这轮资料里见到了这项。有没有、是多少请改用「回答」。";
+    return "当前是核对清单：只出命中/未命中表，不下合不合格的结论。未命中=本轮没见到，不是库里没有。";
   }
-  return "当前是回答：正常对话，格式跟着你的问法走。要表就出表，要一句就说一句。固定的命中表请用「核对清单」。";
+  return "当前是回答：正常对话，先结论，能引用就贴本轮原文。要表就出表。固定命中表请用「核对清单」。";
 }
 
 function evidenceHint(mode: "" | KbEvidenceMode, libraryMode: KbEvidenceMode = "strict") {
@@ -155,9 +163,9 @@ function evidenceHint(mode: "" | KbEvidenceMode, libraryMode: KbEvidenceMode = "
     return `出处规则跟库走，当前是${evidenceLabel(libraryMode)}。`;
   }
   if (mode === "loose") {
-    return "宽松概述：可以概括，仍要标明哪份资料；拿不准就回原文。";
+    return "宽松：可以【推断】，须写明让你核对原文。仍要标明哪份资料。";
   }
-  return "严格出处：只根据原文片段回答，摘要不能当证据。";
+  return "严格：只标【确凿】或【缺失】，不推断，不说可能。";
 }
 
 /** 知识库：整理资料，并按当前库提问 */
