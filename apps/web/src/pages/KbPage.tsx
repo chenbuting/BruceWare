@@ -84,12 +84,21 @@ function AskTurnView({
       <p className="whitespace-pre-wrap">{turn.question}</p>
       <p className="mt-3 text-[12px] text-[var(--muted)]">{turn.result.ask_kind === "checklist" ? "核对清单" : "答"}</p>
       {turn.result.ask_kind === "checklist" ? (
-        <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">
-          这是对照表，不是一句结论。命中=本轮见到，未命中=本轮没见到，不是库里没有。可能有漏，请以原文为准。
-        </p>
+        <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">只对照本轮有没有见到，不替你下合不合格的结论。</p>
       ) : (
-        <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">
-          【确凿】对得上本轮原文。【推断】只在宽松时出现，须核对原文。【缺失】只表示本轮没见到。
+        <p className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-[var(--muted)]">
+          <span>
+            <span className="rounded px-1 py-0.5 font-medium text-emerald-800 bg-emerald-100">【确凿】</span>
+            对得上本轮原文
+          </span>
+          <span>
+            <span className="rounded px-1 py-0.5 font-medium text-amber-900 bg-amber-100">【推断】</span>
+            只在宽松出现，须核对
+          </span>
+          <span>
+            <span className="rounded px-1 py-0.5 font-medium text-rose-800 bg-rose-100">【缺失】</span>
+            本轮没见到
+          </span>
         </p>
       )}
       <KbAnswerContent
@@ -153,9 +162,9 @@ function AskTurnView({
 
 function askKindHint(kind: KbAskKind) {
   if (kind === "checklist") {
-    return "当前是核对清单：只出命中/未命中表，不下合不合格的结论。未命中=本轮没见到，不是库里没有。";
+    return "资料多、文件很长时 AI 看不全，所以只对证本轮抽到的。核对清单：好几项一条条对照时用，只标本轮命中/未命中，不替你下合不合格的结论。";
   }
-  return "当前是回答：正常对话，先结论，能引用就贴本轮原文。要表就出表。固定命中表请用「核对清单」。";
+  return "资料多、文件很长时 AI 看不全，所以只对证本轮抽到的。回答：问有没有、是多少、是什么，或让它说明整理；只根据本轮见到的说。";
 }
 
 function evidenceHint(mode: "" | KbEvidenceMode, libraryMode: KbEvidenceMode = "strict") {
@@ -663,14 +672,14 @@ export function KbPage() {
                   <p className="text-center">在找…</p>
                 ) : (
                   <>
-                    <p className="text-center">先选下面的提问方式，再提问。对话会留下来，点出处回到资料预览。</p>
+                    <p className="text-center">资料多、文件很长时，AI 做不到一次看完。这两种问法是帮你对证本轮抽到的资料，不当成已经读完全库。点出处回到预览。</p>
                     <p className="mt-3">
-                      <span className="text-[var(--text)]">回答</span>
-                      ：正常对话，问什么答什么。要表就出表，不要成固定清单。没见到会承认。
+                      <span className="text-[var(--text)]">什么时候用「回答」</span>
+                      ：问有没有、是多少、是什么，或让它说明、整理。只根据本轮见到的说，没见到就承认本轮没见到。
                     </p>
                     <p className="mt-2">
-                      <span className="text-[var(--text)]">核对清单</span>
-                      ：对照好几项，只出表，不说合不合格。「命中」表示这轮资料里见到了这项，不是你在问编号或日期。
+                      <span className="text-[var(--text)]">什么时候用「核对清单」</span>
+                      ：好几项一条条对照（有没有漏、逐条比）。只标本轮命中/未命中，不替你下合不合格的结论。
                     </p>
                   </>
                 )}
@@ -684,8 +693,8 @@ export function KbPage() {
                 rows={3}
                 placeholder={
                   askKind === "checklist"
-                    ? "对照好几项，例如：把 3C 的名称、张数、编号分别标命中或未命中。回车换行，Ctrl+Enter 提问"
-                    : "问有没有、是多少，例如：我们有 3C 证书吗，一共多少张。回车换行，Ctrl+Enter 提问"
+                    ? "对照好几项，例如：把这份资料的名称、份数、编号分别标命中或未命中。回车换行，Ctrl+Enter 提问"
+                    : "问有没有、是多少，例如：这份资料有没有，一共多少份。回车换行，Ctrl+Enter 提问"
                 }
                 value={question}
                 onChange={(e) => setQuestion(e.target.value)}
@@ -708,7 +717,7 @@ export function KbPage() {
               <div className="flex border border-[var(--line)]">
                 <button
                   type="button"
-                  title="给结论和出处。适合有没有、是多少"
+                  title="问有没有、是多少、是什么，或让它说明整理"
                   className={`px-2.5 py-1.5 text-[13px] ${askKind === "answer" ? "bg-[var(--bg)]" : "text-[var(--muted)]"}`}
                   onClick={() => setAskKind("answer")}
                 >
@@ -716,7 +725,7 @@ export function KbPage() {
                 </button>
                 <button
                   type="button"
-                  title="只出对照表，不下结论。命中=这轮见到了这项"
+                  title="好几项一条条对照时用，只出命中表"
                   className={`border-l border-[var(--line)] px-2.5 py-1.5 text-[13px] ${askKind === "checklist" ? "bg-[var(--bg)]" : "text-[var(--muted)]"}`}
                   onClick={() => setAskKind("checklist")}
                 >

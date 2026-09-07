@@ -1,8 +1,43 @@
-import { useMemo } from "react";
+import { Children, cloneElement, isValidElement, useMemo, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 const ASSET_IMG_RE = /\/api\/v1\/kb\/assets\/(\d+)\/file/;
+const GRADE_RE = /(【确凿】|【推断】|【缺失】|未命中|命中)/g;
+
+const GRADE_CLASS: Record<string, string> = {
+  "【确凿】": "rounded px-1 py-0.5 font-medium text-emerald-800 bg-emerald-100",
+  "【推断】": "rounded px-1 py-0.5 font-medium text-amber-900 bg-amber-100",
+  "【缺失】": "rounded px-1 py-0.5 font-medium text-rose-800 bg-rose-100",
+  命中: "rounded px-1 py-0.5 font-medium text-emerald-800 bg-emerald-100",
+  未命中: "rounded px-1 py-0.5 font-medium text-rose-800 bg-rose-100",
+};
+
+function colorGradeText(text: string): ReactNode {
+  const parts = text.split(GRADE_RE);
+  if (parts.length === 1) return text;
+  return parts.map((part, index) => {
+    const cls = GRADE_CLASS[part];
+    if (!cls) return part;
+    return (
+      <span key={`${part}-${index}`} className={cls}>
+        {part}
+      </span>
+    );
+  });
+}
+
+function colorGradeNodes(nodes: ReactNode): ReactNode {
+  return Children.map(nodes, (child, index) => {
+    if (typeof child === "string" || typeof child === "number") {
+      return <span key={index}>{colorGradeText(String(child))}</span>;
+    }
+    if (!isValidElement<{ children?: ReactNode }>(child) || child.props.children == null) {
+      return child;
+    }
+    return cloneElement(child, { children: colorGradeNodes(child.props.children) });
+  });
+}
 
 function assetIdFromUrl(url: string): number | null {
   const matched = url.trim().match(ASSET_IMG_RE);
@@ -25,26 +60,26 @@ export function KbAnswerContent({
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
-          h1: ({ children }) => <h3 className="mt-3 text-[15px] font-semibold first:mt-0">{children}</h3>,
-          h2: ({ children }) => <h3 className="mt-3 text-[15px] font-semibold first:mt-0">{children}</h3>,
-          h3: ({ children }) => <h4 className="mt-2.5 text-[13px] font-semibold first:mt-0">{children}</h4>,
-          h4: ({ children }) => <h4 className="mt-2 text-[13px] font-semibold first:mt-0">{children}</h4>,
+          h1: ({ children }) => <h3 className="mt-3 text-[15px] font-semibold first:mt-0">{colorGradeNodes(children)}</h3>,
+          h2: ({ children }) => <h3 className="mt-3 text-[15px] font-semibold first:mt-0">{colorGradeNodes(children)}</h3>,
+          h3: ({ children }) => <h4 className="mt-2.5 text-[13px] font-semibold first:mt-0">{colorGradeNodes(children)}</h4>,
+          h4: ({ children }) => <h4 className="mt-2 text-[13px] font-semibold first:mt-0">{colorGradeNodes(children)}</h4>,
           p: ({ node, children }) => {
             const hasBlock = node?.children?.some(
               (child) => child.type === "element" && (child.tagName === "img" || child.tagName === "figure"),
             );
-            if (hasBlock) return <div className="leading-6">{children}</div>;
-            return <p className="leading-6">{children}</p>;
+            if (hasBlock) return <div className="leading-6">{colorGradeNodes(children)}</div>;
+            return <p className="leading-6">{colorGradeNodes(children)}</p>;
           },
           ul: ({ children }) => <ul className="my-1 list-disc space-y-1 pl-5 marker:text-[var(--muted)]">{children}</ul>,
           ol: ({ children }) => <ol className="my-1 list-decimal space-y-1 pl-5 marker:text-[var(--muted)]">{children}</ol>,
-          li: ({ children }) => <li className="leading-6">{children}</li>,
-          strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-          em: ({ children }) => <em className="italic">{children}</em>,
+          li: ({ children }) => <li className="leading-6">{colorGradeNodes(children)}</li>,
+          strong: ({ children }) => <strong className="font-semibold">{colorGradeNodes(children)}</strong>,
+          em: ({ children }) => <em className="italic">{colorGradeNodes(children)}</em>,
           hr: () => <hr className="my-3 border-[var(--line)]" />,
           blockquote: ({ children }) => (
             <blockquote className="rounded-r border-l-2 border-[var(--line)] bg-[var(--bg)] px-3 py-2 text-[13px] text-[var(--muted)]">
-              {children}
+              {colorGradeNodes(children)}
             </blockquote>
           ),
           code: ({ className, children }) => {
@@ -61,7 +96,7 @@ export function KbAnswerContent({
           ),
           thead: ({ children }) => <thead className="bg-[var(--bg)] text-[var(--muted)]">{children}</thead>,
           th: ({ children }) => <th className="border-b border-[var(--line)] px-3 py-2 font-medium">{children}</th>,
-          td: ({ children }) => <td className="border-b border-[var(--line)] px-3 py-2 align-top">{children}</td>,
+          td: ({ children }) => <td className="border-b border-[var(--line)] px-3 py-2 align-top">{colorGradeNodes(children)}</td>,
           a: ({ href, children }) => {
             const url = (href || "").trim();
             if (/^https?:\/\//i.test(url) || url.startsWith("/api/")) {
