@@ -293,6 +293,8 @@ export type KbAskHit = {
   images?: KbAskImage[];
 };
 
+export type KbAskKind = "answer" | "checklist";
+
 export type KbAskResult = {
   answer: string;
   citations: KbAskHit[];
@@ -301,6 +303,7 @@ export type KbAskResult = {
   wiki_update_hint?: string;
   used_vector?: boolean;
   session_id?: number;
+  ask_kind?: KbAskKind;
 };
 
 export type KbSession = {

@@ -666,6 +666,7 @@ export function askKbLibrary(
   evidenceMode: KbEvidenceMode | "",
   history: KbAskHistoryItem[] = [],
   sessionId: number | null = null,
+  askKind: "answer" | "checklist" = "answer",
 ) {
   return request<KbAskResult>(`/api/v1/kb/libraries/${libraryId}/ask`, {
     method: "POST",
@@ -674,6 +675,7 @@ export function askKbLibrary(
       folder_id: onlyFolder ? folderId : null,
       only_folder: onlyFolder && folderId != null,
       evidence_mode: evidenceMode || null,
+      ask_kind: askKind,
       history,
       session_id: sessionId,
     }),

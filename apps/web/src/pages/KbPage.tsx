@@ -35,7 +35,7 @@ import {
   updateKbLibraryPolicy,
   uploadKbDocument,
 } from "@/api/client";
-import type { KbAskResult, KbChunk, KbDocAsset, KbDocument, KbEvidenceMode, KbFolder, KbLibrary, KbSession, KbVisionEngine, KbWikiList } from "@/api/types";
+import type { KbAskKind, KbAskResult, KbChunk, KbDocAsset, KbDocument, KbEvidenceMode, KbFolder, KbLibrary, KbSession, KbVisionEngine, KbWikiList } from "@/api/types";
 import { answerHasAsset, KbAnswerContent } from "@/components/KbAnswerContent";
 import { ConfirmModal, Modal } from "@/components/Modal";
 import { PdfPreview } from "@/components/PdfPreview";
@@ -82,7 +82,10 @@ function AskTurnView({
     <div className="border-b border-[var(--line)] pb-4 last:border-b-0">
       <p className="text-[12px] text-[var(--muted)]">问</p>
       <p className="whitespace-pre-wrap">{turn.question}</p>
-      <p className="mt-3 text-[12px] text-[var(--muted)]">答</p>
+      <p className="mt-3 text-[12px] text-[var(--muted)]">{turn.result.ask_kind === "checklist" ? "核对清单" : "答"}</p>
+      {turn.result.ask_kind === "checklist" ? (
+        <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">以下为检索到的候选靶点，可能存在遗漏，所有内容请以原文为准。</p>
+      ) : null}
       <KbAnswerContent
         text={turn.result.answer}
         onOpenAsset={(assetId) => {
@@ -184,6 +187,7 @@ export function KbPage() {
   const [askDeleteSession, setAskDeleteSession] = useState<KbSession | null>(null);
   const [asking, setAsking] = useState(false);
   const [askMode, setAskMode] = useState<"" | KbEvidenceMode>("");
+  const [askKind, setAskKind] = useState<KbAskKind>("answer");
   const [wikiEnabled, setWikiEnabled] = useState(false);
   const [wikiLearn, setWikiLearn] = useState(false);
   const [visionEnabled, setVisionEnabled] = useState(false);
@@ -342,7 +346,7 @@ export function KbPage() {
     setError("");
     setHint("");
     setQuestion("");
-    askKbLibrary(libraryId, text, folderId, onlyFolder, askMode, history, sessionId)
+    askKbLibrary(libraryId, text, folderId, onlyFolder, askMode, history, sessionId, askKind)
       .then(async (data) => {
         if (data.session_id) setSessionId(data.session_id);
         setAskTurns((prev) => [...prev, { question: text, result: data }]);
@@ -657,6 +661,22 @@ export function KbPage() {
                 />
                 只搜当前文件夹
               </label>
+              <div className="flex border border-[var(--line)]">
+                <button
+                  type="button"
+                  className={`px-2.5 py-1.5 text-[13px] ${askKind === "answer" ? "bg-[var(--bg)]" : "text-[var(--muted)]"}`}
+                  onClick={() => setAskKind("answer")}
+                >
+                  回答
+                </button>
+                <button
+                  type="button"
+                  className={`border-l border-[var(--line)] px-2.5 py-1.5 text-[13px] ${askKind === "checklist" ? "bg-[var(--bg)]" : "text-[var(--muted)]"}`}
+                  onClick={() => setAskKind("checklist")}
+                >
+                  核对清单
+                </button>
+              </div>
               <select className={inputClass} value={askMode} onChange={(e) => setAskMode(e.target.value as "" | KbEvidenceMode)}>
                 <option value="">按库规则（当前：{evidenceLabel(library.evidence_mode || "strict")}）</option>
                 <option value="strict">严格出处</option>
@@ -669,7 +689,11 @@ export function KbPage() {
                 新对话
               </button>
             </div>
-            <p className="mt-1 text-[12px] leading-5 text-[var(--muted)]">{evidenceHint(askMode, library.evidence_mode || "strict")}</p>
+            <p className="mt-1 text-[12px] leading-5 text-[var(--muted)]">
+              {askKind === "checklist"
+                ? "核对清单：只出要素表，不下结论。候选靶点可能有漏，请对照原文。"
+                : evidenceHint(askMode, library.evidence_mode || "strict")}
+            </p>
           </div>
           </div>
         </div>

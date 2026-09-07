@@ -126,6 +126,7 @@ class AskIn(BaseModel):
     folder_id: int | None = None
     only_folder: bool = False
     evidence_mode: str | None = None
+    ask_kind: str = Field(default="answer", max_length=20)
     history: list[AskTurnIn] = Field(default_factory=list)
     session_id: int | None = None
 
@@ -565,6 +566,26 @@ def _learn_wikis(question: str, ranked: list, db: Session) -> str:
     return learn_hint(len(ranked), titles, truncated)
 
 
+def _ask_kind(raw: str | None) -> str:
+    """提问方式：回答或核对清单。其它值当回答。"""
+
+    return "checklist" if (raw or "").strip() == "checklist" else "answer"
+
+
+def _checklist_style() -> str:
+    """清单模式：只出要素表，不下结论。"""
+
+    return (
+        "你在做核对清单，不是回答是否合规、能不能过。"
+        "先按问句拆出要核对的要素，大约 3 到 8 项。"
+        "对每一项只根据本轮资料写：要素、命中或未命中、出处（资料序号和文件名）。"
+        "本轮没见到就写未命中，不要说整个库都没有，不要编第几章、第几页。"
+        "不要写可以通过、存在风险、建议批准这类结论。"
+        "用 Markdown 表格，表头为：要素 | 状态 | 出处 | 本轮见到的原文摘要。"
+        "摘要没有就写—。"
+    )
+
+
 def _ask_style(mode: str, rule: str) -> str:
     """拼给模型的回答约束。"""
 
@@ -609,19 +630,28 @@ def _search_question(question: str, history: list[AskTurnIn]) -> str:
     return question
 
 
-def _ask_messages(question: str, prompt: str, history: list[AskTurnIn]) -> list[dict]:
+def _ask_messages(question: str, prompt: str, history: list[AskTurnIn], ask_kind: str = "answer") -> list[dict]:
     """历史只帮听懂指代，证据仍是本轮资料。"""
 
+    if ask_kind == "checklist":
+        role = (
+            "你是知识库核对助手。只根据本轮资料做要素清单，不下结论。"
+            "用户可能接着上一句问。刚才的对话只用来听懂「那」「刚才」「这份」指什么。"
+            "编号、日期、金额等必须依据本轮资料。简称和全称对得上就视为同一类。"
+            "本轮没见到就写未命中，不要说整个库都没有，也不要编第几章、第几页。"
+        )
+    else:
+        role = (
+            "你是知识库助手，依据本轮资料原文和图上的说明作答，并标明出处。"
+            "用户可能接着上一句问。刚才的对话只用来听懂「那」「刚才」「这份」指什么。"
+            "编号、日期、金额、开户行、证书名称等事实必须依据本轮资料，不能拿上一轮回答当证据。"
+            "简称和全称对得上就视为同一类。"
+            "本轮检索到的内容里没有依据，就说当前检索到的内容中未找到，建议查阅原文确认，不要说整个库都没有，也不要编第几章、第几页。"
+        )
     messages = [
         {
             "role": "system",
-            "content": (
-                "你是知识库助手，依据本轮资料原文和图上的说明作答，并标明出处。"
-                "用户可能接着上一句问。刚才的对话只用来听懂「那」「刚才」「这份」指什么。"
-                "编号、日期、金额、开户行、证书名称等事实必须依据本轮资料，不能拿上一轮回答当证据。"
-                "简称和全称对得上就视为同一类。"
-                "本轮检索到的内容里没有依据，就说当前检索到的内容中未找到，建议查阅原文确认，不要说整个库都没有，也不要编第几章、第几页。"
-            ),
+            "content": role,
         }
     ]
     for turn in history:
@@ -704,6 +734,7 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
     search_q = _search_question(question, history)
     policy = parse_policy(lib)
     mode = resolve_mode(policy["evidence_mode"], body.evidence_mode)
+    ask_kind = _ask_kind(body.ask_kind)
     folders = db.scalars(select(KbFolder).where(KbFolder.library_id == library_id)).all()
     scope = folder_scope(list(folders), body.folder_id) if body.only_folder else None
     stmt = select(KbDocument).where(KbDocument.library_id == library_id)
@@ -759,6 +790,7 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
         "evidence_mode": mode,
         "wiki_update_hint": "",
         "used_vector": False,
+        "ask_kind": ask_kind,
     }
     if not ranked:
         return _finish_ask(db, library_id, body.session_id, question, empty)
@@ -775,19 +807,23 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
                 "evidence_mode": mode,
                 "wiki_update_hint": "",
                 "used_vector": used_vector,
+                "ask_kind": ask_kind,
             },
         )
-    prompt = (
-        _ask_style(mode, policy["rule"])
-        + "回答末尾用「依据：资料1、资料2」标出来源。\n\n"
-        + "\n\n".join(blocks)
-    )
+    if ask_kind == "checklist":
+        prompt = _checklist_style() + "\n\n" + "\n\n".join(blocks)
+    else:
+        prompt = (
+            _ask_style(mode, policy["rule"])
+            + "回答末尾用「依据：资料1、资料2」标出来源。\n\n"
+            + "\n\n".join(blocks)
+        )
     try:
-        answer = chat_complete(_ask_messages(question, prompt, history), timeout=ASK_ANSWER_TIMEOUT)
+        answer = chat_complete(_ask_messages(question, prompt, history, ask_kind), timeout=ASK_ANSWER_TIMEOUT)
     except ValueError as exc:
         return fail(str(exc))
     hint = ""
-    if policy["wiki_enabled"] and policy["wiki_learn"] and citations:
+    if ask_kind == "answer" and policy["wiki_enabled"] and policy["wiki_learn"] and citations:
         hint = _learn_wikis(question, ranked, db)
     return _finish_ask(
         db,
@@ -801,6 +837,7 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
             "evidence_mode": mode,
             "wiki_update_hint": hint,
             "used_vector": used_vector,
+            "ask_kind": ask_kind,
         },
     )
 
