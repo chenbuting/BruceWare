@@ -84,6 +84,7 @@ def load_llm() -> dict[str, str]:
         "image_api_key": str(stored.get("image_api_key") or "").strip(),
         "image_model": str(stored.get("image_model") or "gpt-image-1").strip() or "gpt-image-1",
         "embedding_base_url": str(stored.get("embedding_base_url") or "").strip(),
+        "embedding_api_key": str(stored.get("embedding_api_key") or "").strip(),
         "embedding_model": str(stored.get("embedding_model") or "text-embedding-3-small").strip()
         or "text-embedding-3-small",
     }
@@ -100,6 +101,7 @@ def llm_public() -> dict[str, Any]:
         "embedding_model": cfg.get("embedding_model") or "text-embedding-3-small",
         "has_key": bool(cfg["api_key"]),
         "has_image_key": bool(cfg.get("image_api_key")),
+        "has_embedding_key": bool(cfg.get("embedding_api_key")),
     }
 
 
@@ -132,19 +134,34 @@ def embedding_profile() -> str:
     return f"{model}@{extra}" if extra else model
 
 
+def _embedding_auth() -> tuple[str, str, str]:
+    """向量用自己的地址和 Key；没填就退回对话那套。"""
+
+    cfg = load_llm()
+    key = cfg.get("embedding_api_key") or cfg["api_key"]
+    if not key:
+        raise ValueError("请先在设置里填写向量 Key，或填写对话 Key")
+    return cfg.get("embedding_base_url") or cfg["base_url"], key, cfg.get("embedding_model") or "text-embedding-3-small"
+
+
+def can_embed() -> bool:
+    """有向量 Key 或对话 Key 就能算向量。"""
+
+    cfg = load_llm()
+    return bool(cfg.get("embedding_api_key") or cfg.get("api_key"))
+
+
 def _embed_once(texts: list[str], timeout: float) -> list[list[float]]:
     """调一次向量接口。一段就按字符串传，避免有的中转站不吃数组。"""
 
-    cfg = load_llm()
-    if not cfg["api_key"]:
-        raise ValueError("请先在设置里填写 AI Key")
-    url = _embeddings_url(cfg.get("embedding_base_url") or cfg["base_url"])
+    base_url, key, model = _embedding_auth()
+    url = _embeddings_url(base_url)
     payload = {
-        "model": cfg.get("embedding_model") or "text-embedding-3-small",
+        "model": model,
         "input": texts[0] if len(texts) == 1 else texts,
     }
     headers = {
-        "Authorization": f"Bearer {cfg['api_key']}",
+        "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }
     res = _post(url, timeout=timeout, json=payload, headers=headers, timeout_message="向量请求超时，请稍后再试。")

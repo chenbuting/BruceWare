@@ -40,8 +40,10 @@ export function SettingsPage() {
   const [llmEmbeddingModel, setLlmEmbeddingModel] = useState("text-embedding-3-small");
   const [llmKey, setLlmKey] = useState("");
   const [llmImageKey, setLlmImageKey] = useState("");
+  const [llmEmbeddingKey, setLlmEmbeddingKey] = useState("");
   const [hasLlmKey, setHasLlmKey] = useState(false);
   const [hasImageKey, setHasImageKey] = useState(false);
+  const [hasEmbeddingKey, setHasEmbeddingKey] = useState(false);
   const [filesRoot, setFilesRoot] = useState("");
   const [sftpHost, setSftpHost] = useState("");
   const [sftpPort, setSftpPort] = useState("22");
@@ -88,8 +90,10 @@ export function SettingsPage() {
       setLlmEmbeddingModel(data.llm.embedding_model || "text-embedding-3-small");
       setHasLlmKey(data.llm.has_key);
       setHasImageKey(data.llm.has_image_key);
+      setHasEmbeddingKey(Boolean(data.llm.has_embedding_key));
       setLlmKey("");
       setLlmImageKey("");
+      setLlmEmbeddingKey("");
     }
     setFilesRoot(data.files?.root || "");
     const sftp = data.files?.sftp;
@@ -225,6 +229,7 @@ export function SettingsPage() {
       embedding_model: llmEmbeddingModel,
       api_key: llmKey,
       image_api_key: llmImageKey,
+      embedding_api_key: llmEmbeddingKey,
     })
       .then((data) => {
         setInfo(data);
@@ -672,7 +677,7 @@ export function SettingsPage() {
           {!managing && visibleIds.includes("ai") ? (
             <Card title="AI" className="px-5 py-4">
               <p className="text-[13px] leading-6 text-[var(--muted)]">
-                对话、生图、向量可以填不同地址。Key 不回显，不改请留空。生图 Key、向量地址不填就用对话那套。
+                对话、生图、向量可以填不同地址和 Key。Key 不回显，不改请留空。生图、向量不填就用对话那套。
               </p>
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 <label className="sm:col-span-2">
@@ -702,7 +707,7 @@ export function SettingsPage() {
                 <div className="sm:col-span-2 rounded-md border-2 border-rose-600 bg-rose-50 px-3 py-3">
                   <p className="text-[14px] font-semibold text-rose-900">改向量设置有风险</p>
                   <p className="mt-1 text-[13px] leading-6 text-rose-900">
-                    换地址或模型后，知识库里已经算好的向量会作废。下次提问要整库重算，资料多会很慢，也更费接口。没把握不要改。Key 用对话的。
+                    换地址或模型后，知识库里已经算好的向量会作废。下次提问要整库重算，资料多会很慢，也更费接口。没把握不要改。Key 不填就用对话的。
                   </p>
                   <label className="mt-3 block">
                     <span className="mb-1 block text-rose-900">向量接口地址</span>
@@ -711,6 +716,10 @@ export function SettingsPage() {
                   <label className="mt-3 block">
                     <span className="mb-1 block text-rose-900">向量模型</span>
                     <input className={inputClass} value={llmEmbeddingModel} onChange={(e) => setLlmEmbeddingModel(e.target.value)} />
+                  </label>
+                  <label className="mt-3 block">
+                    <span className="mb-1 block text-rose-900">向量 Key{hasEmbeddingKey ? "（已保存，不改请留空）" : ""}</span>
+                    <input className={inputClass} type="password" value={llmEmbeddingKey} onChange={(e) => setLlmEmbeddingKey(e.target.value)} placeholder="不填就用上面的对话 Key" />
                   </label>
                 </div>
               </div>

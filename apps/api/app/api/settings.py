@@ -141,6 +141,7 @@ class LlmForm(BaseModel):
     embedding_model: str = "text-embedding-3-small"
     api_key: str = Field(default="", description="留空表示不改原 Key")
     image_api_key: str = Field(default="", description="留空表示不改原生图 Key")
+    embedding_api_key: str = Field(default="", description="留空表示不改原向量 Key")
 
 
 @router.put("/settings/llm")
@@ -152,6 +153,7 @@ def save_llm(form: LlmForm):
     old = existing.get("llm") if isinstance(existing.get("llm"), dict) else {}
     key = form.api_key.strip() or str(old.get("api_key") or "")
     image_key = form.image_api_key.strip() or str(old.get("image_api_key") or "")
+    embedding_key = form.embedding_api_key.strip() or str(old.get("embedding_api_key") or "")
     existing["llm"] = {
         "base_url": form.base_url.strip() or "https://api.openai.com/v1",
         "model": form.model.strip() or "gpt-4o-mini",
@@ -160,6 +162,7 @@ def save_llm(form: LlmForm):
         "api_key": key,
         "image_api_key": image_key,
         "embedding_base_url": form.embedding_base_url.strip(),
+        "embedding_api_key": embedding_key,
         "embedding_model": form.embedding_model.strip() or "text-embedding-3-small",
     }
     save_local_settings(settings.repo_root, existing)

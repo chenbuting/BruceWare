@@ -8,7 +8,7 @@ import math
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.ai import embed_texts, embedding_profile, llm_public
+from app.core.ai import can_embed, embed_texts, embedding_profile
 from app.kb.models import KbChunk, KbDocument
 from app.kb.search import _haystack, score_document, snippet_of, uncovered_terms
 
@@ -150,7 +150,7 @@ def update_chunk_text(db: Session, row: KbChunk, text: str) -> tuple[KbChunk, st
     row.edited = 1
     if not row.text:
         return row, "failed"
-    if not llm_public().get("has_key"):
+    if not can_embed():
         return row, "no_key"
     try:
         vectors = embed_texts([row.text])
@@ -169,7 +169,7 @@ def index_document(db: Session, row: KbDocument, force: bool = False) -> str:
     edited = db.scalar(select(KbChunk.id).where(KbChunk.document_id == row.id, KbChunk.edited == 1).limit(1))
     if edited:
         return "skipped_edited"
-    if not llm_public().get("has_key"):
+    if not can_embed():
         return "no_key"
     profile = embedding_profile()
     if not force and (row.embedding_profile or "") == profile:
@@ -278,7 +278,7 @@ def pack_ask_snippets(
 def score_chunks(db: Session, library_id: int, question: str, doc_ids: set[int] | None) -> DocHits:
     """每份资料按向量挑出分散的几块，并带上最高分左右邻居。"""
 
-    if not question.strip() or not llm_public().get("has_key"):
+    if not question.strip() or not can_embed():
         return {}
     try:
         query_vec = embed_texts([question])[0]

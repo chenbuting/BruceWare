@@ -34,6 +34,7 @@ export type LlmInfo = {
   embedding_model: string;
   has_key: boolean;
   has_image_key: boolean;
+  has_embedding_key: boolean;
 };
 
 export type FilesSftpSettings = {
@@ -111,6 +112,7 @@ export type LlmWrite = {
   embedding_model: string;
   api_key: string;
   image_api_key: string;
+  embedding_api_key: string;
 };
 
 export type WardrobeItem = {
