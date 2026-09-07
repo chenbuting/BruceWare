@@ -1,6 +1,8 @@
-import { Children, cloneElement, isValidElement, useMemo, type ReactNode } from "react";
+import { Children, cloneElement, isValidElement, useMemo, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+
+import { ImageLightbox } from "@/components/ImageLightbox";
 
 const ASSET_IMG_RE = /\/api\/v1\/kb\/assets\/(\d+)\/file/;
 const GRADE_RE = /(【确凿】|【推断】|【缺失】|未命中|命中)/g;
@@ -53,6 +55,7 @@ export function KbAnswerContent({
   onOpenAsset?: (assetId: number) => void;
 }) {
   const markdown = useMemo(() => (text || "").trim(), [text]);
+  const [zoom, setZoom] = useState<{ src: string; alt?: string } | null>(null);
   if (!markdown) return null;
 
   return (
@@ -114,21 +117,20 @@ export function KbAnswerContent({
             if (!url || (!assetId && !/^https?:\/\//i.test(url))) {
               return alt ? <span className="text-[12px] text-[var(--muted)]">[{alt}]</span> : null;
             }
-            const image = (
-              <img src={url} alt={alt || "图片"} className="max-h-64 w-auto rounded border border-[var(--line)] object-contain" />
-            );
-            if (assetId && onOpenAsset) {
-              return (
-                <button type="button" className="my-2 block max-w-full text-left" onClick={() => onOpenAsset(assetId)}>
-                  {image}
-                  {alt ? <span className="mt-1 block text-[12px] text-[var(--muted)]">{alt}</span> : null}
-                </button>
-              );
-            }
             return (
               <span className="my-2 block">
-                {image}
-                {alt ? <span className="mt-1 block text-[12px] text-[var(--muted)]">{alt}</span> : null}
+                <button type="button" className="block max-w-full text-left" title="点图放大" onClick={() => setZoom({ src: url, alt })}>
+                  <img src={url} alt={alt || "图片"} className="max-h-64 w-auto cursor-zoom-in rounded border border-[var(--line)] object-contain" />
+                </button>
+                {alt ? (
+                  assetId && onOpenAsset ? (
+                    <button type="button" className="mt-1 block text-[12px] text-[var(--muted)] underline" onClick={() => onOpenAsset(assetId)}>
+                      {alt}
+                    </button>
+                  ) : (
+                    <span className="mt-1 block text-[12px] text-[var(--muted)]">{alt}</span>
+                  )
+                ) : null}
               </span>
             );
           },
@@ -136,6 +138,7 @@ export function KbAnswerContent({
       >
         {markdown}
       </ReactMarkdown>
+      {zoom ? <ImageLightbox items={[zoom]} index={0} onClose={() => setZoom(null)} /> : null}
     </div>
   );
 }

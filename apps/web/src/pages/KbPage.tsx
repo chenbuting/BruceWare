@@ -37,6 +37,7 @@ import {
 } from "@/api/client";
 import type { KbAskKind, KbAskResult, KbChunk, KbDocAsset, KbDocument, KbEvidenceMode, KbFolder, KbLibrary, KbSession, KbVisionEngine, KbWikiList } from "@/api/types";
 import { answerHasAsset, KbAnswerContent } from "@/components/KbAnswerContent";
+import { ImageLightbox } from "@/components/ImageLightbox";
 import { ConfirmModal, Modal } from "@/components/Modal";
 import { PdfPreview } from "@/components/PdfPreview";
 
@@ -102,6 +103,8 @@ function AskTurnView({
   onOpenCitation: (id: number) => void;
 }) {
   const images = relatedAskImages(turn.result).filter((img) => !answerHasAsset(turn.result.answer, img.id));
+  const [zoom, setZoom] = useState<number | null>(null);
+  const zoomItems = images.map((img) => ({ src: img.url || kbAssetFileUrl(img.id), alt: img.alt }));
   return (
     <div className="border-b border-[var(--line)] pb-4 last:border-b-0">
       <p className="text-[12px] text-[var(--muted)]">问</p>
@@ -136,30 +139,31 @@ function AskTurnView({
       {!turn.streaming && images.length ? (
         <div className="mt-3">
           {turn.result.ask_kind === "checklist" ? (
-            <p className="mb-1 text-[12px] text-[var(--muted)]">清单里写到的图（点开看资料）</p>
+            <p className="mb-1 text-[12px] text-[var(--muted)]">清单里写到的图（点图放大，点名字看资料）</p>
           ) : null}
           <div className="flex flex-wrap gap-2">
-            {images.map((img) => (
-              <button
-                key={img.id}
-                type="button"
-                className={`${turn.result.ask_kind === "checklist" ? "w-24" : "max-w-[12rem]"} text-left text-[12px] text-[var(--muted)]`}
-                title={img.alt}
-                onClick={() => onOpenCitation(img.docId)}
-              >
-                <img
-                  src={img.url || kbAssetFileUrl(img.id)}
-                  alt={img.alt}
-                  className={
-                    turn.result.ask_kind === "checklist"
-                      ? "h-24 w-24 rounded border border-[var(--line)] object-cover"
-                      : "max-h-40 w-auto rounded border border-[var(--line)] object-contain"
-                  }
-                />
-                {img.alt ? <span className={`mt-1 block ${turn.result.ask_kind === "checklist" ? "truncate" : ""}`}>{img.alt}</span> : null}
-              </button>
+            {images.map((img, index) => (
+              <span key={img.id} className={`${turn.result.ask_kind === "checklist" ? "w-24" : "max-w-[12rem]"} text-[12px] text-[var(--muted)]`}>
+                <button type="button" className="block text-left" title="点图放大" onClick={() => setZoom(index)}>
+                  <img
+                    src={img.url || kbAssetFileUrl(img.id)}
+                    alt={img.alt}
+                    className={
+                      turn.result.ask_kind === "checklist"
+                        ? "h-24 w-24 cursor-zoom-in rounded border border-[var(--line)] object-cover"
+                        : "max-h-40 w-auto cursor-zoom-in rounded border border-[var(--line)] object-contain"
+                    }
+                  />
+                </button>
+                {img.alt ? (
+                  <button type="button" className={`mt-1 block underline ${turn.result.ask_kind === "checklist" ? "truncate" : ""}`} onClick={() => onOpenCitation(img.docId)}>
+                    {img.alt}
+                  </button>
+                ) : null}
+              </span>
             ))}
           </div>
+          {zoom != null ? <ImageLightbox items={zoomItems} index={zoom} onClose={() => setZoom(null)} onIndex={setZoom} /> : null}
         </div>
       ) : null}
       {!turn.streaming && turn.result.citations.length ? (
@@ -1656,6 +1660,7 @@ function AssetWords({
   const [openId, setOpenId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [showAll, setShowAll] = useState(false);
+  const [zoom, setZoom] = useState<number | null>(null);
 
   function noteOf(row: KbDocAsset) {
     return { caption: row.caption || "", keywords: row.keywords || "", words: row.ocr_text || "" };
@@ -1665,6 +1670,7 @@ function AssetWords({
     let alive = true;
     setOpenId(null);
     setShowAll(false);
+    setZoom(null);
     setLoading(true);
     fetchKbDocumentAssets(docId)
       .then((data) => {
@@ -1723,75 +1729,84 @@ function AssetWords({
     });
   }
 
+  const editing = items.find((row) => row.id === openId);
+  const editDraft = editing ? drafts[editing.id] || noteOf(editing) : null;
+  const zoomItems = items.map((row) => ({ src: row.url || kbAssetFileUrl(row.id), alt: row.alt || row.caption || "图" }));
+
   return (
     <div className="mt-4 border-t border-[var(--line)] pt-3">
       <p className="mb-1 font-medium">图的说明</p>
-      <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">点开一张再改。图意是这张图是什么，关键词方便搜，图上的字是抄下来的。</p>
-      {visible.map((item) => {
-        const draft = drafts[item.id] || noteOf(item);
-        const open = openId === item.id;
-        return (
-          <div key={item.id} className="mb-2 border-b border-[var(--line)] pb-2">
-            <button
-              type="button"
-              className="flex w-full items-center gap-2 text-left"
-              title={item.alt}
-              onClick={() => setOpenId(open ? null : item.id)}
-            >
-              <img src={item.url || kbAssetFileUrl(item.id)} alt={item.alt} loading="lazy" decoding="async" className="h-12 w-12 shrink-0 rounded border border-[var(--line)] object-contain" />
-              <span className="min-w-0 flex-1">
-                <span className="block text-[12px] text-[var(--muted)]">{item.alt || "图"}</span>
-                <span className="block truncate">{draft.caption || "还没写图意"}</span>
-              </span>
-              <span className="shrink-0 text-[12px] text-[var(--muted)]">{open ? "收起" : "改说明"}</span>
-            </button>
-            {open ? (
-              <div className="mt-2">
-                <input
-                  className={`${inputClass} mb-1 w-full`}
-                  value={draft.caption}
-                  maxLength={200}
-                  onChange={(e) => patchDraft(item.id, "caption", e.target.value)}
-                  placeholder={seeingId === item.id ? "正在认这张…" : "图意，没字的图也写是什么"}
+      <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">点图放大。图意、关键词、图上的字要点「改说明」再写。</p>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
+        {visible.map((item) => {
+          const draft = drafts[item.id] || noteOf(item);
+          const open = openId === item.id;
+          const zoomIndex = items.findIndex((row) => row.id === item.id);
+          return (
+            <div key={item.id} className={`rounded-md border px-2 py-2 ${open ? "border-[var(--text)]" : "border-[var(--line)]"}`}>
+              <button type="button" className="block w-full" title="点图放大" onClick={() => setZoom(zoomIndex)}>
+                <img
+                  src={item.url || kbAssetFileUrl(item.id)}
+                  alt={item.alt}
+                  loading="lazy"
+                  decoding="async"
+                  className="mx-auto h-28 w-full cursor-zoom-in object-contain"
                 />
-                <input
-                  className={`${inputClass} mb-1 w-full`}
-                  value={draft.keywords}
-                  maxLength={200}
-                  onChange={(e) => patchDraft(item.id, "keywords", e.target.value)}
-                  placeholder="关键词，逗号分隔"
-                />
-                <textarea
-                  className={`${inputClass} min-h-[4.5rem] w-full`}
-                  value={draft.words}
-                  maxLength={1500}
-                  onChange={(e) => patchDraft(item.id, "words", e.target.value)}
-                  placeholder="图上的字，没有就留空"
-                />
-                <div className="mt-1 flex flex-wrap gap-2">
-                  <button type="button" className={btnClass} disabled={visionLocked || seeingId != null} onClick={() => seeOne(item)}>
-                    {seeingId === item.id ? "在认…" : "识图"}
-                  </button>
-                  <button type="button" className={btnClass} disabled={savingId === item.id} onClick={() => save(item)}>
-                    {savingId === item.id ? "在存…" : "保存"}
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="mt-1">
-                <button type="button" className={btnClass} disabled={visionLocked || seeingId != null} onClick={() => seeOne(item)}>
+              </button>
+              <p className="mt-1 truncate text-[12px] text-[var(--muted)]">{item.alt || "图"}</p>
+              <p className="truncate">{draft.caption || "还没写图意"}</p>
+              <div className="mt-1 flex flex-wrap gap-2 text-[12px]">
+                <button type="button" className="text-[var(--muted)] underline" onClick={() => setOpenId(open ? null : item.id)}>
+                  {open ? "收起" : "改说明"}
+                </button>
+                <button type="button" className="text-[var(--muted)] underline disabled:opacity-50" disabled={visionLocked || seeingId != null} onClick={() => seeOne(item)}>
                   {seeingId === item.id ? "在认…" : "识图"}
                 </button>
               </div>
-            )}
-          </div>
-        );
-      })}
+            </div>
+          );
+        })}
+      </div>
       {!showAll && items.length > limit ? (
-        <button type="button" className={`${btnClass} mb-2`} onClick={() => setShowAll(true)}>
+        <button type="button" className={`${btnClass} mt-2`} onClick={() => setShowAll(true)}>
           还有 {items.length - limit} 张，展开
         </button>
       ) : null}
+      {editing && editDraft ? (
+        <div className="mt-3 rounded-md border border-[var(--line)] p-3">
+          <p className="mb-2 font-medium">{editing.alt || "图"} · 改说明</p>
+          <input
+            className={`${inputClass} mb-1 w-full`}
+            value={editDraft.caption}
+            maxLength={200}
+            onChange={(e) => patchDraft(editing.id, "caption", e.target.value)}
+            placeholder={seeingId === editing.id ? "正在认这张…" : "图意，没字的图也写是什么"}
+          />
+          <input
+            className={`${inputClass} mb-1 w-full`}
+            value={editDraft.keywords}
+            maxLength={200}
+            onChange={(e) => patchDraft(editing.id, "keywords", e.target.value)}
+            placeholder="关键词，逗号分隔"
+          />
+          <textarea
+            className={`${inputClass} min-h-[4.5rem] w-full`}
+            value={editDraft.words}
+            maxLength={1500}
+            onChange={(e) => patchDraft(editing.id, "words", e.target.value)}
+            placeholder="图上的字，没有就留空"
+          />
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button type="button" className={btnClass} disabled={visionLocked || seeingId != null} onClick={() => seeOne(editing)}>
+              {seeingId === editing.id ? "在认…" : "识图"}
+            </button>
+            <button type="button" className={btnClass} disabled={savingId === editing.id} onClick={() => save(editing)}>
+              {savingId === editing.id ? "在存…" : "保存"}
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {zoom != null ? <ImageLightbox items={zoomItems} index={zoom} onClose={() => setZoom(null)} onIndex={setZoom} /> : null}
     </div>
   );
 }
@@ -1850,6 +1865,7 @@ function ChunkWords({ docId, onError }: { docId: number; onError: (message: stri
     <div className="mt-4 border-t border-[var(--line)] pt-3">
       <p className="mb-1 font-medium">切片</p>
       <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">提问时尽量用这些块。点开一块能改，改完会按这一块重新找。</p>
+      <div className="max-h-64 overflow-auto pr-1">
       {items.map((item, order) => {
         const open = openId === item.id;
         const draft = drafts[item.id] ?? item.text;
@@ -1877,6 +1893,7 @@ function ChunkWords({ docId, onError }: { docId: number; onError: (message: stri
           </div>
         );
       })}
+      </div>
     </div>
   );
 }
@@ -1910,11 +1927,13 @@ function PreviewPane({
   const [draft, setDraft] = useState(item.wiki_summary || "");
   const [saving, setSaving] = useState(false);
   const [showExtras, setShowExtras] = useState(false);
+  const [zoomFile, setZoomFile] = useState(false);
   useEffect(() => {
     setDraft(item.wiki_summary || "");
   }, [item.id, item.wiki_summary]);
   useEffect(() => {
     setShowExtras(false);
+    setZoomFile(false);
     const timer = window.setTimeout(() => setShowExtras(true), 0);
     return () => window.clearTimeout(timer);
   }, [item.id]);
@@ -1937,7 +1956,11 @@ function PreviewPane({
         ) : null}
       </div>
       {item.tags ? <p className="mb-2 text-[var(--muted)]">{item.tags}</p> : null}
-      {item.preview === "image" ? <img src={url} alt={item.title} className="max-h-[60vh] max-w-full object-contain" /> : null}
+      {item.preview === "image" ? (
+        <button type="button" className="block max-w-full" title="点图放大" onClick={() => setZoomFile(true)}>
+          <img src={url} alt={item.title} className="max-h-[40vh] max-w-full cursor-zoom-in object-contain" />
+        </button>
+      ) : null}
       {item.preview === "pdf" ? <PdfPreview url={url} /> : null}
       {item.preview === "text" ? (
         <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap bg-[var(--bg)] px-2 py-2 leading-6">{text || "正在读取…"}</pre>
@@ -2023,6 +2046,7 @@ function PreviewPane({
           </p>
         )}
       </div>
+      {zoomFile ? <ImageLightbox items={[{ src: url, alt: item.title }]} index={0} onClose={() => setZoomFile(false)} /> : null}
     </div>
   );
 }
