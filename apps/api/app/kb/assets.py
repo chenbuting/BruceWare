@@ -279,9 +279,14 @@ def _parse_picked_ids(text: str, allowed: set[int]) -> list[int]:
 
 
 def user_wants_images(question: str) -> bool:
-    """这句是不是在要看图或原件。"""
+    """这句是不是在要看图或原件。长粘贴不当成要图。"""
 
-    return bool(_IMAGE_INTENT.search((question or "").strip()))
+    text = (question or "").strip()
+    if not text:
+        return False
+    if len(text) > 160:
+        return bool(re.search(r"(?:看看|给我|出示|打开).{0,8}(?:图|照|原件)|把图|配图|有图吗", text, re.I))
+    return bool(_IMAGE_INTENT.search(text))
 
 
 def _meaning_terms(question: str) -> list[str]:

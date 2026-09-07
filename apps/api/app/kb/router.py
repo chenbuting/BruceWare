@@ -602,7 +602,8 @@ def _ask_style(mode: str, rule: str) -> str:
     if extra:
         text += f" 额外规则：{extra}"
     text += (
-        " 用 Markdown 排版：对比用表格，条目用列表。"
+        "用简短问答作答：先结论，再补出处。不要输出「要素 / 状态 / 出处」那种核对清单大表。"
+        "问句即使很长，也概括成几段话，不要逐条做成审计表。要对表请用户改用核对清单。"
         "问句里的简称（如 3C、CCC）和资料里的全称（如中国国家强制性产品认证）对得上就视为同一类，不要只因没写这三个字母就说没有。"
         "若要展示图，把资料里「可展示的图」那一行 ![说明](地址) 原样插到对应句子旁边，不要改地址。"
         "不需要配图就不要插入图片。"
@@ -643,7 +644,8 @@ def _ask_messages(question: str, prompt: str, history: list[AskTurnIn], ask_kind
         )
     else:
         role = (
-            "你是知识库助手，依据本轮资料原文和图上的说明作答，并标明出处。"
+            "你是知识库助手，用问答形式作答：先给结论，再标明出处。"
+            "不要输出核对清单表（要素、状态、出处、摘要）。上一轮若是表格，这一轮不要照抄格式。"
             "用户可能接着上一句问。刚才的对话只用来听懂「那」「刚才」「这份」指什么。"
             "编号、日期、金额、开户行、证书名称等事实必须依据本轮资料，不能拿上一轮回答当证据。"
             "简称和全称对得上就视为同一类。"
@@ -773,7 +775,7 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
             block += f"\n【图上的说明】\n{notes}"
         if ask_kind != "checklist" and shown:
             lines = []
-            for item in shown:
+            for item in shown[:4]:
                 data = asset_dict(item)
                 name = (item.alt_text or "图").strip()
                 lines.append(f"![{name}]({data['url']})")
@@ -826,16 +828,17 @@ def ask_library(library_id: int, body: AskIn, db: Session = Depends(get_db)):
     hint = ""
     if ask_kind == "answer" and policy["wiki_enabled"] and policy["wiki_learn"] and citations:
         hint = _learn_wikis(question, ranked, db)
-    if ask_kind == "checklist":
-        pool = []
-        for row, _score, _snip in ranked_full:
-            pool.extend(note_pics.get(row.id, []))
-        cited = pick_assets_cited_in_answer(pool, answer)
-        by_doc: dict[int, list] = {}
-        for item in cited:
-            by_doc.setdefault(item.document_id, []).append(item)
-        for hit in citations:
-            hit["images"] = [asset_dict(item) for item in by_doc.get(hit["id"], [])]
+    pool = []
+    for row, _score, _snip in ranked_full:
+        pool.extend(note_pics.get(row.id, []))
+        if ask_kind != "checklist":
+            pool.extend(show_pics.get(row.id, []))
+    cited = pick_assets_cited_in_answer(pool, answer)
+    by_doc: dict[int, list] = {}
+    for item in cited:
+        by_doc.setdefault(item.document_id, []).append(item)
+    for hit in citations:
+        hit["images"] = [asset_dict(item) for item in by_doc.get(hit["id"], [])]
     return _finish_ask(
         db,
         library_id,
