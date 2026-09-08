@@ -5,19 +5,23 @@ import remarkGfm from "remark-gfm";
 import { ImageLightbox } from "@/components/ImageLightbox";
 
 const ASSET_IMG_RE = /\/api\/v1\/kb\/assets\/(\d+)\/file/;
-const GRADE_RE = /(【确凿】|【推断】|【缺失】|【冲突】|未命中|命中|冲突)/g;
+const GRADE_RE = /(【确凿】|【推断】|【缺失】|【冲突】)/g;
 
 const GRADE_CLASS: Record<string, string> = {
-  "【确凿】": "rounded px-1 py-0.5 font-medium text-emerald-800 bg-emerald-100",
-  "【推断】": "rounded px-1 py-0.5 font-medium text-amber-900 bg-amber-100",
-  "【缺失】": "rounded px-1 py-0.5 font-medium text-rose-800 bg-rose-100",
-  "【冲突】": "rounded px-1 py-0.5 font-medium text-violet-800 bg-violet-100",
-  命中: "rounded px-1 py-0.5 font-medium text-emerald-800 bg-emerald-100",
-  未命中: "rounded px-1 py-0.5 font-medium text-rose-800 bg-rose-100",
-  冲突: "rounded px-1 py-0.5 font-medium text-violet-800 bg-violet-100",
+  "【确凿】": "font-medium text-emerald-700",
+  "【推断】": "font-medium text-amber-800",
+  "【缺失】": "font-medium text-rose-700",
+  "【冲突】": "font-medium text-violet-700",
+  命中: "font-medium text-emerald-700",
+  未命中: "font-medium text-rose-700",
+  冲突: "font-medium text-violet-700",
 };
 
 function colorGradeText(text: string): ReactNode {
+  const exact = GRADE_CLASS[text];
+  if (exact && !text.startsWith("【")) {
+    return <span className={exact}>{text}</span>;
+  }
   const parts = text.split(GRADE_RE);
   if (parts.length === 1) return text;
   return parts.map((part, index) => {

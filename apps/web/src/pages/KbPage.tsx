@@ -111,94 +111,52 @@ function AskTurnView({
   const images = relatedAskImages(turn.result).filter((img) => !answerHasAsset(turn.result.answer, img.id));
   const [zoom, setZoom] = useState<number | null>(null);
   const zoomItems = images.map((img) => ({ src: img.url || kbAssetFileUrl(img.id), alt: img.alt }));
+  const searchLabel = turn.result.used_vector ? "关键词 + 向量" : turn.result.used_vector === false ? "关键词" : "";
   return (
-    <div className="border-b border-[var(--line)] pb-4 last:border-b-0">
+    <div className="border-b border-[var(--line)] py-4 last:border-b-0">
       <p className="text-[12px] text-[var(--muted)]">问</p>
-      <p className="whitespace-pre-wrap">{turn.question}</p>
-      <p className="mt-3 text-[12px] text-[var(--muted)]">{turn.result.ask_kind === "checklist" ? "核对清单" : "答"}</p>
-      {turn.result.ask_kind === "checklist" ? (
-        <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">只对照本轮有没有见到，不替你下合不合格的结论。</p>
-      ) : (
-        <p className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-[var(--muted)]">
-          <span>
-            <span className="rounded px-1 py-0.5 font-medium text-emerald-800 bg-emerald-100">【确凿】</span>
-            对得上本轮原文
-          </span>
-          <span>
-            <span className="rounded px-1 py-0.5 font-medium text-amber-900 bg-amber-100">【推断】</span>
-            只在宽松出现，须核对
-          </span>
-          <span>
-            <span className="rounded px-1 py-0.5 font-medium text-rose-800 bg-rose-100">【缺失】</span>
-            本轮没见到
-          </span>
-          <span>
-            <span className="rounded px-1 py-0.5 font-medium text-violet-800 bg-violet-100">【冲突】</span>
-            本轮见到多种说法
-          </span>
-        </p>
-      )}
-      <KbAnswerContent
-        text={turn.result.answer || (turn.streaming ? "在找资料…" : "")}
-        onOpenAsset={(assetId) => {
-          const hit = turn.result.citations.find((item) => (item.images || []).some((img) => img.id === assetId));
-          if (hit) onOpenCitation(hit.id);
-        }}
-      />
+      <p className="mt-0.5 whitespace-pre-wrap leading-6">{turn.question}</p>
+      <p className="mt-4 text-[12px] text-[var(--muted)]">{turn.result.ask_kind === "checklist" ? "核对清单" : "答"}</p>
+      <div className="mt-1">
+        <KbAnswerContent
+          text={turn.result.answer || (turn.streaming ? "在找资料…" : "")}
+          onOpenAsset={(assetId) => {
+            const hit = turn.result.citations.find((item) => (item.images || []).some((img) => img.id === assetId));
+            if (hit) onOpenCitation(hit.id);
+          }}
+        />
+      </div>
       {turn.streaming ? <span className="mt-1 inline-block animate-pulse text-[var(--muted)]">▍</span> : null}
       {!turn.streaming && images.length ? (
-        <div className="mt-3">
-          {turn.result.ask_kind === "checklist" ? (
-            <p className="mb-1 text-[12px] text-[var(--muted)]">清单里写到的图（点图放大，点名字看资料）</p>
-          ) : null}
-          <div className="flex flex-wrap gap-2">
-            {images.map((img, index) => (
-              <span key={img.id} className={`${turn.result.ask_kind === "checklist" ? "w-24" : "max-w-[12rem]"} text-[12px] text-[var(--muted)]`}>
-                <button type="button" className="block text-left" title="点图放大" onClick={() => setZoom(index)}>
-                  <img
-                    src={img.url || kbAssetFileUrl(img.id)}
-                    alt={img.alt}
-                    className={
-                      turn.result.ask_kind === "checklist"
-                        ? "h-24 w-24 cursor-zoom-in rounded border border-[var(--line)] object-cover"
-                        : "max-h-40 w-auto cursor-zoom-in rounded border border-[var(--line)] object-contain"
-                    }
-                  />
-                </button>
-                {img.alt ? (
-                  <button type="button" className={`mt-1 block underline ${turn.result.ask_kind === "checklist" ? "truncate" : ""}`} onClick={() => onOpenCitation(img.docId)}>
-                    {img.alt}
-                  </button>
-                ) : null}
-              </span>
-            ))}
-          </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {images.map((img, index) => (
+            <button key={img.id} type="button" className="block text-left" title="点图放大" onClick={() => setZoom(index)}>
+              <img
+                src={img.url || kbAssetFileUrl(img.id)}
+                alt={img.alt}
+                className="max-h-28 w-auto cursor-zoom-in rounded border border-[var(--line)] object-contain"
+              />
+            </button>
+          ))}
           {zoom != null ? <ImageLightbox items={zoomItems} index={zoom} onClose={() => setZoom(null)} onIndex={setZoom} /> : null}
         </div>
       ) : null}
-      {!turn.streaming && turn.result.citations.length ? (
-        <div className="mt-3">
-          <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[var(--muted)]">
-            <span>出处</span>
-            {turn.result.citations.map((hit) => (
-              <button key={hit.id} type="button" className="underline hover:text-[var(--text)]" onClick={() => onOpenCitation(hit.id)}>
-                {hit.title}
-              </button>
-            ))}
-          </p>
-          <p className="mt-1 text-[12px] leading-5 text-[var(--muted)]">
-            {turn.result.ask_kind === "checklist"
-              ? "本表只展示本轮检索命中情况，合不合格请对照原文自行判断。没提到的不等于没有。"
-              : "本次依据以上资料，库里可能还有，没提到的不等于没有。"}
-          </p>
+      {!turn.streaming && (turn.result.citations.length || searchLabel || turn.result.wiki_update_hint) ? (
+        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-[var(--line)] pt-2 text-[12px] text-[var(--muted)]">
+          {turn.result.citations.length ? (
+            <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span>出处</span>
+              {turn.result.citations.map((hit) => (
+                <button key={hit.id} type="button" className="underline hover:text-[var(--text)]" onClick={() => onOpenCitation(hit.id)}>
+                  {hit.title}
+                </button>
+              ))}
+            </span>
+          ) : null}
+          {searchLabel ? <span>{searchLabel}</span> : null}
+          {turn.result.wiki_update_hint ? <span>{turn.result.wiki_update_hint}</span> : null}
         </div>
       ) : null}
-      {turn.result.used_vector !== undefined ? (
-        <p className="mt-2 text-[12px] text-[var(--muted)]">
-          {turn.result.used_vector ? "本次检索：关键词 + 向量" : "本次检索：关键词"}
-        </p>
-      ) : null}
-      {!turn.streaming && turn.result.wiki_update_hint ? <p className="mt-2 text-[12px] text-[var(--muted)]">{turn.result.wiki_update_hint}</p> : null}
     </div>
   );
 }
@@ -215,9 +173,9 @@ function evidenceHint(mode: "" | KbEvidenceMode, libraryMode: KbEvidenceMode = "
     return `出处规则跟库走，当前是${evidenceLabel(libraryMode)}。`;
   }
   if (mode === "loose") {
-    return "宽松：可以【推断】，须写明让你核对原文。仍要标明哪份资料。";
+    return "宽松：可以【推断】，须核对原文。【确凿】绿、【推断】黄、【缺失】红、【冲突】紫。";
   }
-  return "严格：只标【确凿】或【缺失】，不推断，不说可能。";
+  return "严格：只标【确凿】或【缺失】，不推断。【确凿】绿、【缺失】红、【冲突】紫。";
 }
 
 /** 知识库：整理资料，并按当前库提问 */
