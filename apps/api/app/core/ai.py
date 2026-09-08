@@ -144,11 +144,57 @@ def _embedding_auth() -> tuple[str, str, str]:
     return cfg.get("embedding_base_url") or cfg["base_url"], key, cfg.get("embedding_model") or "text-embedding-3-small"
 
 
+_EMBED_FAIL_TTL = 600
+_embed_fail: dict[str, tuple[float, str]] = {}
+_HARD_EMBED = (
+    "not supported",
+    "does not exist",
+    "invalid model",
+    "unknown model",
+    "incorrect api key",
+    "unauthorized",
+    "401",
+    "403",
+    "404",
+)
+
+
+def embed_blocked() -> str:
+    """当前向量模型刚失败过，还在冷却。有原因就返回原因。"""
+
+    item = _embed_fail.get(embedding_profile())
+    if not item:
+        return ""
+    ts, message = item
+    if time.time() - ts > _EMBED_FAIL_TTL:
+        _embed_fail.pop(embedding_profile(), None)
+        return ""
+    return message
+
+
+def clear_embed_fail() -> None:
+    """改过向量设置后清掉失败记录，下次提问再试。"""
+
+    _embed_fail.clear()
+
+
+def _mark_embed_fail(exc: BaseException) -> None:
+    text = str(exc).replace("\n", " ").strip()[:160]
+    _embed_fail[embedding_profile()] = (time.time(), text or "向量失败")
+
+
+def _is_hard_embed_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return any(word in text for word in _HARD_EMBED)
+
+
 def can_embed() -> bool:
-    """有向量 Key 或对话 Key 就能算向量。"""
+    """有向量 Key 或对话 Key 就能算向量。刚失败过先不试。"""
 
     cfg = load_llm()
-    return bool(cfg.get("embedding_api_key") or cfg.get("api_key"))
+    if not (cfg.get("embedding_api_key") or cfg.get("api_key")):
+        return False
+    return not embed_blocked()
 
 
 def _embed_once(texts: list[str], timeout: float) -> list[list[float]]:
@@ -176,8 +222,11 @@ def _embed_once(texts: list[str], timeout: float) -> list[list[float]]:
 
 
 def embed_texts(texts: list[str], timeout: float = 90) -> list[list[float]]:
-    """把几段文字变成向量。一次多段失败就改成一段一段算。"""
+    """把几段文字变成向量。一次多段失败就改成一段一段算；模型不可用则立刻停。"""
 
+    blocked = embed_blocked()
+    if blocked:
+        raise ValueError(blocked)
     cleaned = [item.strip() for item in texts if (item or "").strip()]
     if not cleaned:
         return []
@@ -188,18 +237,22 @@ def embed_texts(texts: list[str], timeout: float = 90) -> list[list[float]]:
         batch = cleaned[index : index + size]
         try:
             vectors = _embed_once(batch, timeout)
-        except ValueError:
-            if size > 1:
+        except ValueError as exc:
+            if size > 1 and not _is_hard_embed_error(exc):
                 size = 1
                 continue
+            _mark_embed_fail(exc)
             raise
         if len(vectors) != len(batch):
             if size > 1:
                 size = 1
                 continue
-            raise ValueError("向量条数对不上")
+            exc = ValueError("向量条数对不上")
+            _mark_embed_fail(exc)
+            raise exc
         out.extend(vectors)
         index += len(batch)
+    _embed_fail.pop(embedding_profile(), None)
     return out
 
 

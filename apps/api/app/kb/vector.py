@@ -219,10 +219,16 @@ def index_document(db: Session, row: KbDocument, force: bool = False) -> str:
     if not can_embed():
         return "no_key"
     profile = embedding_profile()
-    if not force and (row.embedding_profile or "") == profile:
+    if not force:
         chunks = list_chunks(db, row.id)
         stamp = row.vector_stamp or ""
-        if chunks and (not stamp or stamp == content_stamp(row, chunks)):
+        now = content_stamp(row, chunks) if chunks else ""
+        current_ok = [item for item in chunks if (item.profile or "") == profile and (item.embedding or "").strip() not in {"", "[]"}]
+        if chunks and len(current_ok) == len(chunks) and (not stamp or stamp == now):
+            if (row.embedding_profile or "") != profile or (row.vector_stamp or "") != now:
+                mark_vector_ready(row, chunks)
+            return "skipped"
+        if chunks and (row.embedding_profile or "") == profile and (not stamp or stamp == now):
             return "skipped"
     body = (row.search_text or "").strip()
     if not body:

@@ -189,7 +189,11 @@ function AskTurnView({
           </p>
         </div>
       ) : null}
-      {!turn.streaming && turn.result.used_vector ? <p className="mt-2 text-[12px] text-[var(--muted)]">本次还用了向量检索，换说法也能对上。</p> : null}
+      {turn.result.used_vector !== undefined ? (
+        <p className="mt-2 text-[12px] text-[var(--muted)]">
+          {turn.result.used_vector ? "本次检索：关键词 + 向量" : "本次检索：关键词"}
+        </p>
+      ) : null}
       {!turn.streaming && turn.result.wiki_update_hint ? <p className="mt-2 text-[12px] text-[var(--muted)]">{turn.result.wiki_update_hint}</p> : null}
     </div>
   );

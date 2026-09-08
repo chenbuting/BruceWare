@@ -8,7 +8,7 @@ from typing import Any, Literal
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from app.core.ai import chat_complete, llm_public
+from app.core.ai import chat_complete, clear_embed_fail, llm_public
 from app.core.config import describe_database, get_settings, resolve_database_url
 from app.core.generated import generated_info, move_app_data, sqlite_path_for, uses_local_sqlite
 from app.core.local_settings import (
@@ -166,6 +166,7 @@ def save_llm(form: LlmForm):
         "embedding_model": form.embedding_model.strip() or "text-embedding-3-small",
     }
     save_local_settings(settings.repo_root, existing)
+    clear_embed_fail()
     return ok(_settings_payload())
 
 
