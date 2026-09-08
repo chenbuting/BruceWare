@@ -132,6 +132,10 @@ function AskTurnView({
             <span className="rounded px-1 py-0.5 font-medium text-rose-800 bg-rose-100">【缺失】</span>
             本轮没见到
           </span>
+          <span>
+            <span className="rounded px-1 py-0.5 font-medium text-violet-800 bg-violet-100">【冲突】</span>
+            本轮见到多种说法
+          </span>
         </p>
       )}
       <KbAnswerContent
