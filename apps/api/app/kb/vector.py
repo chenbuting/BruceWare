@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 
@@ -102,6 +103,49 @@ def vector_payload(status: str, *, chunk: bool = False) -> dict:
     }
 
 
+def content_stamp(row: KbDocument, chunks: list[KbChunk] | None = None) -> str:
+    """正文、标题、标签、切片变了，这个戳就会变。"""
+
+    chunk_blob = "\n".join(f"{item.chunk_index}:{(item.text or '').strip()}" for item in (chunks or []))
+    raw = f"{row.file_hash or ''}\n{row.title or ''}\n{row.tags or ''}\n{row.search_text or ''}\n{chunk_blob}"
+    return hashlib.sha256(raw.encode("utf-8", errors="ignore")).hexdigest()[:24]
+
+
+def mark_vector_ready(row: KbDocument, chunks: list[KbChunk] | None = None) -> None:
+    """向量算成功后记下：当前模型和这份内容对得上。"""
+
+    row.embedding_profile = embedding_profile()
+    row.vector_stamp = content_stamp(row, chunks)
+
+
+def document_vector_state(db: Session, row: KbDocument) -> str:
+    """none 未向量，ready 已向量，stale 内容或模型变了要重算。"""
+
+    current = embedding_profile()
+    chunks = list_chunks(db, row.id)
+    with_vec = [item for item in chunks if (item.embedding or "").strip() not in {"", "[]"}]
+    if not with_vec:
+        return "none"
+    current_ok = [item for item in with_vec if (item.profile or "") == current]
+    if not current_ok or len(current_ok) < len(chunks):
+        return "stale"
+    now = content_stamp(row, chunks)
+    stamp = row.vector_stamp or ""
+    profile = row.embedding_profile or ""
+    if not stamp:
+        # 老数据没戳：没手改过就先记下当前内容，以后改了才能看出来
+        if any(item.edited for item in chunks):
+            return "stale"
+        if profile in {"", current}:
+            row.embedding_profile = current
+            row.vector_stamp = now
+            return "ready"
+        return "stale"
+    if profile != current or stamp != now:
+        return "stale"
+    return "ready"
+
+
 def chunk_dict(row: KbChunk) -> dict:
     preview = (row.text or "").replace("\n", " ").strip()
     return {
@@ -160,6 +204,9 @@ def update_chunk_text(db: Session, row: KbChunk, text: str) -> tuple[KbChunk, st
         return row, "failed"
     row.embedding = json.dumps(vectors[0], ensure_ascii=False)
     row.profile = embedding_profile()
+    doc = db.get(KbDocument, row.document_id)
+    if doc is not None:
+        mark_vector_ready(doc, list_chunks(db, doc.id))
     return row, "updated"
 
 
@@ -173,8 +220,9 @@ def index_document(db: Session, row: KbDocument, force: bool = False) -> str:
         return "no_key"
     profile = embedding_profile()
     if not force and (row.embedding_profile or "") == profile:
-        exists = db.scalar(select(KbChunk.id).where(KbChunk.document_id == row.id).limit(1))
-        if exists:
+        chunks = list_chunks(db, row.id)
+        stamp = row.vector_stamp or ""
+        if chunks and (not stamp or stamp == content_stamp(row, chunks)):
             return "skipped"
     body = (row.search_text or "").strip()
     if not body:
@@ -200,7 +248,8 @@ def index_document(db: Session, row: KbDocument, force: bool = False) -> str:
                 profile=profile,
             )
         )
-    row.embedding_profile = profile
+    db.flush()
+    mark_vector_ready(row, list_chunks(db, row.id))
     return "updated"
 
 

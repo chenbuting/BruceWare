@@ -49,6 +49,7 @@ from app.kb.search import folder_scope, snippet_of
 from app.kb.vector import (
     chunk_dict,
     clear_chunks,
+    document_vector_state,
     ensure_chunks,
     hybrid_rank,
     index_document,
@@ -168,8 +169,11 @@ def _folder_dict(row: KbFolder) -> dict:
     }
 
 
-def _doc_dict(row: KbDocument) -> dict:
+def _doc_dict(row: KbDocument, db: Session | None = None) -> dict:
     note = parse_wiki(row)
+    state = "none"
+    if db is not None:
+        state = document_vector_state(db, row)
     return {
         "id": row.id,
         "library_id": row.library_id,
@@ -188,6 +192,7 @@ def _doc_dict(row: KbDocument) -> dict:
         "wiki_summary": note.summary,
         "wiki_updated_at": note.updated_at,
         "wiki_stale": note.stale,
+        "vector_state": state,
         "created_at": _iso(row.created_at),
         "updated_at": _iso(row.updated_at),
     }
@@ -448,7 +453,9 @@ def list_documents(
                 continue
         if tag_text and tag_text not in (row.tags or ""):
             continue
-        items.append(_doc_dict(row))
+        items.append(_doc_dict(row, db))
+    if db.dirty:
+        db.commit()
     return ok({"items": items})
 
 
@@ -501,7 +508,7 @@ async def upload_document(
     index_document(db, row)
     db.commit()
     db.refresh(row)
-    return ok(_doc_dict(row))
+    return ok(_doc_dict(row, db))
 
 
 def _fill_search_text(row: KbDocument) -> None:
@@ -990,7 +997,10 @@ def get_document(doc_id: int, db: Session = Depends(get_db)):
     row = db.get(KbDocument, doc_id)
     if row is None:
         return fail("这份资料不存在", 404)
-    return ok(_doc_dict(row))
+    data = _doc_dict(row, db)
+    if db.dirty:
+        db.commit()
+    return ok(data)
 
 
 @router.get("/kb/documents/{doc_id}/chunks")
@@ -1126,7 +1136,7 @@ def _save_wiki(row: KbDocument, summary: str, db: Session):
     row.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(row)
-    return ok(_doc_dict(row))
+    return ok(_doc_dict(row, db))
 
 
 @router.post("/kb/documents/{doc_id}/wiki")
@@ -1187,7 +1197,7 @@ def clear_wiki(doc_id: int, db: Session = Depends(get_db)):
     row.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(row)
-    return ok(_doc_dict(row))
+    return ok(_doc_dict(row, db))
 
 
 @router.put("/kb/documents/{doc_id}")
@@ -1209,7 +1219,7 @@ def update_document(doc_id: int, body: DocumentPatch, db: Session = Depends(get_
     row.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(row)
-    return ok(_doc_dict(row))
+    return ok(_doc_dict(row, db))
 
 
 @router.delete("/kb/documents/{doc_id}")

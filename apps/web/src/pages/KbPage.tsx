@@ -58,6 +58,12 @@ function evidenceLabel(mode: KbEvidenceMode) {
   return mode === "loose" ? "宽松概述" : "严格出处";
 }
 
+function vectorBadge(state?: KbDocument["vector_state"]) {
+  if (state === "ready") return <span className="shrink-0 text-[12px] text-[var(--ok)]">已向量</span>;
+  if (state === "stale") return <span className="shrink-0 text-[12px] text-amber-800">待重算</span>;
+  return <span className="shrink-0 text-[12px] text-[var(--muted)]">未向量</span>;
+}
+
 const ASK_TURN_LIMIT = 6;
 
 type AskTurn = {
@@ -215,6 +221,8 @@ export function KbPage() {
   const draftsRef = useRef<Record<string, SessionDraft>>({ "n:0": emptyDraft("n:0") });
   const currentKeyRef = useRef("n:0");
   const libraryIdRef = useRef<number | null>(null);
+  const folderIdRef = useRef<number | null>(null);
+  const previewRef = useRef<KbDocument | null>(null);
   const newDraftSeq = useRef(0);
   const [drafts, setDrafts] = useState<Record<string, SessionDraft>>({ "n:0": emptyDraft("n:0") });
   const [currentKey, setCurrentKey] = useState("n:0");
@@ -275,6 +283,8 @@ export function KbPage() {
 
   const library = libraries.find((item) => item.id === libraryId) || null;
   libraryIdRef.current = libraryId;
+  folderIdRef.current = folderId;
+  previewRef.current = preview;
 
   async function loadLibraries(preferId?: number | null) {
     const data = await fetchKbLibraries();
@@ -383,6 +393,11 @@ export function KbPage() {
         setAssetTick((n) => n + 1);
       }
       setHint(`已认完 ${done} 张`);
+      try {
+        applyDoc(await fetchKbDocument(item.id));
+      } catch {
+        /* 徽章刷新失败不影响识图结果 */
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "识图失败");
     } finally {
@@ -596,9 +611,13 @@ export function KbPage() {
         if (libraryIdRef.current === libraryId) {
           const listed = await fetchKbSessions(libraryId);
           if (libraryIdRef.current === libraryId) setSessions(listed.items);
-        }
-        if (data.wiki_update_hint && preview) {
-          applyDoc(await fetchKbDocument(preview.id));
+          try {
+            await loadDocs(libraryId, folderIdRef.current);
+            const open = previewRef.current;
+            if (open) applyDoc(await fetchKbDocument(open.id));
+          } catch {
+            /* 徽章刷新失败不影响回答 */
+          }
         }
       })
       .catch((err: Error) => {
@@ -1137,6 +1156,7 @@ export function KbPage() {
                   <button type="button" className="flex min-w-0 items-center gap-2 text-left" onClick={() => setPreview(item)}>
                     <Icon className={`h-4 w-4 shrink-0 ${color}`} />
                     <span className="truncate">{item.title}</span>
+                    {vectorBadge(item.vector_state)}
                     {item.tags ? <span className="truncate text-[var(--muted)]">{item.tags}</span> : null}
                   </button>
                     <span className="flex shrink-0 gap-2 text-[var(--muted)]">
@@ -1649,12 +1669,14 @@ function AssetWords({
   visionLocked,
   onHint,
   onError,
+  onDocChange,
 }: {
   docId: number;
   refreshTick: number;
   visionLocked: boolean;
   onHint: (message: string, ok: boolean) => void;
   onError: (message: string) => void;
+  onDocChange: () => void;
 }) {
   const [items, setItems] = useState<KbDocAsset[]>([]);
   const [drafts, setDrafts] = useState<Record<number, { caption: string; keywords: string; words: string }>>({});
@@ -1733,6 +1755,7 @@ function AssetWords({
         const text = row.vector_hint || (row.vector_ok ? "字已保存，向量已更新。" : "字已保存，向量没更新。");
         onHint(text, !!row.vector_ok);
         setEditHint({ text, ok: !!row.vector_ok });
+        onDocChange();
       })
       .catch((err: Error) => onError(err.message))
       .finally(() => setSavingId(null));
@@ -1746,6 +1769,7 @@ function AssetWords({
         const text = row.vector_hint || (row.vector_ok ? "已识图，向量已更新。" : "已识图，向量没更新。");
         onHint(text, !!row.vector_ok);
         setEditHint({ text, ok: !!row.vector_ok });
+        onDocChange();
       })
       .catch((err: Error) => onError(err.message))
       .finally(() => setSeeingId(null));
@@ -1861,7 +1885,17 @@ function AssetWords({
 }
 
 /** 预览里看切片、改字。提问会尽量用这些块。 */
-function ChunkWords({ docId, onHint, onError }: { docId: number; onHint: (message: string, ok: boolean) => void; onError: (message: string) => void }) {
+function ChunkWords({
+  docId,
+  onHint,
+  onError,
+  onDocChange,
+}: {
+  docId: number;
+  onHint: (message: string, ok: boolean) => void;
+  onError: (message: string) => void;
+  onDocChange: () => void;
+}) {
   const [items, setItems] = useState<KbChunk[]>([]);
   const [drafts, setDrafts] = useState<Record<number, string>>({});
   const [openId, setOpenId] = useState<number | null>(null);
@@ -1906,6 +1940,7 @@ function ChunkWords({ docId, onHint, onError }: { docId: number; onHint: (messag
         setItems((list) => list.map((one) => (one.id === row.id ? row : one)));
         setDrafts((map) => ({ ...map, [row.id]: row.text }));
         onHint(row.vector_hint || (row.vector_ok ? "字已保存，这一块的向量已更新。" : "字已保存，向量没更新。"), !!row.vector_ok);
+        onDocChange();
       })
       .catch((err: Error) => onError(err.message))
       .finally(() => setSavingId(null));
@@ -2008,7 +2043,10 @@ function PreviewPane({
   return (
     <div className="text-[13px]">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <p className="font-medium">{item.title}</p>
+        <p className="flex flex-wrap items-center gap-2 font-medium">
+          <span>{item.title}</span>
+          {vectorBadge(item.vector_state)}
+        </p>
         {visionEnabled ? (
           <button type="button" className={btnClass} disabled={busy || (visionLocked && !recognizing)} onClick={onRecognizeAll}>
             {recognizing ? "停止" : "全部识图"}
@@ -2033,8 +2071,24 @@ function PreviewPane({
 
       {showExtras ? (
         <>
-          <AssetWords docId={item.id} refreshTick={assetTick} visionLocked={visionLocked} onHint={tellVector} onError={onError} />
-          <ChunkWords docId={item.id} onHint={tellVector} onError={onError} />
+          <AssetWords
+            docId={item.id}
+            refreshTick={assetTick}
+            visionLocked={visionLocked}
+            onHint={tellVector}
+            onError={onError}
+            onDocChange={() => {
+              void fetchKbDocument(item.id).then(onSaved);
+            }}
+          />
+          <ChunkWords
+            docId={item.id}
+            onHint={tellVector}
+            onError={onError}
+            onDocChange={() => {
+              void fetchKbDocument(item.id).then(onSaved);
+            }}
+          />
         </>
       ) : (
         <p className="mt-4 text-[12px] text-[var(--muted)]">正在加载图和切片…</p>

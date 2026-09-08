@@ -91,16 +91,17 @@ def _ensure_portal_columns(engine: Engine) -> None:
 
 
 def _ensure_kb_columns(engine: Engine) -> None:
-    """旧库补上知识库检索正文。"""
+    """旧库补上知识库检索正文和向量核对戳。"""
 
     inspector = inspect(engine)
     if "kb_documents" not in inspector.get_table_names():
         return
     cols = {item["name"] for item in inspector.get_columns("kb_documents")}
-    if "search_text" in cols:
-        return
     with engine.begin() as conn:
-        conn.execute(text("ALTER TABLE kb_documents ADD COLUMN search_text TEXT DEFAULT ''"))
+        if "search_text" not in cols:
+            conn.execute(text("ALTER TABLE kb_documents ADD COLUMN search_text TEXT DEFAULT ''"))
+        if "vector_stamp" not in cols:
+            conn.execute(text("ALTER TABLE kb_documents ADD COLUMN vector_stamp VARCHAR(40) DEFAULT ''"))
 
 
 def _ensure_kb_asset_columns(engine: Engine) -> None:

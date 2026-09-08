@@ -51,6 +51,7 @@ class KbDocument(Base):
     files_ref = Column(Text, nullable=False, default="")
     wiki_json = Column(Text, nullable=False, default="")
     embedding_profile = Column(String(150), nullable=False, default="")
+    vector_stamp = Column(String(40), nullable=False, default="")
     extra = Column(Text, nullable=False, default="")
     search_text = Column(Text, nullable=False, default="")
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
