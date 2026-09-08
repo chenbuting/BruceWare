@@ -1,6 +1,7 @@
 """知识库接口：多库、文件夹、上传、预览、提问。"""
 
 import json
+import re
 from datetime import datetime
 from threading import Thread
 from urllib.parse import quote
@@ -627,6 +628,7 @@ def _checklist_style() -> str:
         "不要写可以通过、存在风险、建议批准这类结论。"
         "用 Markdown 表格，表头为：要素 | 状态 | 出处 | 本轮见到的原文摘要。"
         "摘要没有就写—。冲突时摘要里并列各处原文。不要插入图片。"
+        "没用上的资料不要写进表，也不要写进出处。"
         "表结束后另起一行写：本表只展示本轮检索命中情况，合不合格请对照原文自行判断。"
     )
 
@@ -903,7 +905,7 @@ def _prepare_ask(library_id: int, body: AskIn, db):
     else:
         prompt = (
             _ask_style(mode, policy["rule"])
-            + "回答末尾用「依据：资料1、资料2」标出来源。\n\n"
+            + "回答末尾用「依据：资料1、资料2」标出来源。只写本轮真正用到的（有原文支撑结论或冲突的），没用上、只是路过的不要写。\n\n"
             + "\n\n".join(blocks)
         )
     return {
@@ -922,8 +924,47 @@ def _prepare_ask(library_id: int, body: AskIn, db):
     }, None
 
 
+_YIJU_RE = re.compile(r"依据[：:][^\n]*\s*$")
+_UNUSED_HINT = re.compile(r"未提供|没有提供|未见|未提到|没用上|未写|未给出|未包含")
+
+
+def _used_citation_indexes(citations: list, answer: str) -> set[int]:
+    """回答正文里真正用到的资料序号。只说没见到的不算。"""
+
+    if not citations or not (answer or "").strip():
+        return set()
+    body = _YIJU_RE.sub("", answer)
+    used: set[int] = set()
+    for match in re.finditer(r"资料\s*(\d+)", body):
+        index = int(match.group(1))
+        window = body[max(0, match.start() - 12) : match.end() + 20]
+        if _UNUSED_HINT.search(window):
+            continue
+        used.add(index)
+    if not used:
+        for index, hit in enumerate(citations, start=1):
+            title = (hit.get("title") or "").strip()
+            if title and title in body:
+                used.add(index)
+    return {index for index in used if 1 <= index <= len(citations)}
+
+
+def _keep_used_citations(citations: list, answer: str) -> tuple[list, str]:
+    """出处和依据只留真正用到的资料。"""
+
+    used = _used_citation_indexes(citations, answer)
+    if not used:
+        return citations, answer
+    kept = [hit for index, hit in enumerate(citations, start=1) if index in used]
+    labels = "、".join(f"资料{index}" for index in sorted(used))
+    line = f"依据：{labels}"
+    if _YIJU_RE.search(answer or ""):
+        answer = _YIJU_RE.sub(line, (answer or "").rstrip())
+    return kept, answer
+
+
 def _finalize_llm_ask(prep: dict, answer: str) -> dict:
-    citations = prep["citations"]
+    citations, answer = _keep_used_citations(prep["citations"], answer)
     _fill_cited_images(citations, prep["ranked_full"], prep["note_pics"], prep["show_pics"], answer, prep["ask_kind"])
     hint = ""
     if prep["should_learn"]:
