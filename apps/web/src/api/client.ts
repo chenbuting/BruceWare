@@ -23,6 +23,9 @@ import type {
   PortalLink,
   ResumeDoc,
   SettingsInfo,
+  DataRow,
+  DataRowList,
+  DataTableInfo,
   WardrobeDetected,
   WardrobeItem,
   WardrobeLook,
@@ -818,4 +821,37 @@ export function saveKbWiki(id: number, summary: string) {
 
 export function deleteKbWiki(id: number) {
   return request<KbDocument>(`/api/v1/kb/documents/${id}/wiki`, { method: "DELETE" });
+}
+
+export function fetchDataTables() {
+  return request<{ items: DataTableInfo[] }>("/api/v1/data/tables");
+}
+
+export function fetchDataRows(table: string, page = 1, q = "") {
+  const query = new URLSearchParams({ page: String(page), page_size: "30", q });
+  return request<DataRowList>(`/api/v1/data/tables/${encodeURIComponent(table)}/rows?${query}`);
+}
+
+export function fetchDataRow(table: string, id: string) {
+  return request<DataRow>(`/api/v1/data/tables/${encodeURIComponent(table)}/rows/${encodeURIComponent(id)}`);
+}
+
+export function createDataRow(table: string, values: DataRow) {
+  return request<DataRow>(`/api/v1/data/tables/${encodeURIComponent(table)}/rows`, {
+    method: "POST",
+    body: JSON.stringify({ values }),
+  });
+}
+
+export function updateDataRow(table: string, id: string, values: DataRow) {
+  return request<DataRow>(`/api/v1/data/tables/${encodeURIComponent(table)}/rows/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: JSON.stringify({ values }),
+  });
+}
+
+export function deleteDataRow(table: string, id: string) {
+  return request<boolean>(`/api/v1/data/tables/${encodeURIComponent(table)}/rows/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
 }

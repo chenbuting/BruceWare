@@ -351,3 +351,26 @@ export type KbDocument = {
   created_at: string;
   updated_at: string;
 };
+
+export type DataColumn = {
+  name: string;
+  type: "integer" | "datetime" | "number" | "text";
+  readonly: boolean;
+  primary: boolean;
+  nullable: boolean;
+};
+
+export type DataTableInfo = {
+  name: string;
+  label: string;
+  columns: DataColumn[];
+};
+
+export type DataRow = Record<string, string | number | boolean | null>;
+
+export type DataRowList = {
+  items: DataRow[];
+  total: number;
+  page: number;
+  page_size: number;
+};

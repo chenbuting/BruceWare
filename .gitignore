@@ -16,8 +16,8 @@ venv/
 .pytest_cache/
 *.log
 
-# 本地数据（含导入的简历内容）
-data/
+# 本地数据（含导入的简历内容；只忽略仓库根目录，别挡住模块里的 data）
+/data/
 *.db
 *.sqlite3
 *.docx

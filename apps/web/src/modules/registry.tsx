@@ -1,5 +1,6 @@
 import type { ComponentType } from "react";
 
+import { DataPage } from "@/pages/DataPage";
 import { FilesPage } from "@/pages/FilesPage";
 import { HelpPage } from "@/pages/HelpPage";
 import { KbPage } from "@/pages/KbPage";
@@ -60,6 +61,13 @@ export const MODULE_PAGES: Record<string, ModulePageEntry> = {
     desc: "管理本机或服务器上的文件夹。先在设置里指定一边或两边。",
     wide: true,
     page: FilesPage,
+  },
+  data: {
+    title: "数据",
+    desc: "查看和改数据库里的表。新表会自动出现。向量和路径只能看。删除只去记录。",
+    wide: true,
+    fill: true,
+    page: DataPage,
   },
 };
 

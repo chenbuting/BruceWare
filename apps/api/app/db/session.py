@@ -51,10 +51,7 @@ def connect_database(url: str) -> None:
     _Db.url = url
     _Db.engine = create_engine(url, **_engine_kwargs(url))
     _Db.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_Db.engine)
-    from app.portal.models import PortalLink  # noqa: F401
-    from app.resume.models import ResumeDoc, ResumeInterview, ResumeInterviewMessage  # noqa: F401
-    from app.wardrobe.models import WardrobeItem, WardrobeLook, WardrobeStyle  # noqa: F401
-    from app.kb.models import KbAsset, KbChunk, KbDocument, KbFolder, KbLibrary, KbSession, KbSessionTurn  # noqa: F401
+    _import_model_modules()
 
     Base.metadata.create_all(bind=_Db.engine)
     _ensure_resume_columns(_Db.engine)
@@ -62,6 +59,19 @@ def connect_database(url: str) -> None:
     _ensure_kb_columns(_Db.engine)
     _ensure_kb_asset_columns(_Db.engine)
     _ensure_kb_chunk_columns(_Db.engine)
+
+
+def _import_model_modules() -> None:
+    """把各模块的 models 挂上，新模块加了表就会进库。"""
+
+    import importlib
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    for child in sorted(root.iterdir()):
+        if not child.is_dir() or not (child / "models.py").is_file():
+            continue
+        importlib.import_module(f"app.{child.name}.models")
 
 
 def _ensure_resume_columns(engine: Engine) -> None:

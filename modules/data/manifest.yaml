@@ -1,0 +1,8 @@
+id: data
+name: 数据
+kind: app
+description: 查看和改数据库里的表，表会自动出现。只删记录，不删磁盘文件。
+version: 0.1.0
+web:
+  route_prefix: /m/data
+  nav_label: 数据
