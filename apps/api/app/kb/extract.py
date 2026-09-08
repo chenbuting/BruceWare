@@ -22,8 +22,8 @@ def is_sheet_name(file_name: str) -> bool:
     return Path(file_name or "").suffix.lower() in _SHEET_SUFFIXES
 
 
-def extract_search_text(file_name: str, data: bytes) -> str:
-    """按后缀抽正文，失败返回空字符串。"""
+def extract_search_text(file_name: str, data: bytes, *, collapse: bool = True) -> str:
+    """按后缀抽正文，失败返回空字符串。collapse=False 时保留换行，给预览用。"""
 
     suffix = Path(file_name or "").suffix.lower()
     text = ""
@@ -43,7 +43,9 @@ def extract_search_text(file_name: str, data: bytes) -> str:
     except Exception:
         text = ""
     limit = _SHEET_MAX_CHARS if suffix in _SHEET_SUFFIXES else _MAX_CHARS
-    return " ".join(text.split())[:limit]
+    if collapse:
+        return " ".join(text.split())[:limit]
+    return text[:limit]
 
 
 def _decode_text(data: bytes) -> str:

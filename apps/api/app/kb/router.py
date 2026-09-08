@@ -1401,6 +1401,8 @@ def download_asset(asset_id: int, db: Session = Depends(get_db)):
 
 @router.get("/kb/documents/{doc_id}/text")
 def read_document_text(doc_id: int, db: Session = Depends(get_db)):
+    """预览正文。表格走抽字，不要把 xlsx 压缩包当文本读。"""
+
     row = db.get(KbDocument, doc_id)
     if row is None:
         return fail("这份资料不存在", 404)
@@ -1408,7 +1410,15 @@ def read_document_text(doc_id: int, db: Session = Depends(get_db)):
         return fail("这份不是文本，请用预览打开")
     try:
         path = abs_path(row.library_id, row.rel_path)
-        text = path.read_text(encoding="utf-8", errors="ignore")
+        data = path.read_bytes()
     except (ValueError, OSError):
         return fail("读不了这份文本", 404)
+    text = extract_search_text(row.file_name, data, collapse=False)
+    if is_sheet_name(row.file_name):
+        _fill_search_text(row)
+        index_document(db, row)
+        if db.dirty:
+            db.commit()
+    if not text.strip():
+        return fail("这份表格抽不出字")
     return ok({"text": text})
