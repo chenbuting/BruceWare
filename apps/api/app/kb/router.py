@@ -599,6 +599,17 @@ def _ask_kind(raw: str | None) -> str:
     return "checklist" if (raw or "").strip() == "checklist" else "answer"
 
 
+def _meaning_rule() -> str:
+    """按事情类别判断，不靠问句和原文几个字是否相同。"""
+
+    return (
+        "判断靠事情的类别，不靠几个字是否相同。"
+        "禁止因为原文没出现问句里的原词就报【缺失】或未命中。"
+        "原文用了别的叫法，但说的是问的那一类事情，必须当见到，写出原文里的叫法和内容。"
+        "只有原文自己标明是另一类用途时，才不能顶替。"
+    )
+
+
 def _conflict_rule(*, pick: bool) -> str:
     """本轮资料打架时必须标出来，不许只报一条。"""
 
@@ -611,8 +622,7 @@ def _conflict_rule(*, pick: bool) -> str:
         "本轮资料（正文、切片、图上的说明）对同一事实出现不同写法时，"
         "例如同一项住所、同一项日期、同一项名称、同一项金额不一致，必须标【冲突】，"
         "把各处原文和出处都列出来（资料序号、文件名；用到图就写图号）。"
-        "原文自己写了不同名目的，不算冲突，要分开答："
-        "例如企业电话和开户电话、联系人和法定代表人，各写各的，不要标【冲突】。"
+        "原文标明是不同用途、不同名目的两项，分开答，不要标【冲突】。"
         + judge
     )
 
@@ -661,7 +671,8 @@ def _ask_style(mode: str, rule: str) -> str:
         "按正常对话作答：先把问题听懂，用合适的方式说清楚，并标明出处。"
         "不要每次都套「要素 / 状态 / 出处」那种固定清单格式。"
         "用户要表格、对比或列举时，可以用普通表格或列表，格式跟着问句走，不要锁死一种模板。"
-        "问句里的简称（如 3C、CCC）和资料里的全称（如中国国家强制性产品认证）对得上就视为同一类，不要只因没写这三个字母就说没有。"
+        + _meaning_rule()
+        + "问句里的简称和资料里的全称对得上就视为同一类，不要只因用词不完全一样就说没有。"
         "若要展示图，把资料里「可展示的图」那一行 ![说明](地址) 原样插到对应句子旁边，不要改地址。"
         "不需要配图就不要插入图片。"
     )
@@ -689,6 +700,36 @@ def _search_question(question: str, history: list[AskTurnIn]) -> str:
     return question
 
 
+def _rewrite_search(question: str) -> str:
+    """按这句问话的意思补检索说法，不写死对照表。失败就仍用原句。"""
+
+    q = (question or "").strip()
+    if not q or not llm_public().get("has_key"):
+        return q
+    try:
+        text = chat_complete(
+            [
+                {"role": "system", "content": "你只改写检索用语，不回答问题，不编造事实。"},
+                {
+                    "role": "user",
+                    "content": (
+                        "按意思写出这类事实在资料里可能怎么写，方便检索。"
+                        "不要只重复问句里的原词，也不要写成固定对照表。"
+                        "不要编造号码、地址、日期。不要解释。不超过80字。\n\n"
+                        f"{q}"
+                    ),
+                },
+            ],
+            timeout=18,
+        )
+    except Exception:
+        return q
+    extra = " ".join((text or "").split())
+    if not extra:
+        return q
+    return f"{q}\n{extra[:160]}"
+
+
 def _ask_messages(question: str, prompt: str, history: list[AskTurnIn], ask_kind: str = "answer") -> list[dict]:
     """历史只帮听懂指代，证据仍是本轮资料。"""
 
@@ -697,8 +738,9 @@ def _ask_messages(question: str, prompt: str, history: list[AskTurnIn], ask_kind
             "你是知识库核对助手。只根据本轮资料做要素清单，不下结论。"
             "用户可能接着上一句问。刚才的对话只用来听懂「那」「刚才」「这份」指什么。"
             "编号、日期、金额等必须依据本轮资料。简称和全称对得上就视为同一类。"
-            "同一事实出现不同写法必须标冲突，把各处原文和出处都列出，不要只报一条，也不要裁定哪个对。"
-            "不同名目不要标冲突，例如企业电话和开户电话要分开写。"
+            + _meaning_rule()
+            + "同一事实出现不同写法必须标冲突，把各处原文和出处都列出，不要只报一条，也不要裁定哪个对。"
+            "原文标明用途不同的两项分开写，不要标冲突。"
             "本轮没见到就写未命中，不要说整个库都没有或已穷举，也不要编第几章、第几页。"
         )
     else:
@@ -707,9 +749,10 @@ def _ask_messages(question: str, prompt: str, history: list[AskTurnIn], ask_kind
             "不要每次都套同一种固定表格。用户要表就出普通表，要一句话就说一句话，不要照抄上一轮格式。"
             "用户可能接着上一句问。刚才的对话只用来听懂「那」「刚才」「这份」指什么。"
             "编号、日期、金额、开户行、证书名称等事实必须依据本轮资料，不能拿上一轮回答当证据。"
+            + _meaning_rule() +
             "简称和全称对得上就视为同一类。"
             "同一事实出现不同写法必须标【冲突】，把各处原文和出处都列出，不要只报一条。"
-            "不同名目不要标冲突，例如企业电话和开户电话要分开写。"
+            "原文标明用途不同的两项分开写，不要标冲突。"
             "先结论，有原文就引用一两句。分级规则看下面的回答约束。"
             "本轮检索到的内容里没有依据，就说当前检索到的内容中未找到，建议查阅原文确认，不要说整个库都没有，也不要编第几章、第几页。"
         )
@@ -828,7 +871,7 @@ def _prepare_ask(library_id: int, body: AskIn, db):
     if not question:
         return None, fail("请先写问题")
     history = _ask_history(body.history)
-    search_q = _search_question(question, history)
+    search_q = _rewrite_search(_search_question(question, history))
     policy = parse_policy(lib)
     mode = resolve_mode(policy["evidence_mode"], body.evidence_mode)
     ask_kind = _ask_kind(body.ask_kind)

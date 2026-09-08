@@ -18,7 +18,7 @@ _CHUNK_OVERLAP = 60
 _MAX_CHUNKS = 40
 _VEC_FLOOR = 0.28
 _PER_DOC_CHUNKS = 3
-_INDEX_GAP = 3
+_INDEX_GAP = 1
 _ASK_CHUNK_LIMIT = 10
 
 # 一份资料：最高分，以及候选块 (块序号, 分数, 正文)
