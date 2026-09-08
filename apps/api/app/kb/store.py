@@ -36,6 +36,9 @@ def file_digest(data: bytes) -> str:
 
 
 def kind_of(name: str) -> str:
+    suffix = Path(name or "").suffix.lower()
+    if suffix in {".xlsx", ".xls"}:
+        return "text"
     preview = preview_kind(name)
     return preview or "other"
 

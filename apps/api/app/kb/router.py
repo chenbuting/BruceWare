@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.core.ai import chat_complete, chat_complete_stream, llm_public
 from app.core.response import fail, ok
 from app.db.session import get_db, new_session
-from app.kb.extract import extract_search_text
+from app.kb.extract import extract_search_text, is_sheet_name
 from app.kb.assets import (
     OCR_SKIP,
     already_extracted,
@@ -513,16 +513,19 @@ async def upload_document(
 
 
 def _fill_search_text(row: KbDocument) -> None:
-    """旧文件还没抽过正文时，提问前补一次。"""
+    """旧文件还没抽过正文时补一次。表格每次按新规则重抽，方便修好乱码。"""
 
-    if (row.search_text or "").strip():
+    sheet = is_sheet_name(row.file_name)
+    if not sheet and (row.search_text or "").strip():
         return
     try:
         path = abs_path(row.library_id, row.rel_path)
         data = path.read_bytes()
     except (ValueError, OSError):
         return
-    row.search_text = extract_search_text(row.file_name, data)
+    text = extract_search_text(row.file_name, data)
+    if sheet or not (row.search_text or "").strip():
+        row.search_text = text
 
 
 def _fill_assets(row: KbDocument, db: Session, force: bool = False) -> None:
@@ -1121,6 +1124,7 @@ def list_document_chunks(doc_id: int, db: Session = Depends(get_db)):
     if row is None:
         return fail("这份资料不存在", 404)
     _fill_search_text(row)
+    index_document(db, row)
     items = ensure_chunks(db, row)
     db.commit()
     return ok({"items": [chunk_dict(item) for item in items]})
