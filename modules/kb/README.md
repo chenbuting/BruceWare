@@ -19,3 +19,4 @@
 
 - [总体设计](../../docs/design/知识库总体设计.md)
 - [详细设计](../../docs/design/知识库详细设计.md)
+- [Agent 模块计划（以后可能做）](../../docs/design/Agent模块计划.md)
