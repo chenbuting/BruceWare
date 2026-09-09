@@ -100,7 +100,7 @@ function relatedAskImages(result: KbAskResult) {
   return result.citations.flatMap((hit) => (hit.images || []).map((img) => ({ ...img, docId: hit.id })));
 }
 
-/** 一问一答，点出处回资料预览。 */
+/** 一问一答，聊天气泡：问题靠右，回答靠左。 */
 function AskTurnView({
   turn,
   onOpenCitation,
@@ -113,50 +113,57 @@ function AskTurnView({
   const zoomItems = images.map((img) => ({ src: img.url || kbAssetFileUrl(img.id), alt: img.alt }));
   const searchLabel = turn.result.used_vector ? "关键词 + 向量" : turn.result.used_vector === false ? "关键词" : "";
   return (
-    <div className="border-b border-[var(--line)] py-4 last:border-b-0">
-      <p className="text-[12px] text-[var(--muted)]">问</p>
-      <p className="mt-0.5 whitespace-pre-wrap leading-6">{turn.question}</p>
-      <p className="mt-4 text-[12px] text-[var(--muted)]">{turn.result.ask_kind === "checklist" ? "核对清单" : "答"}</p>
-      <div className="mt-1">
-        <KbAnswerContent
-          text={turn.result.answer || (turn.streaming ? "在找资料…" : "")}
-          onOpenAsset={(assetId) => {
-            const hit = turn.result.citations.find((item) => (item.images || []).some((img) => img.id === assetId));
-            if (hit) onOpenCitation(hit.id);
-          }}
-        />
-      </div>
-      {turn.streaming ? <span className="mt-1 inline-block animate-pulse text-[var(--muted)]">▍</span> : null}
-      {!turn.streaming && images.length ? (
-        <div className="mt-3 flex flex-wrap gap-2">
-          {images.map((img, index) => (
-            <button key={img.id} type="button" className="block text-left" title="点图放大" onClick={() => setZoom(index)}>
-              <img
-                src={img.url || kbAssetFileUrl(img.id)}
-                alt={img.alt}
-                className="max-h-28 w-auto cursor-zoom-in rounded border border-[var(--line)] object-contain"
-              />
-            </button>
-          ))}
-          {zoom != null ? <ImageLightbox items={zoomItems} index={zoom} onClose={() => setZoom(null)} onIndex={setZoom} /> : null}
+    <div className="space-y-2.5">
+      <div className="flex justify-end">
+        <div className="max-w-[78%] rounded-2xl rounded-br-md bg-[var(--hover)] px-3 py-2">
+          <p className="whitespace-pre-wrap leading-6">{turn.question}</p>
         </div>
-      ) : null}
-      {!turn.streaming && (turn.result.citations.length || searchLabel || turn.result.wiki_update_hint) ? (
-        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-[var(--line)] pt-2 text-[12px] text-[var(--muted)]">
-          {turn.result.citations.length ? (
-            <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <span>出处</span>
-              {turn.result.citations.map((hit) => (
-                <button key={hit.id} type="button" className="underline hover:text-[var(--text)]" onClick={() => onOpenCitation(hit.id)}>
-                  {hit.title}
+      </div>
+      <div className="flex justify-start">
+        <div className="min-w-0 max-w-[92%] rounded-2xl rounded-bl-md border border-[var(--line)] bg-[var(--paper)] px-3 py-2.5">
+          {turn.result.ask_kind === "checklist" ? (
+            <p className="mb-1 text-[12px] text-[var(--muted)]">核对清单</p>
+          ) : null}
+          <KbAnswerContent
+            text={turn.result.answer || (turn.streaming ? "在找资料…" : "")}
+            onOpenAsset={(assetId) => {
+              const hit = turn.result.citations.find((item) => (item.images || []).some((img) => img.id === assetId));
+              if (hit) onOpenCitation(hit.id);
+            }}
+          />
+          {turn.streaming ? <span className="mt-1 inline-block animate-pulse text-[var(--muted)]">▍</span> : null}
+          {!turn.streaming && images.length ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {images.map((img, index) => (
+                <button key={img.id} type="button" className="block text-left" title="点图放大" onClick={() => setZoom(index)}>
+                  <img
+                    src={img.url || kbAssetFileUrl(img.id)}
+                    alt={img.alt}
+                    className="max-h-28 w-auto cursor-zoom-in rounded border border-[var(--line)] object-contain"
+                  />
                 </button>
               ))}
-            </span>
+              {zoom != null ? <ImageLightbox items={zoomItems} index={zoom} onClose={() => setZoom(null)} onIndex={setZoom} /> : null}
+            </div>
           ) : null}
-          {searchLabel ? <span>{searchLabel}</span> : null}
-          {turn.result.wiki_update_hint ? <span>{turn.result.wiki_update_hint}</span> : null}
+          {!turn.streaming && (turn.result.citations.length || searchLabel || turn.result.wiki_update_hint) ? (
+            <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-[var(--line)] pt-2 text-[12px] text-[var(--muted)]">
+              {turn.result.citations.length ? (
+                <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span>出处</span>
+                  {turn.result.citations.map((hit) => (
+                    <button key={hit.id} type="button" className="underline hover:text-[var(--text)]" onClick={() => onOpenCitation(hit.id)}>
+                      {hit.title}
+                    </button>
+                  ))}
+                </span>
+              ) : null}
+              {searchLabel ? <span>{searchLabel}</span> : null}
+              {turn.result.wiki_update_hint ? <span>{turn.result.wiki_update_hint}</span> : null}
+            </div>
+          ) : null}
         </div>
-      ) : null}
+      </div>
     </div>
   );
 }
@@ -929,7 +936,7 @@ export function KbPage() {
           <div className="flex min-h-0 min-w-0 flex-col">
           <div className="min-h-0 flex-1 overflow-auto px-4 py-3 text-[13px] leading-6">
             {askTurns.length ? (
-              <div className="space-y-4">
+              <div className="space-y-5">
                 {askTurns.map((turn, index) => (
                   <AskTurnView key={`${index}-${turn.question}`} turn={turn} onOpenCitation={onOpenCitation} />
                 ))}
