@@ -37,7 +37,9 @@ npm install
 npm run dev
 ```
 
-网页：http://127.0.0.1:5173
+网页：http://127.0.0.1:5173  
+知识库：http://127.0.0.1:5173/m/kb  
+数据：http://127.0.0.1:5173/m/data
 
 ## 现在有什么
 
@@ -45,9 +47,10 @@ npm run dev
 - **简历**：保存、AI 分析、打字模拟面试
 - **衣橱**：衣服图、试穿和搭配
 - **文件**：管理本机或服务器上的文件夹
-- **知识库**：多个库整理资料，可分文件夹和标签，支持预览、提问和可选 Wiki
+- **知识库**：多库、文件夹、提问对证、可选 Wiki、向量；支持 PDF / Word / 文本 / CSV / Excel
+- **数据**：看和改数据库里的表，新表会自动出现
 
-设置里配数据源、AI、文件根目录。选了根目录后，衣橱图和本地库会放在根目录下的 `BruceWare` 里；设置文件仍留在程序的 `data/app-settings.json`。
+设置里配数据源、AI（对话 / 生图 / 向量可分开填）、文件根目录。选了根目录后，衣橱图和本地库会放在根目录下的 `BruceWare` 里；设置文件仍留在程序的 `data/app-settings.json`。
 
 ## 目录
 
@@ -60,4 +63,4 @@ BruceWare/
   data/          本机设置（不要提交）
 ```
 
-知识库已接整理、提问、库规则和可选 Wiki。设计：[docs/design/知识库总体设计.md](docs/design/知识库总体设计.md)、[docs/design/知识库详细设计.md](docs/design/知识库详细设计.md)。
+知识库设计：[docs/design/知识库总体设计.md](docs/design/知识库总体设计.md)、[docs/design/知识库详细设计.md](docs/design/知识库详细设计.md)。
