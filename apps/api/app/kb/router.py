@@ -99,6 +99,21 @@ class AssetPatch(BaseModel):
     ocr_text: str = Field(default="", max_length=1500)
 
 
+class AssetBatchItem(BaseModel):
+    """批量改图说明时的一张。"""
+
+    id: int
+    caption: str = Field(default="", max_length=200)
+    keywords: str = Field(default="", max_length=200)
+    ocr_text: str = Field(default="", max_length=1500)
+
+
+class AssetBatchIn(BaseModel):
+    """一次提交多张图的说明，只存字。"""
+
+    items: list[AssetBatchItem] = Field(default_factory=list, max_length=200)
+
+
 class ChunkPatch(BaseModel):
     text: str = Field(default="", max_length=8000)
 
@@ -1222,9 +1237,52 @@ def recognize_asset(asset_id: int, db: Session = Depends(get_db)):
     return ok({**asset_edit_dict(item), **vector_payload(status)})
 
 
+@router.put("/kb/documents/{doc_id}/assets")
+def update_document_assets(doc_id: int, body: AssetBatchIn, db: Session = Depends(get_db)):
+    """一次改多张图的说明，只存字，不重算向量。"""
+
+    row = db.get(KbDocument, doc_id)
+    if row is None:
+        return fail("这份资料不存在", 404)
+    if not body.items:
+        return fail("没有要保存的图")
+    ids = [item.id for item in body.items]
+    found = {
+        item.id: item
+        for item in db.scalars(select(KbAsset).where(KbAsset.document_id == doc_id, KbAsset.id.in_(ids))).all()
+    }
+    for patch in body.items:
+        item = found.get(patch.id)
+        if item is None:
+            continue
+        text = pack_asset_note(patch.caption, patch.keywords, patch.ocr_text)
+        item.ocr_text = text or OCR_SKIP
+    rebuild_search_text(db, row)
+    row.updated_at = datetime.utcnow()
+    db.commit()
+    return ok({"items": [asset_edit_dict(item) for item in list_doc_assets(db, row.id)], **vector_payload("pending")})
+
+
+@router.post("/kb/documents/{doc_id}/vector")
+def rebuild_document_vector(doc_id: int, db: Session = Depends(get_db)):
+    """按当前正文和图说明，整份重算一次向量。改完图说明后点一次即可。"""
+
+    row = db.get(KbDocument, doc_id)
+    if row is None:
+        return fail("这份资料不存在", 404)
+    _fill_search_text(row)
+    status = index_document(db, row, force=True)
+    row.updated_at = datetime.utcnow()
+    db.commit()
+    extra = vector_payload(status)
+    if status == "updated":
+        extra["vector_hint"] = "这份资料的向量已重算。"
+    return ok({**_doc_dict(row, db), **extra})
+
+
 @router.put("/kb/assets/{asset_id}")
 def update_asset(asset_id: int, body: AssetPatch, db: Session = Depends(get_db)):
-    """人工改正识图文字，并重拼检索。"""
+    """人工改正识图文字，只存字，不重算向量。"""
 
     item = db.get(KbAsset, asset_id)
     if item is None:
@@ -1235,11 +1293,10 @@ def update_asset(asset_id: int, body: AssetPatch, db: Session = Depends(get_db))
     text = pack_asset_note(body.caption, body.keywords, body.ocr_text)
     item.ocr_text = text or OCR_SKIP
     rebuild_search_text(db, row)
-    status = index_document(db, row, force=True)
     row.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(item)
-    return ok({**asset_edit_dict(item), **vector_payload(status)})
+    return ok({**asset_edit_dict(item), **vector_payload("pending")})
 
 
 def _save_wiki(row: KbDocument, summary: str, db: Session):

@@ -27,7 +27,9 @@ import {
   recognizeKbAsset,
   renameKbFolder,
   renameKbSession,
+  reindexKbDocument,
   saveKbAssetOcr,
+  saveKbAssetsBatch,
   saveKbChunk,
   saveKbWiki,
   updateKbDocument,
@@ -1660,6 +1662,8 @@ function AssetWords({
   const [showAll, setShowAll] = useState(false);
   const [zoom, setZoom] = useState<number | null>(null);
   const [editHint, setEditHint] = useState<{ text: string; ok: boolean } | null>(null);
+  const [savingAll, setSavingAll] = useState(false);
+  const closeEditRef = useRef<() => void>(() => setOpenId(null));
 
   function noteOf(row: KbDocAsset) {
     return { caption: row.caption || "", keywords: row.keywords || "", words: row.ocr_text || "" };
@@ -1695,7 +1699,7 @@ function AssetWords({
     function onKey(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
       event.stopImmediatePropagation();
-      setOpenId(null);
+      closeEditRef.current();
     }
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
@@ -1719,19 +1723,69 @@ function AssetWords({
     setDrafts((map) => ({ ...map, [row.id]: noteOf(row) }));
   }
 
+  function isDirty(item: KbDocAsset) {
+    const draft = drafts[item.id] || noteOf(item);
+    const saved = noteOf(item);
+    return draft.caption !== saved.caption || draft.keywords !== saved.keywords || draft.words !== saved.words;
+  }
+
   function save(item: KbDocAsset) {
     const note = drafts[item.id] || noteOf(item);
     setSavingId(item.id);
-    saveKbAssetOcr(item.id, { caption: note.caption, keywords: note.keywords, ocr_text: note.words })
+    return saveKbAssetOcr(item.id, { caption: note.caption, keywords: note.keywords, ocr_text: note.words })
       .then((row) => {
         applyAsset(row);
-        const text = row.vector_hint || (row.vector_ok ? "字已保存，向量已更新。" : "字已保存，向量没更新。");
-        onHint(text, !!row.vector_ok);
-        setEditHint({ text, ok: !!row.vector_ok });
+        const text = row.vector_hint || "字已保存。改完后点「重算向量」。";
+        onHint(text, true);
+        setEditHint({ text, ok: true });
+        onDocChange();
+        return row;
+      })
+      .catch((err: Error) => {
+        onError(err.message);
+        return null;
+      })
+      .finally(() => setSavingId(null));
+  }
+
+  function saveAll() {
+    const dirty = items.filter(isDirty);
+    if (!dirty.length) {
+      onHint("没有改过的字", true);
+      return;
+    }
+    setSavingAll(true);
+    saveKbAssetsBatch(
+      docId,
+      dirty.map((item) => {
+        const note = drafts[item.id] || noteOf(item);
+        return { id: item.id, caption: note.caption, keywords: note.keywords, ocr_text: note.words };
+      }),
+    )
+      .then((data) => {
+        setItems(data.items);
+        setDrafts(Object.fromEntries(data.items.map((item) => [item.id, noteOf(item)])));
+        const text = data.vector_hint || `已保存 ${dirty.length} 张。改完后点「重算向量」。`;
+        onHint(text, true);
+        setEditHint({ text, ok: true });
         onDocChange();
       })
       .catch((err: Error) => onError(err.message))
-      .finally(() => setSavingId(null));
+      .finally(() => setSavingAll(false));
+  }
+
+  function goNear(delta: number) {
+    const idx = items.findIndex((row) => row.id === openId);
+    const next = items[idx + delta];
+    if (!next || savingId != null || savingAll) return;
+    const current = items[idx];
+    if (current && isDirty(current)) {
+      void save(current).then((row) => {
+        if (row) setOpenId(next.id);
+      });
+      return;
+    }
+    setOpenId(next.id);
   }
 
   function seeOne(item: KbDocAsset) {
@@ -1757,12 +1811,32 @@ function AssetWords({
 
   const editing = items.find((row) => row.id === openId);
   const editDraft = editing ? drafts[editing.id] || noteOf(editing) : null;
+  const editIndex = editing ? items.findIndex((row) => row.id === editing.id) : -1;
+  const dirtyCount = items.filter(isDirty).length;
   const zoomItems = items.map((row) => ({ src: row.url || kbAssetFileUrl(row.id), alt: row.alt || row.caption || "图" }));
+
+  function closeEdit() {
+    if (editing && isDirty(editing) && savingId == null && !savingAll) {
+      void save(editing).then((row) => {
+        if (row) setOpenId(null);
+      });
+      return;
+    }
+    setOpenId(null);
+  }
+  closeEditRef.current = closeEdit;
 
   return (
     <div className="mt-4 border-t border-[var(--line)] pt-3">
-      <p className="mb-1 font-medium">图的说明</p>
-      <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">点图放大。点「改说明」会弹出框来写图意、关键词和图上的字。</p>
+      <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+        <p className="font-medium">图的说明</p>
+        <button type="button" className={btnClass} disabled={savingAll || savingId != null || !dirtyCount} onClick={saveAll}>
+          {savingAll ? "在存…" : dirtyCount ? `保存已改 ${dirtyCount} 张` : "没有改过"}
+        </button>
+      </div>
+      <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">
+        点「改说明」连着改，上一张/下一张会自动存字。改完点资料标题旁的「重算向量」。
+      </p>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
         {visible.map((item) => {
           const draft = drafts[item.id] || noteOf(item);
@@ -1799,11 +1873,14 @@ function AssetWords({
         </button>
       ) : null}
       {editing && editDraft ? (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-[rgb(31_30_27_/_0.4)] px-4" onClick={() => setOpenId(null)}>
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-[rgb(31_30_27_/_0.4)] px-4" onClick={closeEdit}>
           <div className="card max-h-[90vh] w-full max-w-xl overflow-y-auto px-5 py-4" onClick={(event) => event.stopPropagation()}>
             <div className="mb-3 flex items-center justify-between gap-3">
-              <p className="font-medium">{editing.alt || "图"} · 改说明</p>
-              <button type="button" className="text-[13px] text-[var(--muted)]" onClick={() => setOpenId(null)}>
+              <p className="font-medium">
+                {editing.alt || "图"} · 改说明
+                {items.length > 1 ? <span className="ml-2 font-normal text-[var(--muted)]">{editIndex + 1} / {items.length}</span> : null}
+              </p>
+              <button type="button" className="text-[13px] text-[var(--muted)]" disabled={savingId != null} onClick={closeEdit}>
                 关闭
               </button>
             </div>
@@ -1842,11 +1919,17 @@ function AssetWords({
               placeholder="图上的字，没有就留空"
             />
             <div className="mt-3 flex flex-wrap gap-2">
+              <button type="button" className={btnClass} disabled={editIndex <= 0 || savingId != null || savingAll} onClick={() => goNear(-1)}>
+                上一张
+              </button>
+              <button type="button" className={btnClass} disabled={editIndex < 0 || editIndex >= items.length - 1 || savingId != null || savingAll} onClick={() => goNear(1)}>
+                {savingId != null ? "在存…" : "下一张"}
+              </button>
               <button type="button" className={btnClass} disabled={visionLocked || seeingId != null} onClick={() => seeOne(editing)}>
                 {seeingId === editing.id ? "在认…" : "识图"}
               </button>
-              <button type="button" className={btnClass} disabled={savingId === editing.id} onClick={() => save(editing)}>
-                {savingId === editing.id ? "在存…" : "保存"}
+              <button type="button" className={btnClass} disabled={savingId === editing.id || savingAll || !isDirty(editing)} onClick={() => void save(editing)}>
+                {savingId === editing.id ? "在存…" : "保存这张"}
               </button>
             </div>
           </div>
@@ -1989,10 +2072,22 @@ function PreviewPane({
   const [showExtras, setShowExtras] = useState(false);
   const [zoomFile, setZoomFile] = useState(false);
   const [vectorNote, setVectorNote] = useState<{ text: string; ok: boolean } | null>(null);
+  const [reindexing, setReindexing] = useState(false);
 
   function tellVector(message: string, ok: boolean) {
     setVectorNote({ text: message, ok });
     onHint(message);
+  }
+
+  function rebuildVector() {
+    setReindexing(true);
+    reindexKbDocument(item.id)
+      .then((row) => {
+        tellVector(row.vector_hint || "这份资料的向量已重算。", !!row.vector_ok || row.vector_state === "ready");
+        onSaved(row);
+      })
+      .catch((err: Error) => onError(err.message))
+      .finally(() => setReindexing(false));
   }
   useEffect(() => {
     setDraft(item.wiki_summary || "");
@@ -2020,11 +2115,16 @@ function PreviewPane({
           <span>{item.title}</span>
           {vectorBadge(item.vector_state)}
         </p>
-        {visionEnabled ? (
-          <button type="button" className={btnClass} disabled={busy || (visionLocked && !recognizing)} onClick={onRecognizeAll}>
-            {recognizing ? "停止" : "全部识图"}
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className={btnClass} disabled={reindexing || busy} onClick={rebuildVector}>
+            {reindexing ? "在算…" : "重算向量"}
           </button>
-        ) : null}
+          {visionEnabled ? (
+            <button type="button" className={btnClass} disabled={busy || (visionLocked && !recognizing)} onClick={onRecognizeAll}>
+              {recognizing ? "停止" : "全部识图"}
+            </button>
+          ) : null}
+        </div>
       </div>
       {item.tags ? <p className="mb-2 text-[var(--muted)]">{item.tags}</p> : null}
       {vectorNote ? <p className={`mb-2 ${vectorNote.ok ? "text-[var(--ok)]" : "text-amber-800"}`}>{vectorNote.text}</p> : null}

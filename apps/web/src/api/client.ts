@@ -637,6 +637,27 @@ export function saveKbAssetOcr(id: number, note: { caption?: string; keywords?: 
   });
 }
 
+export function saveKbAssetsBatch(
+  docId: number,
+  items: { id: number; caption?: string; keywords?: string; ocr_text?: string }[],
+) {
+  return request<{ items: KbDocAsset[]; vector_ok?: boolean; vector_hint?: string }>(`/api/v1/kb/documents/${docId}/assets`, {
+    method: "PUT",
+    body: JSON.stringify({
+      items: items.map((item) => ({
+        id: item.id,
+        caption: item.caption || "",
+        keywords: item.keywords || "",
+        ocr_text: item.ocr_text || "",
+      })),
+    }),
+  });
+}
+
+export function reindexKbDocument(id: number) {
+  return request<KbDocument>(`/api/v1/kb/documents/${id}/vector`, { method: "POST" });
+}
+
 export function recognizeKbDocument(id: number) {
   return request<{ done: number; left: number; message: string }>(`/api/v1/kb/documents/${id}/vision`, { method: "POST" });
 }

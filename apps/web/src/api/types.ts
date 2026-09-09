@@ -348,6 +348,8 @@ export type KbDocument = {
   wiki_updated_at: string;
   wiki_stale: boolean;
   vector_state?: "none" | "ready" | "stale";
+  vector_ok?: boolean;
+  vector_hint?: string;
   created_at: string;
   updated_at: string;
 };
