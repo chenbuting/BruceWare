@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import mimetypes
+import tempfile
+import time
+from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, UploadFile
@@ -49,6 +52,25 @@ def _save_tokens(row: dict) -> dict:
     return save_raw(row)
 
 
+def _refresh_if_needed(row: dict) -> dict:
+    """令牌快过期时先静默刷新，失败就留给页面提示重新授权。"""
+
+    expires = int(row.get("expires_at") or 0)
+    if not row.get("refresh_token"):
+        return row
+    if expires and expires > time.time() + 600:
+        return row
+    if not expires:
+        return row
+    try:
+        adapter = _adapter(row)
+        tokens = adapter.refresh(row)
+        adapter.apply_tokens(row, tokens)
+        return _save_tokens(row)
+    except ValueError:
+        return row
+
+
 @router.get("/drive/kinds")
 def drive_kinds():
     """列出已接和预留的网盘种类。"""
@@ -58,7 +80,10 @@ def drive_kinds():
 
 @router.get("/drive/accounts")
 def list_accounts():
-    return ok({"items": [public_account(item) for item in list_raw()]})
+    items = []
+    for row in list_raw():
+        items.append(public_account(_refresh_if_needed(row)))
+    return ok({"items": items})
 
 
 @router.post("/drive/accounts")
@@ -247,8 +272,19 @@ async def upload_file(account_id: str, path: str = Form(""), files: list[UploadF
     try:
         adapter = _adapter(row)
         for item in files:
-            raw = await item.read()
-            created.append(adapter.upload(row, path, item.filename or "未命名", raw))
+            tmp_path = ""
+            try:
+                with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                    tmp_path = tmp.name
+                    while True:
+                        piece = await item.read(4 * 1024 * 1024)
+                        if not piece:
+                            break
+                        tmp.write(piece)
+                created.append(adapter.upload(row, path, item.filename or "未命名", tmp_path))
+            finally:
+                if tmp_path:
+                    Path(tmp_path).unlink(missing_ok=True)
         _save_tokens(row)
         return ok({"items": created})
     except ValueError as exc:

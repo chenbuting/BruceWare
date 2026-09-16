@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 import uuid
 from typing import Any
 
@@ -51,6 +52,13 @@ def public_account(row: dict[str, Any]) -> dict[str, Any]:
         message = "请先填 AppKey 和 SecretKey"
     elif not authorized:
         message = "还没授权"
+    else:
+        expires_at = int(row.get("expires_at") or 0)
+        now = int(time.time())
+        if expires_at and expires_at <= now:
+            message = "授权已过期，请点「授权」重新连"
+        elif expires_at and expires_at - now <= 3 * 24 * 3600:
+            message = "授权快过期了，建议重新点一次「授权」"
     return {
         "id": str(row.get("id") or ""),
         "kind": kind,

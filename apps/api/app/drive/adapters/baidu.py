@@ -289,27 +289,41 @@ class BaiduAdapter:
     def delete(self, account: dict[str, Any], path: str) -> None:
         self._manager(account, "delete", [normalize_path(path)])
 
-    def upload(self, account: dict[str, Any], path: str, filename: str, data: bytes) -> dict[str, Any]:
-        if not data:
+    def upload(self, account: dict[str, Any], path: str, filename: str, file_path: str) -> dict[str, Any]:
+        source = Path(file_path)
+        size = source.stat().st_size if source.exists() else 0
+        if size <= 0:
             raise ValueError("不能上传空文件")
-        self._assert_quota(account, len(data))
+        self._assert_quota(account, size)
         dest = self._upload_dest(account, path, filename)
         self._ensure_dir(account, dest.rsplit("/", 1)[0] or "/")
-        blocks = [data[index : index + _CHUNK] for index in range(0, len(data), _CHUNK)]
-        md5s = [hashlib.md5(chunk).hexdigest() for chunk in blocks]
+        md5s: list[str] = []
+        whole = hashlib.md5()
+        first_slice = hashlib.md5()
+        with source.open("rb") as handle:
+            first = True
+            while True:
+                chunk = handle.read(_CHUNK)
+                if not chunk:
+                    break
+                md5s.append(hashlib.md5(chunk).hexdigest())
+                whole.update(chunk)
+                if first:
+                    first_slice.update(chunk[: 256 * 1024])
+                    first = False
         body = {
             "path": dest,
-            "size": str(len(data)),
+            "size": str(size),
             "isdir": "0",
             "autoinit": "1",
             "rtype": "1",
             "block_list": json.dumps(md5s, ensure_ascii=False),
-            "content-md5": hashlib.md5(data).hexdigest(),
-            "slice-md5": hashlib.md5(data[: 256 * 1024]).hexdigest(),
+            "content-md5": whole.hexdigest(),
+            "slice-md5": first_slice.hexdigest(),
         }
         pre = self._xpan("POST", "/file", {"method": "precreate", "openapi": "xpansdk"}, account, data=body)
         if int(pre.get("return_type") or 0) == 2:
-            return entry_of(Path(dest).name, dest, False, len(data), fsid=int(pre.get("fs_id") or 0))
+            return entry_of(Path(dest).name, dest, False, size, fsid=int(pre.get("fs_id") or 0))
         upload_id = str(pre.get("uploadid") or "")
         if not upload_id:
             raise ValueError("百度没给上传号")
@@ -318,27 +332,29 @@ class BaiduAdapter:
         if isinstance(pending, list) and pending and all(str(item).isdigit() for item in pending):
             need = {int(item) for item in pending}
         else:
-            need = set(range(len(blocks)))
-        for index, chunk in enumerate(blocks):
-            if need and index not in need:
-                continue
-            with httpx.Client(timeout=180) as client:
-                res = client.post(
-                    _UPLOAD,
-                    params={
-                        "method": "upload",
-                        "access_token": token,
-                        "type": "tmpfile",
-                        "path": dest,
-                        "uploadid": upload_id,
-                        "partseq": str(index),
-                    },
-                    headers={"User-Agent": _UA},
-                    files={"file": ("blob", chunk, "application/octet-stream")},
-                )
-            part = self._as_json(res)
-            if int(part.get("errno") or 0) != 0 and "md5" not in part:
-                raise ValueError(_msg(int(part.get("errno") or 0), "分片上传失败"))
+            need = set(range(len(md5s)))
+        with source.open("rb") as handle:
+            for index in range(len(md5s)):
+                chunk = handle.read(_CHUNK)
+                if need and index not in need:
+                    continue
+                with httpx.Client(timeout=600) as client:
+                    res = client.post(
+                        _UPLOAD,
+                        params={
+                            "method": "upload",
+                            "access_token": token,
+                            "type": "tmpfile",
+                            "path": dest,
+                            "uploadid": upload_id,
+                            "partseq": str(index),
+                        },
+                        headers={"User-Agent": _UA},
+                        files={"file": ("blob", chunk, "application/octet-stream")},
+                    )
+                part = self._as_json(res)
+                if int(part.get("errno") or 0) != 0 and "md5" not in part:
+                    raise ValueError(_msg(int(part.get("errno") or 0), "分片上传失败"))
         created = self._xpan(
             "POST",
             "/file",
@@ -346,14 +362,14 @@ class BaiduAdapter:
             account,
             data={
                 "path": dest,
-                "size": str(len(data)),
+                "size": str(size),
                 "isdir": "0",
                 "rtype": "1",
                 "uploadid": upload_id,
                 "block_list": json.dumps(md5s, ensure_ascii=False),
             },
         )
-        return entry_of(Path(dest).name, dest, False, len(data), fsid=int(created.get("fs_id") or 0))
+        return entry_of(Path(dest).name, dest, False, size, fsid=int(created.get("fs_id") or 0))
 
     def _safe_name(self, raw: str) -> str:
         name = Path(raw or "未命名").name.strip() or "未命名"

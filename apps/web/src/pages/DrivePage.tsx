@@ -74,7 +74,7 @@ export function DrivePage() {
   const [renameFrom, setRenameFrom] = useState<DriveEntry | null>(null);
   const [renameTo, setRenameTo] = useState("");
   const [moveFrom, setMoveFrom] = useState<DriveEntry | null>(null);
-  const [moveTo, setMoveTo] = useState("");
+  const [moveList, setMoveList] = useState<DriveList | null>(null);
   const [ask, setAsk] = useState<DriveEntry | null>(null);
   const [askAccount, setAskAccount] = useState<DriveAccount | null>(null);
   const [view, setView] = useState<"grid" | "list">("grid");
@@ -272,7 +272,7 @@ export function DrivePage() {
             ? `以后还能加：${kinds.filter((item) => !item.ready).map((item) => item.label).join("、")}。`
             : ""}
         </p>
-        {current && !current.ready ? <p className="mt-2 text-[13px] text-amber-800">{current.message}</p> : null}
+        {current?.message ? <p className="mt-2 text-[13px] text-amber-800">{current.message}</p> : null}
         {current?.user_label ? <p className="mt-2 text-[13px] text-[var(--muted)]">已授权：{current.user_label}</p> : null}
         {quota?.total_text ? (
           <p className={`mt-2 text-[13px] ${quota.over ? "text-[var(--err)]" : "text-[var(--muted)]"}`}>
@@ -388,7 +388,7 @@ export function DrivePage() {
                   <span className="min-w-0 flex-1 break-all text-[13px]">{item.name}</span>
                   <span className="shrink-0 text-[12px] text-[var(--muted)]">{item.kind === "dir" ? "文件夹" : formatSize(item.size)}</span>
                 </button>
-                <ItemActions item={item} busy={busy} onDownload={() => run(() => downloadDriveEntry(accountId, item.path, item.name, item.fsid))} onRename={() => { setRenameFrom(item); setRenameTo(item.name); }} onMove={() => { setMoveFrom(item); setMoveTo(path); }} onDelete={() => setAsk(item)} />
+                  <ItemActions item={item} busy={busy} onDownload={() => run(() => downloadDriveEntry(accountId, item.path, item.name, item.fsid))} onRename={() => { setRenameFrom(item); setRenameTo(item.name); }} onMove={() => { setMoveFrom(item); run(async () => setMoveList(await fetchDriveList(accountId, path))); }} onDelete={() => setAsk(item)} />
               </div>
             );
           })}
@@ -409,7 +409,7 @@ export function DrivePage() {
                   <div className="mt-1 text-[12px] text-[var(--muted)]">{item.kind === "dir" ? "文件夹" : formatSize(item.size)}</div>
                 </button>
                 <div className="mt-2 flex justify-center">
-                  <ItemActions item={item} busy={busy} onDownload={() => run(() => downloadDriveEntry(accountId, item.path, item.name, item.fsid))} onRename={() => { setRenameFrom(item); setRenameTo(item.name); }} onMove={() => { setMoveFrom(item); setMoveTo(path); }} onDelete={() => setAsk(item)} />
+                  <ItemActions item={item} busy={busy} onDownload={() => run(() => downloadDriveEntry(accountId, item.path, item.name, item.fsid))} onRename={() => { setRenameFrom(item); setRenameTo(item.name); }} onMove={() => { setMoveFrom(item); run(async () => setMoveList(await fetchDriveList(accountId, path))); }} onDelete={() => setAsk(item)} />
                 </div>
               </div>
             );
@@ -521,21 +521,55 @@ export function DrivePage() {
       ) : null}
 
       {moveFrom ? (
-      <Modal title="移动到文件夹" onClose={() => setMoveFrom(null)}>
-        <input className={`${inputClass} mb-3 w-full`} value={moveTo} onChange={(e) => setMoveTo(e.target.value)} placeholder="/apps/应用名/目标文件夹" />
+      <Modal title={`移动「${moveFrom.name}」`} onClose={() => { setMoveFrom(null); setMoveList(null); }}>
+        <p className="mb-2 text-[12px] text-[var(--muted)]">点文件夹进去，然后点「移到这里」。</p>
+        <div className="mb-3 flex min-w-0 flex-wrap items-center gap-2 text-[13px]">
+          {(moveList?.crumbs || []).map((item, index) => (
+            <span key={`${item.path}-${item.name}`} className="flex items-center gap-2">
+              {index > 0 ? <span className="text-[var(--muted)]">/</span> : null}
+              <button type="button" className="text-[var(--text)]" disabled={busy} onClick={() => run(async () => setMoveList(await fetchDriveList(accountId, item.path)))}>
+                {item.name}
+              </button>
+            </span>
+          ))}
+        </div>
+        <div className="mb-3 max-h-56 overflow-auto border border-[var(--line)]">
+          {!moveList ? (
+            <p className="px-3 py-2 text-[13px] text-[var(--muted)]">正在读取…</p>
+          ) : (moveList.items || []).filter((item) => item.kind === "dir" && item.path !== moveFrom.path).length ? (
+            moveList.items
+              .filter((item) => item.kind === "dir" && item.path !== moveFrom.path)
+              .map((item) => (
+                <button
+                  key={item.path}
+                  type="button"
+                  className="flex w-full items-center gap-2 border-b border-[var(--line)] px-3 py-2 text-left last:border-b-0 hover:bg-[var(--paper)]"
+                  disabled={busy}
+                  onClick={() => run(async () => setMoveList(await fetchDriveList(accountId, item.path)))}
+                >
+                  <Folder className="h-4 w-4 shrink-0 text-amber-500" />
+                  <span className="break-all text-[13px]">{item.name}</span>
+                </button>
+              ))
+          ) : (
+            <p className="px-3 py-2 text-[13px] text-[var(--muted)]">这里没有子文件夹。</p>
+          )}
+        </div>
         <button
           type="button"
           className={btnClass}
+          disabled={busy || !moveList || (moveFrom.kind === "dir" && (moveList.path === moveFrom.path || moveList.path.startsWith(`${moveFrom.path}/`)))}
           onClick={() => {
-            if (!moveFrom) return;
+            if (!moveFrom || !moveList) return;
             run(async () => {
-              await moveDriveEntry(accountId, moveFrom.path, moveTo.trim());
+              await moveDriveEntry(accountId, moveFrom.path, moveList.path);
               setMoveFrom(null);
+              setMoveList(null);
               await loadList(accountId, path);
             }, "已移动");
           }}
         >
-          移动
+          移到这里
         </button>
       </Modal>
       ) : null}
