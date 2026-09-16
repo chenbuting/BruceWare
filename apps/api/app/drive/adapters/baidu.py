@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -20,8 +21,9 @@ _UA = "pan.baidu.com"
 
 _ERRNO = {
     -6: "授权失效，请重新授权",
-    -7: "文件或目录不存在",
+    -7: "文件或目录名不合法",
     -9: "文件不存在",
+    -10: "网盘空间不足，请先删文件或开通会员后再上传",
     2: "参数不对",
     111: "授权过期，请重新授权",
     31023: "参数不对",
@@ -29,10 +31,22 @@ _ERRNO = {
     31045: "授权失败，请重新授权",
     31061: "文件已存在",
     31066: "文件不存在",
+    31112: "网盘空间不足，请先删文件或开通会员后再上传",
     31299: "只能访问应用目录，请把应用名称填成开放平台上的应用名",
     31326: "命中反作弊，请稍后再试",
     42213: "没有权限访问这个目录",
 }
+
+
+def _size_text(n: int) -> str:
+    value = float(max(n, 0))
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if value < 1024 or unit == "TB":
+            if unit == "B":
+                return f"{int(value)}B"
+            return f"{value:.1f}{unit}"
+        value /= 1024
+    return f"{int(n)}B"
 
 
 def _msg(errno: int, fallback: str = "") -> str:
@@ -192,6 +206,56 @@ class BaiduAdapter:
             )
         return {"root": self.default_root(account), "path": folder, "crumbs": crumbs(folder), "items": items}
 
+    def quota(self, account: dict[str, Any]) -> dict[str, Any]:
+        """查已用空间和总容量，给页面展示。"""
+        empty = {
+            "total": 0,
+            "used": 0,
+            "remain": 0,
+            "over": False,
+            "total_text": "",
+            "used_text": "",
+            "remain_text": "",
+            "message": "",
+        }
+        try:
+            info = self._json(
+                "GET",
+                "https://pan.baidu.com/api/quota",
+                params={"access_token": self._token(account), "checkfree": 1, "checkexpire": 1},
+            )
+        except ValueError:
+            return empty
+        errno = int(info.get("errno") or 0)
+        if errno in {111, -6, 31045} and account.get("refresh_token"):
+            try:
+                tokens = self.refresh(account)
+                account.update(tokens)
+                info = self._json(
+                    "GET",
+                    "https://pan.baidu.com/api/quota",
+                    params={"access_token": tokens["access_token"], "checkfree": 1, "checkexpire": 1},
+                )
+                errno = int(info.get("errno") or 0)
+            except ValueError:
+                return empty
+        if errno != 0:
+            return empty
+        total = int(info.get("total") or 0)
+        used = int(info.get("used") or 0)
+        remain = max(0, total - used)
+        over = bool(total and used >= total)
+        return {
+            "total": total,
+            "used": used,
+            "remain": remain,
+            "over": over,
+            "total_text": _size_text(total),
+            "used_text": _size_text(used),
+            "remain_text": _size_text(remain),
+            "message": "网盘空间不足，请先删文件或开通会员后再上传" if over else "",
+        }
+
     def mkdir(self, account: dict[str, Any], path: str, name: str) -> dict[str, Any]:
         dest = join_path(path or self.default_root(account), name)
         self._xpan("POST", "/file", {"method": "create"}, account, data={"path": dest, "isdir": 1, "rtype": 1})
@@ -217,31 +281,39 @@ class BaiduAdapter:
         self._manager(account, "delete", [normalize_path(path)])
 
     def upload(self, account: dict[str, Any], path: str, filename: str, data: bytes) -> dict[str, Any]:
-        dest = join_path(path or self.default_root(account), filename)
-        blocks = [data[index : index + _CHUNK] for index in range(0, max(len(data), 1), _CHUNK)] or [b""]
+        if not data:
+            raise ValueError("不能上传空文件")
+        self._assert_quota(account, len(data))
+        dest = self._upload_dest(account, path, filename)
+        self._ensure_dir(account, dest.rsplit("/", 1)[0] or "/")
+        blocks = [data[index : index + _CHUNK] for index in range(0, len(data), _CHUNK)]
         md5s = [hashlib.md5(chunk).hexdigest() for chunk in blocks]
-        pre = self._xpan(
-            "POST",
-            "/file",
-            {"method": "precreate"},
-            account,
-            data={
-                "path": dest,
-                "size": str(len(data)),
-                "isdir": "0",
-                "autoinit": "1",
-                "rtype": "1",
-                "block_list": json.dumps(md5s, ensure_ascii=False),
-            },
-        )
+        body = {
+            "path": dest,
+            "size": str(len(data)),
+            "isdir": "0",
+            "autoinit": "1",
+            "rtype": "1",
+            "block_list": json.dumps(md5s, ensure_ascii=False),
+            "content-md5": hashlib.md5(data).hexdigest(),
+            "slice-md5": hashlib.md5(data[: 256 * 1024]).hexdigest(),
+        }
+        pre = self._xpan("POST", "/file", {"method": "precreate", "openapi": "xpansdk"}, account, data=body)
         if int(pre.get("return_type") or 0) == 2:
-            return entry_of(filename, dest, False, len(data), fsid=int(pre.get("fs_id") or 0))
+            return entry_of(Path(dest).name, dest, False, len(data), fsid=int(pre.get("fs_id") or 0))
         upload_id = str(pre.get("uploadid") or "")
         if not upload_id:
             raise ValueError("百度没给上传号")
         token = self._token(account)
+        pending = pre.get("block_list")
+        if isinstance(pending, list) and pending and all(str(item).isdigit() for item in pending):
+            need = {int(item) for item in pending}
+        else:
+            need = set(range(len(blocks)))
         for index, chunk in enumerate(blocks):
-            with httpx.Client(timeout=120) as client:
+            if need and index not in need:
+                continue
+            with httpx.Client(timeout=180) as client:
                 res = client.post(
                     _UPLOAD,
                     params={
@@ -252,15 +324,16 @@ class BaiduAdapter:
                         "uploadid": upload_id,
                         "partseq": str(index),
                     },
+                    headers={"User-Agent": _UA},
                     files={"file": ("blob", chunk, "application/octet-stream")},
                 )
-            body = self._as_json(res)
-            if int(body.get("errno") or 0) != 0 and "md5" not in body:
-                raise ValueError(_msg(int(body.get("errno") or 0), "分片上传失败"))
+            part = self._as_json(res)
+            if int(part.get("errno") or 0) != 0 and "md5" not in part:
+                raise ValueError(_msg(int(part.get("errno") or 0), "分片上传失败"))
         created = self._xpan(
             "POST",
             "/file",
-            {"method": "create"},
+            {"method": "create", "openapi": "xpansdk"},
             account,
             data={
                 "path": dest,
@@ -271,7 +344,51 @@ class BaiduAdapter:
                 "block_list": json.dumps(md5s, ensure_ascii=False),
             },
         )
-        return entry_of(filename, dest, False, len(data), fsid=int(created.get("fs_id") or 0))
+        return entry_of(Path(dest).name, dest, False, len(data), fsid=int(created.get("fs_id") or 0))
+
+    def _safe_name(self, raw: str) -> str:
+        name = Path(raw or "未命名").name.strip() or "未命名"
+        try:
+            name = name.encode("latin-1").decode("utf-8")
+        except (UnicodeDecodeError, UnicodeEncodeError):
+            pass
+        return name.strip() or "未命名"
+
+    def _assert_quota(self, account: dict[str, Any], need: int) -> None:
+        """空间不够时直接拦住，避免走到 create 才报含糊的 -10。"""
+        info = self.quota(account)
+        if not info["total"]:
+            return
+        if info["remain"] >= need:
+            return
+        raise ValueError(
+            f"网盘空间不足（已用 {info['used_text']}，容量 {info['total_text']}），请先删文件或开通会员后再上传"
+        )
+
+    def _upload_dest(self, account: dict[str, Any], folder: str, filename: str) -> str:
+        name = self._safe_name(filename)
+        base = normalize_path(folder) if folder else self.default_root(account)
+        dest = join_path(base, name)
+        root = self.default_root(account)
+        if root != "/" and dest != root and not dest.startswith(root.rstrip("/") + "/"):
+            dest = join_path(root, name)
+        return dest
+
+    def _ensure_dir(self, account: dict[str, Any], folder: str) -> None:
+        folder = normalize_path(folder)
+        if folder == "/":
+            return
+        try:
+            self.list_dir(account, folder)
+            return
+        except ValueError:
+            pass
+        parent, name = folder.rsplit("/", 1)
+        self._ensure_dir(account, parent or "/")
+        try:
+            self.mkdir(account, parent or "/", name)
+        except ValueError:
+            pass
 
     def download(self, account: dict[str, Any], path: str, fsid: int) -> tuple[str, bytes]:
         name, response, client = self.open_download(account, path, fsid)

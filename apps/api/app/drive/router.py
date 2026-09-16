@@ -171,6 +171,26 @@ def baidu_callback(code: str = "", state: str = ""):
     return HTMLResponse("<p>授权成功，可以关掉这页，回到网盘。</p>")
 
 
+@router.get("/drive/accounts/{account_id}/quota")
+def account_quota(account_id: str):
+    """查这个账号的已用空间。"""
+
+    row, err = _account_or_fail(account_id)
+    if err is not None:
+        return err
+    adapter = _adapter(row)
+    getter = getattr(adapter, "quota", None)
+    if getter is None:
+        return fail("这种网盘还不能查容量")
+    try:
+        data = getter(row)
+        return ok(data)
+    except ValueError as exc:
+        return fail(str(exc))
+    finally:
+        _save_tokens(row)
+
+
 @router.get("/drive/accounts/{account_id}/list")
 def list_files(account_id: str, path: str = ""):
     row, err = _account_or_fail(account_id)

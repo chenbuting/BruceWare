@@ -399,6 +399,25 @@ export type DriveList = {
   items: DriveEntry[];
 };
 
+export type DriveQuota = {
+  total: number;
+  used: number;
+  remain: number;
+  over: boolean;
+  total_text: string;
+  used_text: string;
+  remain_text: string;
+  message: string;
+};
+
+export type DriveUploadProgress = {
+  index: number;
+  total: number;
+  name: string;
+  percent: number;
+  stage: "send" | "save";
+};
+
 export type DataColumn = {
   name: string;
   type: "integer" | "datetime" | "number" | "text";

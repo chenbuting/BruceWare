@@ -31,6 +31,8 @@ import type {
   DriveEntry,
   DriveKind,
   DriveList,
+  DriveQuota,
+  DriveUploadProgress,
   WardrobeDetected,
   WardrobeItem,
   WardrobeLook,
@@ -919,6 +921,10 @@ export function pollDriveAuth(id: string) {
   return request<DriveAccount & { done: boolean }>(`/api/v1/drive/accounts/${id}/auth/poll`, { method: "POST" });
 }
 
+export function fetchDriveQuota(accountId: string) {
+  return request<DriveQuota>(`/api/v1/drive/accounts/${accountId}/quota`);
+}
+
 export function fetchDriveList(accountId: string, path = "") {
   return request<DriveList>(`/api/v1/drive/accounts/${accountId}/list?path=${encodeURIComponent(path)}`);
 }
@@ -936,11 +942,66 @@ export function makeDriveDir(accountId: string, path: string, name: string) {
   });
 }
 
-export function uploadDriveFiles(accountId: string, path: string, files: File[]) {
-  const body = new FormData();
-  body.append("path", path);
-  files.forEach((file) => body.append("files", file));
-  return request<{ items: DriveEntry[] }>(`/api/v1/drive/accounts/${accountId}/upload`, { method: "POST", body });
+export async function uploadDriveFiles(
+  accountId: string,
+  path: string,
+  files: File[],
+  onProgress?: (info: DriveUploadProgress) => void,
+) {
+  const items: DriveEntry[] = [];
+  for (let index = 0; index < files.length; index += 1) {
+    const file = files[index];
+    const report = (percent: number, stage: DriveUploadProgress["stage"]) => {
+      onProgress?.({ index, total: files.length, name: file.name, percent, stage });
+    };
+    report(Math.round((index / files.length) * 100), "send");
+    const body = new FormData();
+    body.append("path", path);
+    body.append("files", file);
+    const row = await postForm<{ items: DriveEntry[] }>(
+      `/api/v1/drive/accounts/${accountId}/upload`,
+      body,
+      (loaded, total) => {
+        const part = total ? loaded / total : 0;
+        report(Math.round(((index + part * 0.9) / files.length) * 100), "send");
+      },
+      () => report(Math.round(((index + 0.9) / files.length) * 100), "save"),
+    );
+    report(Math.round(((index + 0.95) / files.length) * 100), "save");
+    items.push(...row.items);
+    report(Math.round(((index + 1) / files.length) * 100), "save");
+  }
+  return { items };
+}
+
+function postForm<T>(
+  path: string,
+  body: FormData,
+  onUpload?: (loaded: number, total: number) => void,
+  onSent?: () => void,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", path);
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) onUpload?.(event.loaded, event.total);
+    };
+    xhr.upload.onload = () => onSent?.();
+    xhr.onload = () => {
+      try {
+        const data = JSON.parse(xhr.responseText) as ApiResult<T>;
+        if (xhr.status >= 400 || !data.ok) {
+          reject(new Error(data.message || "请求失败"));
+          return;
+        }
+        resolve(data.data);
+      } catch {
+        reject(new Error("请求失败"));
+      }
+    };
+    xhr.onerror = () => reject(new Error("请求失败"));
+    xhr.send(body);
+  });
 }
 
 export function renameDriveEntry(accountId: string, path: string, name: string) {

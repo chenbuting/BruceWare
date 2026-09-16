@@ -10,6 +10,7 @@ import {
   fetchDriveAccounts,
   fetchDriveKinds,
   fetchDriveList,
+  fetchDriveQuota,
   makeDriveDir,
   moveDriveEntry,
   pollDriveAuth,
@@ -19,7 +20,7 @@ import {
   updateDriveAccount,
   uploadDriveFiles,
 } from "@/api/client";
-import type { DriveAccount, DriveAuthStart, DriveEntry, DriveKind, DriveList } from "@/api/types";
+import type { DriveAccount, DriveAuthStart, DriveEntry, DriveKind, DriveList, DriveQuota, DriveUploadProgress } from "@/api/types";
 import { Card } from "@/components/Card";
 import { ConfirmModal, Modal } from "@/components/Modal";
 
@@ -29,7 +30,9 @@ const btnClass = "border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text
 function formatSize(size: number) {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  if (size < 1024 * 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  if (size < 1024 * 1024 * 1024 * 1024) return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  return `${(size / (1024 * 1024 * 1024 * 1024)).toFixed(1)} TB`;
 }
 
 function itemIcon(item: DriveEntry) {
@@ -65,9 +68,19 @@ export function DrivePage() {
   const [ask, setAsk] = useState<DriveEntry | null>(null);
   const [askAccount, setAskAccount] = useState<DriveAccount | null>(null);
   const [view, setView] = useState<"grid" | "list">("grid");
+  const [quota, setQuota] = useState<DriveQuota | null>(null);
+  const [upload, setUpload] = useState<DriveUploadProgress | null>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
   const location = useLocation();
   const current = accounts.find((item) => item.id === accountId) || null;
+
+  async function loadQuota(id: string) {
+    try {
+      setQuota(await fetchDriveQuota(id));
+    } catch {
+      setQuota(null);
+    }
+  }
 
   async function reloadAccounts(prefer = accountId) {
     const data = await fetchDriveAccounts();
@@ -95,7 +108,9 @@ export function DrivePage() {
       .catch((err: Error) => setError(err.message));
     reloadAccounts()
       .then((row) => {
-        if (row?.ready) return loadList(row.id, "");
+        if (!row?.ready) return;
+        void loadQuota(row.id);
+        return loadList(row.id, "");
       })
       .catch((err: Error) => setError(err.message));
   }, [location.pathname]);
@@ -110,7 +125,9 @@ export function DrivePage() {
           setAuth(null);
           setHint("授权成功。");
           void reloadAccounts(accountId).then((item) => {
-            if (item?.ready) return loadList(item.id, "");
+            if (!item?.ready) return;
+            void loadQuota(item.id);
+            return loadList(item.id, "");
           });
         })
         .catch((err: Error) => {
@@ -168,8 +185,11 @@ export function DrivePage() {
                 disabled={busy}
                 onClick={() => {
                   setAccountId(item.id);
-                  if (item.ready) run(() => loadList(item.id, ""));
-                  else {
+                  if (item.ready) {
+                    void loadQuota(item.id);
+                    run(() => loadList(item.id, ""));
+                  } else {
+                    setQuota(null);
                     setList(null);
                     setPath("");
                   }
@@ -232,6 +252,12 @@ export function DrivePage() {
         </p>
         {current && !current.ready ? <p className="mt-2 text-[13px] text-amber-800">{current.message}</p> : null}
         {current?.user_label ? <p className="mt-2 text-[13px] text-[var(--muted)]">已授权：{current.user_label}</p> : null}
+        {quota?.total_text ? (
+          <p className={`mt-2 text-[13px] ${quota.over ? "text-[var(--err)]" : "text-[var(--muted)]"}`}>
+            容量：已用 {quota.used_text} / {quota.total_text}
+            {quota.over ? "。空间不足，删文件或开通会员后才能上传。" : ""}
+          </p>
+        ) : null}
 
         {current?.ready ? (
           <>
@@ -280,25 +306,42 @@ export function DrivePage() {
               >
                 新建文件夹
               </button>
-              <button type="button" className={btnClass} disabled={busy} onClick={() => uploadRef.current?.click()}>
-                上传
-              </button>
-              <input
-                ref={uploadRef}
-                type="file"
-                multiple
-                className="hidden"
-                onChange={(e) => {
-                  const files = e.target.files;
-                  e.target.value = "";
-                  if (!files?.length) return;
-                  run(async () => {
-                    await uploadDriveFiles(accountId, path, Array.from(files));
-                    await loadList(accountId, path);
-                  }, "已上传");
-                }}
-              />
+              <label className={`${btnClass} ${busy || quota?.over ? "pointer-events-none opacity-50" : ""}`}>
+                {upload ? `${upload.percent}%` : busy ? "在传…" : "上传"}
+                <input
+                  ref={uploadRef}
+                  type="file"
+                  multiple
+                  className="hidden"
+                  disabled={busy || Boolean(quota?.over)}
+                  onChange={(e) => {
+                    const files = Array.from(e.target.files || []);
+                    e.target.value = "";
+                    if (!files.length) return;
+                    run(async () => {
+                      try {
+                        await uploadDriveFiles(accountId, path, files, setUpload);
+                        await loadList(accountId, path);
+                        await loadQuota(accountId);
+                      } finally {
+                        setUpload(null);
+                      }
+                    }, "已上传");
+                  }}
+                />
+              </label>
             </div>
+            {upload ? (
+              <div className="mt-3">
+                <p className="text-[12px] text-[var(--muted)]">
+                  正在上传 {upload.index + 1}/{upload.total}：{upload.name}
+                  {upload.stage === "save" ? "（正在写入网盘）" : ""}
+                </p>
+                <div className="mt-1 h-1.5 overflow-hidden rounded-sm bg-[var(--line)]">
+                  <div className="h-full bg-[var(--text)]" style={{ width: `${Math.max(2, upload.percent)}%` }} />
+                </div>
+              </div>
+            ) : null}
             {list?.root ? <p className="mt-2 text-[12px] text-[var(--muted)]">应用目录：{list.root}</p> : null}
           </>
         ) : null}
