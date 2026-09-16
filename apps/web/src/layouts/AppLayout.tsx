@@ -1,10 +1,11 @@
 import { Boxes, CircleHelp, FileText, Folder, Globe, GripVertical, Home, PanelLeftClose, PanelLeftOpen, Settings, Shirt } from "lucide-react";
-import { NavLink } from "react-router-dom";
+import { NavLink, useLocation } from "react-router-dom";
 import { useEffect, useRef, useState, type ElementType } from "react";
 
 import { fetchSettings, setModuleOrder } from "@/api/client";
 import type { ModuleInfo } from "@/api/types";
 import { useModules } from "@/modules/ModuleContext";
+import { DriveBuyPage } from "@/pages/DriveBuyPage";
 import { Workspace } from "@/workspace/Workspace";
 
 const MODULE_ICONS: Record<string, ElementType> = {
@@ -118,6 +119,7 @@ function DraggableNavItem({
 
 /** 侧栏：首页 + 已开启功能 + 公共模块；设置单独放底部 */
 export function AppLayout() {
+  const location = useLocation();
   const { modules, reload } = useModules();
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [dbLabel, setDbLabel] = useState("检测数据源…");
@@ -150,6 +152,10 @@ export function AppLayout() {
 
   const apps = modules.filter((item) => item.kind === "app" && item.enabled && item.pinned);
   const commons = modules.filter((item) => item.kind === "common");
+
+  if (location.pathname.startsWith("/buy/")) {
+    return <DriveBuyPage />;
+  }
 
   function moveIn(group: ModuleInfo[], fromId: string, toId: string) {
     if (fromId === toId) return;

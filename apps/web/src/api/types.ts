@@ -419,6 +419,34 @@ export type DriveUploadProgress = {
   stage: "send" | "save";
 };
 
+export type DriveProduct = {
+  id: number;
+  account_id: string;
+  account_name: string;
+  title: string;
+  price: string;
+  price_cent: number;
+  path: string;
+  fsid: number;
+  period_days: number;
+  created_at: string;
+};
+
+export type DriveOrder = {
+  id: number;
+  product_id: number;
+  title: string;
+  price: string;
+  token: string;
+  status: "unpaid" | "paid" | string;
+  pay_channel: string;
+  share_url: string;
+  share_pwd: string;
+  buyer_path: string;
+  paid_at: string;
+  created_at: string;
+};
+
 export type DataColumn = {
   name: string;
   type: "integer" | "datetime" | "number" | "text";

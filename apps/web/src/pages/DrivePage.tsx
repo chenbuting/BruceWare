@@ -4,6 +4,7 @@ import { useLocation } from "react-router-dom";
 
 import {
   createDriveAccount,
+  createDriveProduct,
   deleteDriveAccount,
   downloadDriveEntry,
   fetchDriveAccounts,
@@ -24,6 +25,7 @@ import type { DriveAccount, DriveAuthStart, DriveEntry, DriveKind, DriveList, Dr
 import { Card } from "@/components/Card";
 import { ConfirmModal, Modal } from "@/components/Modal";
 import { PdfPreview } from "@/components/PdfPreview";
+import { DriveShopPanel } from "@/pages/DriveShopPanel";
 
 const inputClass = "border border-[var(--line)] bg-[var(--paper)] px-2 py-1.5 text-[13px]";
 const btnClass = "border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px] disabled:opacity-50";
@@ -85,6 +87,10 @@ export function DrivePage() {
   const [previewText, setPreviewText] = useState("");
   const [picked, setPicked] = useState<string[]>([]);
   const [dropping, setDropping] = useState(false);
+  const [tab, setTab] = useState<"files" | "shop">("files");
+  const [sellFrom, setSellFrom] = useState<DriveEntry | null>(null);
+  const [sellTitle, setSellTitle] = useState("");
+  const [sellPrice, setSellPrice] = useState("1");
   const uploadRef = useRef<HTMLInputElement>(null);
   const location = useLocation();
   const current = accounts.find((item) => item.id === accountId) || null;
@@ -313,8 +319,18 @@ export function DrivePage() {
             {quota.over ? "。空间不足，删文件或开通会员后才能上传。" : ""}
           </p>
         ) : null}
-
         {current?.ready ? (
+          <div className="mt-3 flex gap-2">
+            <button type="button" className={`${btnClass} ${tab === "files" ? "border-[var(--text)]" : "text-[var(--muted)]"}`} onClick={() => setTab("files")}>
+              文件
+            </button>
+            <button type="button" className={`${btnClass} ${tab === "shop" ? "border-[var(--text)]" : "text-[var(--muted)]"}`} onClick={() => setTab("shop")}>
+              货品
+            </button>
+          </div>
+        ) : null}
+
+        {current?.ready && tab === "files" ? (
           <>
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
               <div className="flex min-w-0 flex-wrap items-center gap-2 text-[13px]">
@@ -422,7 +438,9 @@ export function DrivePage() {
 
       {!accounts.length ? (
         <p className="text-[13px] text-[var(--muted)]">还没有账号。点「添加账号」，填开放平台的 AppKey 和 SecretKey。</p>
-      ) : current?.ready ? (
+      ) : current?.ready && tab === "shop" ? (
+        <DriveShopPanel busy={busy} onBusy={run} onHint={setHint} onError={setError} />
+      ) : current?.ready && tab === "files" ? (
         <div
           className={`min-h-40 rounded-md ${dropping ? "border border-dashed border-[var(--text)] bg-[var(--paper)]" : ""}`}
           onDragOver={(event) => {
@@ -463,6 +481,7 @@ export function DrivePage() {
                       onRename={() => { setRenameFrom(item); setRenameTo(item.name); }}
                       onMove={() => startPicker("move", [item])}
                       onCopy={() => startPicker("copy", [item])}
+                      onSell={() => { setSellFrom(item); setSellTitle(item.name); setSellPrice("1"); }}
                       onDelete={() => setAskItems([item])}
                     />
                   </div>
@@ -494,6 +513,7 @@ export function DrivePage() {
                         onRename={() => { setRenameFrom(item); setRenameTo(item.name); }}
                         onMove={() => startPicker("move", [item])}
                         onCopy={() => startPicker("copy", [item])}
+                        onSell={() => { setSellFrom(item); setSellTitle(item.name); setSellPrice("1"); }}
                         onDelete={() => setAskItems([item])}
                       />
                     </div>
@@ -682,6 +702,34 @@ export function DrivePage() {
         }}
       />
       ) : null}
+      {sellFrom ? (
+      <Modal title={`把「${sellFrom.name}」设为货品`} onClose={() => setSellFrom(null)}>
+        <p className="mb-3 text-[13px] leading-6 text-[var(--muted)]">对方付完（现在是测试付款）会得到这个文件夹的分享链接，可以下载或保存到自己的网盘。</p>
+        <input className={`${inputClass} mb-2 w-full`} value={sellTitle} onChange={(e) => setSellTitle(e.target.value)} placeholder="货品名称" />
+        <input className={`${inputClass} mb-3 w-full`} value={sellPrice} onChange={(e) => setSellPrice(e.target.value)} placeholder="价格，比如 9.9" />
+        <button
+          type="button"
+          className={btnClass}
+          disabled={busy || !sellFrom.fsid}
+          onClick={() => {
+            if (!sellFrom) return;
+            run(async () => {
+              await createDriveProduct({
+                account_id: accountId,
+                title: sellTitle.trim() || sellFrom.name,
+                price: sellPrice.trim() || "1",
+                path: sellFrom.path,
+                fsid: sellFrom.fsid,
+              });
+              setSellFrom(null);
+              setTab("shop");
+            }, "已设为货品");
+          }}
+        >
+          保存
+        </button>
+      </Modal>
+      ) : null}
       {askAccount ? (
       <ConfirmModal
         title="删除这个账号？"
@@ -710,6 +758,7 @@ function ItemActions({
   onRename,
   onMove,
   onCopy,
+  onSell,
   onDelete,
 }: {
   item: DriveEntry;
@@ -718,6 +767,7 @@ function ItemActions({
   onRename: () => void;
   onMove: () => void;
   onCopy: () => void;
+  onSell: () => void;
   onDelete: () => void;
 }) {
   return (
@@ -736,6 +786,11 @@ function ItemActions({
       <button type="button" disabled={busy} onClick={onCopy}>
         复制
       </button>
+      {item.kind === "dir" ? (
+        <button type="button" disabled={busy} onClick={onSell}>
+          设为货品
+        </button>
+      ) : null}
       <button type="button" disabled={busy} onClick={onDelete}>
         删除
       </button>

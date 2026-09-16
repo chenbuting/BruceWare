@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import secrets
 import time
 from pathlib import Path
 from typing import Any
@@ -309,6 +310,36 @@ class BaiduAdapter:
         if not items:
             raise ValueError("请先选文件")
         self._manager(account, "delete", items)
+
+    def share(self, account: dict[str, Any], fsid: int, period: int = 7, pwd: str = "") -> dict[str, Any]:
+        """给指定文件或文件夹生成百度分享链接，买家可下载或保存到自己的网盘。"""
+
+        if not fsid:
+            raise ValueError("缺少文件夹编号，请重新打开网盘再设一次")
+        days = period if period in {1, 7, 30} else 7
+        code = "".join(ch for ch in (pwd or "").strip().lower() if ch.isalnum())[:4]
+        if len(code) != 4:
+            alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
+            code = "".join(secrets.choice(alphabet) for _ in range(4))
+        data = self._xpan(
+            "POST",
+            "/share",
+            {"method": "set"},
+            account,
+            data={
+                "fid_list": json.dumps([int(fsid)], ensure_ascii=False),
+                "schannel": "4",
+                "channel_list": "[]",
+                "period": str(days),
+                "pwd": code,
+            },
+        )
+        link = str(data.get("link") or data.get("shorturl") or data.get("short_url") or "")
+        if link and not link.startswith("http"):
+            link = f"https://pan.baidu.com/s/{link.lstrip('/')}"
+        if not link:
+            raise ValueError("百度没返回分享链接")
+        return {"link": link, "pwd": str(data.get("pwd") or code), "period": int(data.get("period") or days)}
 
     def upload(self, account: dict[str, Any], path: str, filename: str, file_path: str) -> dict[str, Any]:
         source = Path(file_path)

@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from app.core.response import fail, ok
 from app.drive.adapters import get_adapter
 from app.drive.kinds import kind_ready, list_kinds
+from app.drive.shop import router as shop_router
 from app.drive.store import delete_raw, get_raw, list_raw, new_id, public_account, save_raw
 
 router = APIRouter()
@@ -401,3 +402,6 @@ def _stream_file(account_id: str, path: str, fsid: int, as_download: bool):
         media_type=media,
         headers={"Content-Disposition": f"{mode}; filename*=UTF-8''{quote(name)}"},
     )
+
+
+router.include_router(shop_router)

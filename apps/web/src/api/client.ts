@@ -33,6 +33,8 @@ import type {
   DriveList,
   DriveQuota,
   DriveUploadProgress,
+  DriveProduct,
+  DriveOrder,
   WardrobeDetected,
   WardrobeItem,
   WardrobeLook,
@@ -1063,4 +1065,46 @@ export async function downloadDriveEntry(accountId: string, path: string, filena
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+export function fetchDriveProducts() {
+  return request<{ items: DriveProduct[] }>("/api/v1/drive/products");
+}
+
+export function createDriveProduct(payload: { account_id: string; title: string; price: string; path: string; fsid: number }) {
+  return request<DriveProduct>("/api/v1/drive/products", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateDriveProduct(id: number, payload: { title?: string; price?: string }) {
+  return request<DriveProduct>(`/api/v1/drive/products/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteDriveProduct(id: number) {
+  return request<boolean>(`/api/v1/drive/products/${id}`, { method: "DELETE" });
+}
+
+export function fetchDriveOrders() {
+  return request<{ items: DriveOrder[] }>("/api/v1/drive/orders");
+}
+
+export function createDriveOrder(productId: number) {
+  return request<DriveOrder>(`/api/v1/drive/products/${productId}/orders`, { method: "POST" });
+}
+
+export function testPayDriveOrder(orderId: number) {
+  return request<DriveOrder>(`/api/v1/drive/orders/${orderId}/test-pay`, { method: "POST" });
+}
+
+export function fetchDriveBuy(token: string) {
+  return request<DriveOrder>(`/api/v1/drive/buy/${encodeURIComponent(token)}`);
+}
+
+export function testPayDriveBuy(token: string) {
+  return request<DriveOrder>(`/api/v1/drive/buy/${encodeURIComponent(token)}/test-pay`, { method: "POST" });
 }
