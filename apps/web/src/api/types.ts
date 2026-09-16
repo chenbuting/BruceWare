@@ -390,6 +390,7 @@ export type DriveEntry = {
   mtime: string;
   preview: string;
   fsid: number;
+  thumb: string;
 };
 
 export type DriveList = {

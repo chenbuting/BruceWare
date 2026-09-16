@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import mimetypes
 from urllib.parse import quote
 
-from fastapi import APIRouter, File, Form, Request, UploadFile
+from fastapi import APIRouter, File, Form, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -296,7 +297,18 @@ def delete_file(account_id: str, body: PathIn):
 
 
 @router.get("/drive/accounts/{account_id}/download")
-def download_file(account_id: str, request: Request, path: str = "", fsid: int = 0):
+def download_file(account_id: str, path: str = "", fsid: int = 0):
+    return _stream_file(account_id, path, fsid, True)
+
+
+@router.get("/drive/accounts/{account_id}/raw")
+def raw_file(account_id: str, path: str = "", fsid: int = 0):
+    """给页面预览用，不当成附件下载。"""
+
+    return _stream_file(account_id, path, fsid, False)
+
+
+def _stream_file(account_id: str, path: str, fsid: int, as_download: bool):
     row, err = _account_or_fail(account_id)
     if err is not None:
         return err
@@ -309,16 +321,17 @@ def download_file(account_id: str, request: Request, path: str = "", fsid: int =
     def chunks():
         try:
             for chunk in response.iter_bytes():
-                if request.is_disconnected:
-                    break
                 yield chunk
         finally:
             response.close()
             client.close()
 
-    filename = quote(name)
+    media = mimetypes.guess_type(name)[0] or "application/octet-stream"
+    if name.lower().endswith(".pdf"):
+        media = "application/pdf"
+    mode = "attachment" if as_download else "inline"
     return StreamingResponse(
         chunks(),
-        media_type="application/octet-stream",
-        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
+        media_type=media,
+        headers={"Content-Disposition": f"{mode}; filename*=UTF-8''{quote(name)}"},
     )

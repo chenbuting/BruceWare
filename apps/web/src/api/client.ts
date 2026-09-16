@@ -1040,6 +1040,9 @@ export async function downloadDriveEntry(accountId: string, path: string, filena
     throw new Error(message);
   }
   const blob = await res.blob();
+  if (!blob.size) {
+    throw new Error("下载失败");
+  }
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;

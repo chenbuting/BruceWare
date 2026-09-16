@@ -48,7 +48,7 @@ def preview_kind(name: str) -> str:
     return ""
 
 
-def entry_of(name: str, path: str, is_dir: bool, size: int = 0, mtime: int = 0, fsid: int = 0) -> dict:
+def entry_of(name: str, path: str, is_dir: bool, size: int = 0, mtime: int = 0, fsid: int = 0, thumb: str = "") -> dict:
     kind = "dir" if is_dir else "file"
     stamp = datetime.fromtimestamp(mtime).isoformat(timespec="seconds") if mtime else ""
     return {
@@ -59,4 +59,5 @@ def entry_of(name: str, path: str, is_dir: bool, size: int = 0, mtime: int = 0, 
         "mtime": stamp,
         "preview": preview_kind(name) if kind == "file" else "",
         "fsid": int(fsid or 0),
+        "thumb": thumb if kind == "file" else "",
     }

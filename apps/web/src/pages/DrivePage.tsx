@@ -23,6 +23,7 @@ import {
 import type { DriveAccount, DriveAuthStart, DriveEntry, DriveKind, DriveList, DriveQuota, DriveUploadProgress } from "@/api/types";
 import { Card } from "@/components/Card";
 import { ConfirmModal, Modal } from "@/components/Modal";
+import { PdfPreview } from "@/components/PdfPreview";
 
 const inputClass = "border border-[var(--line)] bg-[var(--paper)] px-2 py-1.5 text-[13px]";
 const btnClass = "border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px] disabled:opacity-50";
@@ -33,6 +34,15 @@ function formatSize(size: number) {
   if (size < 1024 * 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`;
   if (size < 1024 * 1024 * 1024 * 1024) return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
   return `${(size / (1024 * 1024 * 1024 * 1024)).toFixed(1)} TB`;
+}
+
+function driveRawUrl(accountId: string, item: DriveEntry) {
+  return `/api/v1/drive/accounts/${accountId}/raw?path=${encodeURIComponent(item.path)}&fsid=${encodeURIComponent(String(item.fsid))}`;
+}
+
+function itemThumb(accountId: string, item: DriveEntry) {
+  if (item.kind !== "file" || item.preview !== "image") return "";
+  return item.thumb || driveRawUrl(accountId, item);
 }
 
 function itemIcon(item: DriveEntry) {
@@ -70,6 +80,8 @@ export function DrivePage() {
   const [view, setView] = useState<"grid" | "list">("grid");
   const [quota, setQuota] = useState<DriveQuota | null>(null);
   const [upload, setUpload] = useState<DriveUploadProgress | null>(null);
+  const [preview, setPreview] = useState<DriveEntry | null>(null);
+  const [previewText, setPreviewText] = useState("");
   const uploadRef = useRef<HTMLInputElement>(null);
   const location = useLocation();
   const current = accounts.find((item) => item.id === accountId) || null;
@@ -162,8 +174,18 @@ export function DrivePage() {
       openDir(item.path);
       return;
     }
-    if (!accountId) return;
-    run(() => downloadDriveEntry(accountId, item.path, item.name, item.fsid));
+    setPreview(item);
+    setPreviewText("");
+    if (item.preview === "text") {
+      if (item.size > 512 * 1024) {
+        setPreviewText("文件太大，请下载后查看。");
+        return;
+      }
+      fetch(driveRawUrl(accountId, item))
+        .then((res) => (res.ok ? res.text() : Promise.reject()))
+        .then(setPreviewText)
+        .catch(() => setPreviewText("打不开这个文本"));
+    }
   }
 
   const shown = hits ?? list?.items ?? [];
@@ -358,7 +380,11 @@ export function DrivePage() {
             return (
               <div key={`${item.path}-${item.fsid}`} className="flex flex-wrap items-center gap-3 px-3 py-2 hover:bg-[var(--paper)]">
                 <button type="button" className="flex min-w-0 flex-1 items-center gap-3 text-left" onClick={() => clickItem(item)}>
-                  <Icon className={`h-5 w-5 shrink-0 ${color}`} />
+                  {itemThumb(accountId, item) ? (
+                    <img src={itemThumb(accountId, item)} alt="" referrerPolicy="no-referrer" className="h-10 w-10 shrink-0 rounded-sm object-cover" />
+                  ) : (
+                    <Icon className={`h-5 w-5 shrink-0 ${color}`} />
+                  )}
                   <span className="min-w-0 flex-1 break-all text-[13px]">{item.name}</span>
                   <span className="shrink-0 text-[12px] text-[var(--muted)]">{item.kind === "dir" ? "文件夹" : formatSize(item.size)}</span>
                 </button>
@@ -374,7 +400,11 @@ export function DrivePage() {
             return (
               <div key={`${item.path}-${item.fsid}`} className="rounded-md border border-[var(--line)] bg-[var(--paper)] px-3 py-3">
                 <button type="button" className="flex w-full flex-col items-center text-center" onClick={() => clickItem(item)}>
-                  <Icon className={`h-10 w-10 ${color}`} />
+                  {itemThumb(accountId, item) ? (
+                    <img src={itemThumb(accountId, item)} alt={item.name} referrerPolicy="no-referrer" className="h-24 w-full rounded-sm object-contain" />
+                  ) : (
+                    <Icon className={`h-10 w-10 ${color}`} />
+                  )}
                   <div className="mt-2 line-clamp-2 w-full break-all text-[13px] leading-5">{item.name}</div>
                   <div className="mt-1 text-[12px] text-[var(--muted)]">{item.kind === "dir" ? "文件夹" : formatSize(item.size)}</div>
                 </button>
@@ -385,6 +415,38 @@ export function DrivePage() {
             );
           })}
         </div>
+      ) : null}
+
+      {preview ? (
+        <Modal title={preview.name} wide onClose={() => setPreview(null)}>
+          {preview.preview === "image" ? (
+            <div className="flex max-h-[70vh] items-center justify-center overflow-hidden rounded-md bg-[var(--bg)]">
+              <img src={driveRawUrl(accountId, preview)} alt={preview.name} className="max-h-[70vh] max-w-full object-contain" />
+            </div>
+          ) : null}
+          {preview.preview === "pdf" ? <PdfPreview url={driveRawUrl(accountId, preview)} /> : null}
+          {preview.preview === "text" ? (
+            <pre className="max-h-[70vh] overflow-auto whitespace-pre-wrap rounded-md bg-[var(--bg)] px-3 py-2 text-[13px] leading-6">{previewText || "正在读取…"}</pre>
+          ) : null}
+          {!preview.preview ? (
+            <p className="text-[13px] leading-6 text-[var(--muted)]">
+              这种文件不能在这里直接预览，请下载查看。
+              <br />
+              {formatSize(preview.size)}
+              {preview.mtime ? ` · ${preview.mtime.replace("T", " ")}` : ""}
+            </p>
+          ) : null}
+          <div className="mt-3">
+            <button
+              type="button"
+              className={btnClass}
+              disabled={busy}
+              onClick={() => run(() => downloadDriveEntry(accountId, preview.path, preview.name, preview.fsid), "已开始下载")}
+            >
+              下载
+            </button>
+          </div>
+        </Modal>
       ) : null}
 
       {formOpen ? (

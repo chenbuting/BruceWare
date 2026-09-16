@@ -49,6 +49,13 @@ def _size_text(n: int) -> str:
     return f"{int(n)}B"
 
 
+def _thumb_url(row: dict[str, Any]) -> str:
+    thumbs = row.get("thumbs")
+    if not isinstance(thumbs, dict):
+        return ""
+    return str(thumbs.get("url2") or thumbs.get("url1") or thumbs.get("url3") or "")
+
+
 def _msg(errno: int, fallback: str = "") -> str:
     if errno == 0:
         return ""
@@ -159,7 +166,7 @@ class BaiduAdapter:
             data = self._xpan(
                 "GET",
                 "/file",
-                {"method": "list", "dir": folder, "start": start, "limit": 200, "order": "name"},
+                {"method": "list", "dir": folder, "start": start, "limit": 200, "order": "name", "web": "1"},
                 account,
             )
             rows = data.get("list") if isinstance(data.get("list"), list) else []
@@ -174,6 +181,7 @@ class BaiduAdapter:
                         int(row.get("size") or 0),
                         int(row.get("server_mtime") or row.get("local_mtime") or 0),
                         int(row.get("fs_id") or 0),
+                        _thumb_url(row),
                     )
                 )
             if len(rows) < 200:
@@ -186,7 +194,7 @@ class BaiduAdapter:
         data = self._xpan(
             "GET",
             "/file",
-            {"method": "search", "key": query.strip(), "dir": folder, "recursion": 1, "num": 100},
+            {"method": "search", "key": query.strip(), "dir": folder, "recursion": 1, "num": 100, "web": "1"},
             account,
         )
         items = []
@@ -202,6 +210,7 @@ class BaiduAdapter:
                     int(row.get("size") or 0),
                     int(row.get("server_mtime") or 0),
                     int(row.get("fs_id") or 0),
+                    _thumb_url(row),
                 )
             )
         return {"root": self.default_root(account), "path": folder, "crumbs": crumbs(folder), "items": items}
@@ -415,18 +424,21 @@ class BaiduAdapter:
         name = str(rows[0].get("filename") or path.rsplit("/", 1)[-1] or "下载")
         if not dlink:
             raise ValueError("百度没给下载地址")
+        # 不能用 params= 再拼 access_token，会把 sign 重新编码，百度会报 31023。
+        url = f"{dlink}{'&' if '?' in dlink else '?'}access_token={token}"
         client = httpx.Client(timeout=None, follow_redirects=True)
-        req = client.build_request(
-            "GET",
-            dlink,
-            params={"access_token": token},
-            headers={"User-Agent": _UA},
-        )
+        req = client.build_request("GET", url, headers={"User-Agent": _UA})
         response = client.send(req, stream=True)
         if response.status_code >= 400:
+            try:
+                err = response.json()
+                code = int(err.get("error_code") or err.get("errno") or 0)
+                msg = _msg(code, "下载失败")
+            except Exception:
+                msg = "下载失败"
             response.close()
             client.close()
-            raise ValueError("下载失败")
+            raise ValueError(msg)
         return name, response, client
 
     def apply_tokens(self, account: dict[str, Any], tokens: dict[str, Any]) -> dict[str, Any]:
