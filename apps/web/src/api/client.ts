@@ -26,6 +26,11 @@ import type {
   DataRow,
   DataRowList,
   DataTableInfo,
+  DriveAccount,
+  DriveAuthStart,
+  DriveEntry,
+  DriveKind,
+  DriveList,
   WardrobeDetected,
   WardrobeItem,
   WardrobeLook,
@@ -875,4 +880,111 @@ export function deleteDataRow(table: string, id: string) {
   return request<boolean>(`/api/v1/data/tables/${encodeURIComponent(table)}/rows/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
+}
+
+export function fetchDriveKinds() {
+  return request<{ items: DriveKind[] }>("/api/v1/drive/kinds");
+}
+
+export function fetchDriveAccounts() {
+  return request<{ items: DriveAccount[] }>("/api/v1/drive/accounts");
+}
+
+export function createDriveAccount(payload: { kind?: string; name?: string; app_key: string; secret_key: string; app_name?: string }) {
+  return request<DriveAccount>("/api/v1/drive/accounts", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateDriveAccount(
+  id: string,
+  payload: { name?: string; app_key?: string; secret_key?: string; app_name?: string },
+) {
+  return request<DriveAccount>(`/api/v1/drive/accounts/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteDriveAccount(id: string) {
+  return request<boolean>(`/api/v1/drive/accounts/${id}`, { method: "DELETE" });
+}
+
+export function startDriveAuth(id: string) {
+  return request<DriveAuthStart>(`/api/v1/drive/accounts/${id}/auth/start`, { method: "POST" });
+}
+
+export function pollDriveAuth(id: string) {
+  return request<DriveAccount & { done: boolean }>(`/api/v1/drive/accounts/${id}/auth/poll`, { method: "POST" });
+}
+
+export function fetchDriveList(accountId: string, path = "") {
+  return request<DriveList>(`/api/v1/drive/accounts/${accountId}/list?path=${encodeURIComponent(path)}`);
+}
+
+export function searchDrive(accountId: string, query: string, path = "") {
+  return request<DriveList>(
+    `/api/v1/drive/accounts/${accountId}/search?q=${encodeURIComponent(query)}&path=${encodeURIComponent(path)}`,
+  );
+}
+
+export function makeDriveDir(accountId: string, path: string, name: string) {
+  return request<DriveEntry>(`/api/v1/drive/accounts/${accountId}/mkdir`, {
+    method: "POST",
+    body: JSON.stringify({ path, name }),
+  });
+}
+
+export function uploadDriveFiles(accountId: string, path: string, files: File[]) {
+  const body = new FormData();
+  body.append("path", path);
+  files.forEach((file) => body.append("files", file));
+  return request<{ items: DriveEntry[] }>(`/api/v1/drive/accounts/${accountId}/upload`, { method: "POST", body });
+}
+
+export function renameDriveEntry(accountId: string, path: string, name: string) {
+  return request<DriveEntry>(`/api/v1/drive/accounts/${accountId}/rename`, {
+    method: "POST",
+    body: JSON.stringify({ path, name }),
+  });
+}
+
+export function moveDriveEntry(accountId: string, path: string, dest: string) {
+  return request<DriveEntry>(`/api/v1/drive/accounts/${accountId}/move`, {
+    method: "POST",
+    body: JSON.stringify({ path, dest }),
+  });
+}
+
+export function deleteDriveEntry(accountId: string, path: string) {
+  return request<boolean>(`/api/v1/drive/accounts/${accountId}/delete`, {
+    method: "POST",
+    body: JSON.stringify({ path }),
+  });
+}
+
+export async function downloadDriveEntry(accountId: string, path: string, filename: string, fsid: number) {
+  const res = await fetch(
+    `/api/v1/drive/accounts/${accountId}/download?path=${encodeURIComponent(path)}&fsid=${encodeURIComponent(String(fsid))}`,
+  );
+  if (!res.ok) {
+    let message = "下载失败";
+    try {
+      const body = (await res.json()) as ApiResult<null>;
+      message = body.message || message;
+    } catch {
+      /* 不是 JSON */
+    }
+    throw new Error(message);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filenameFrom(res, filename);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }

@@ -12,6 +12,7 @@ from app.files.router import router as files_router
 from app.wardrobe.router import router as wardrobe_router
 from app.kb.router import router as kb_router
 from app.data.router import router as data_router
+from app.drive.router import router as drive_router
 
 api_router = APIRouter()
 api_router.include_router(health_router, tags=["健康检查"])
@@ -24,3 +25,4 @@ api_router.include_router(wardrobe_router, tags=["衣橱"])
 api_router.include_router(files_router, tags=["文件"])
 api_router.include_router(kb_router, tags=["知识库"])
 api_router.include_router(data_router, tags=["数据"])
+api_router.include_router(drive_router, tags=["网盘"])

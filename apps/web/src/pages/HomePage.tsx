@@ -44,6 +44,7 @@ function moduleNote(id: string, stats: HomeStats, files: FilesStatus | null) {
     if (stats.kb === null) return "打开后可整理资料。";
     return stats.kb ? `${stats.kb} 个库` : "还没有库";
   }
+  if (id === "drive") return "打开后可管理百度网盘。";
   return "";
 }
 

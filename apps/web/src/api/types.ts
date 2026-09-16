@@ -354,6 +354,51 @@ export type KbDocument = {
   updated_at: string;
 };
 
+export type DriveKind = {
+  id: string;
+  label: string;
+  ready: boolean;
+};
+
+export type DriveAccount = {
+  id: string;
+  kind: string;
+  kind_label: string;
+  name: string;
+  app_name: string;
+  has_app_key: boolean;
+  has_secret: boolean;
+  authorized: boolean;
+  user_label: string;
+  ready: boolean;
+  message: string;
+};
+
+export type DriveAuthStart = {
+  user_code: string;
+  verify_url: string;
+  qrcode_url: string;
+  auth_url: string;
+  interval: number;
+};
+
+export type DriveEntry = {
+  name: string;
+  path: string;
+  kind: "dir" | "file";
+  size: number;
+  mtime: string;
+  preview: string;
+  fsid: number;
+};
+
+export type DriveList = {
+  root: string;
+  path: string;
+  crumbs: { name: string; path: string }[];
+  items: DriveEntry[];
+};
+
 export type DataColumn = {
   name: string;
   type: "integer" | "datetime" | "number" | "text";

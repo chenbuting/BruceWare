@@ -1,0 +1,8 @@
+id: drive
+name: 网盘
+kind: app
+description: 对接百度网盘，浏览、上传、下载、改名和删除。以后还能加别的盘。
+version: 0.1.0
+web:
+  route_prefix: /m/drive
+  nav_label: 网盘

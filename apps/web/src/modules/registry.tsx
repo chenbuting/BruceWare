@@ -1,6 +1,7 @@
 import type { ComponentType } from "react";
 
 import { DataPage } from "@/pages/DataPage";
+import { DrivePage } from "@/pages/DrivePage";
 import { FilesPage } from "@/pages/FilesPage";
 import { HelpPage } from "@/pages/HelpPage";
 import { KbPage } from "@/pages/KbPage";
@@ -68,6 +69,12 @@ export const MODULE_PAGES: Record<string, ModulePageEntry> = {
     wide: true,
     fill: true,
     page: DataPage,
+  },
+  drive: {
+    title: "网盘",
+    desc: "对接百度网盘，浏览、上传、下载、改名和删除。以后还能加别的盘。",
+    wide: true,
+    page: DrivePage,
   },
 };
 
