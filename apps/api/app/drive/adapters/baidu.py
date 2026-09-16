@@ -280,14 +280,35 @@ class BaiduAdapter:
         return entry_of(new_name, join_path(parent, new_name), False)
 
     def move(self, account: dict[str, Any], path: str, dest: str) -> dict[str, Any]:
-        src = normalize_path(path)
+        return self.relocate(account, [path], dest, "move")[0]
+
+    def copy(self, account: dict[str, Any], path: str, dest: str) -> dict[str, Any]:
+        return self.relocate(account, [path], dest, "copy")[0]
+
+    def relocate(self, account: dict[str, Any], paths: list[str], dest: str, opera: str) -> list[dict[str, Any]]:
         folder = normalize_path(dest or self.default_root(account))
-        name = src.rsplit("/", 1)[-1]
-        self._manager(account, "move", [{"path": src, "dest": folder, "newname": name}])
-        return entry_of(name, join_path(folder, name), False)
+        rows: list[dict[str, Any]] = []
+        created: list[dict[str, Any]] = []
+        for raw in paths:
+            src = normalize_path(raw)
+            name = src.rsplit("/", 1)[-1]
+            if opera == "move" and (folder == src or folder.startswith(src.rstrip("/") + "/")):
+                raise ValueError("不能移到自己里面")
+            rows.append({"path": src, "dest": folder, "newname": name})
+            created.append(entry_of(name, join_path(folder, name), False))
+        if not rows:
+            raise ValueError("请先选文件")
+        self._manager(account, opera, rows)
+        return created
 
     def delete(self, account: dict[str, Any], path: str) -> None:
-        self._manager(account, "delete", [normalize_path(path)])
+        self.delete_many(account, [path])
+
+    def delete_many(self, account: dict[str, Any], paths: list[str]) -> None:
+        items = [normalize_path(item) for item in paths if str(item).strip()]
+        if not items:
+            raise ValueError("请先选文件")
+        self._manager(account, "delete", items)
 
     def upload(self, account: dict[str, Any], path: str, filename: str, file_path: str) -> dict[str, Any]:
         source = Path(file_path)

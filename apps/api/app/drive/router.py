@@ -35,6 +35,7 @@ class PathIn(BaseModel):
     name: str = ""
     dest: str = ""
     fsid: int = 0
+    paths: list[str] = Field(default_factory=list)
 
 
 def _account_or_fail(account_id: str):
@@ -50,6 +51,13 @@ def _adapter(row: dict):
 
 def _save_tokens(row: dict) -> dict:
     return save_raw(row)
+
+
+def _body_paths(body: PathIn) -> list[str]:
+    items = [item.strip() for item in body.paths if item and item.strip()]
+    if not items and body.path.strip():
+        items = [body.path.strip()]
+    return items
 
 
 def _refresh_if_needed(row: dict) -> dict:
@@ -311,10 +319,29 @@ def move_file(account_id: str, body: PathIn):
     row, err = _account_or_fail(account_id)
     if err is not None:
         return err
+    paths = _body_paths(body)
+    if not paths:
+        return fail("请先选文件")
     try:
-        item = _adapter(row).move(row, body.path, body.dest)
+        items = _adapter(row).relocate(row, paths, body.dest, "move")
         _save_tokens(row)
-        return ok(item)
+        return ok({"items": items})
+    except ValueError as exc:
+        return fail(str(exc))
+
+
+@router.post("/drive/accounts/{account_id}/copy")
+def copy_file(account_id: str, body: PathIn):
+    row, err = _account_or_fail(account_id)
+    if err is not None:
+        return err
+    paths = _body_paths(body)
+    if not paths:
+        return fail("请先选文件")
+    try:
+        items = _adapter(row).relocate(row, paths, body.dest, "copy")
+        _save_tokens(row)
+        return ok({"items": items})
     except ValueError as exc:
         return fail(str(exc))
 
@@ -324,8 +351,11 @@ def delete_file(account_id: str, body: PathIn):
     row, err = _account_or_fail(account_id)
     if err is not None:
         return err
+    paths = _body_paths(body)
+    if not paths:
+        return fail("请先选文件")
     try:
-        _adapter(row).delete(row, body.path)
+        _adapter(row).delete_many(row, paths)
         _save_tokens(row)
         return ok(True)
     except ValueError as exc:

@@ -1012,16 +1012,28 @@ export function renameDriveEntry(accountId: string, path: string, name: string) 
 }
 
 export function moveDriveEntry(accountId: string, path: string, dest: string) {
-  return request<DriveEntry>(`/api/v1/drive/accounts/${accountId}/move`, {
+  return relocateDriveEntries(accountId, "move", [path], dest);
+}
+
+export function copyDriveEntry(accountId: string, path: string, dest: string) {
+  return relocateDriveEntries(accountId, "copy", [path], dest);
+}
+
+export function relocateDriveEntries(accountId: string, action: "move" | "copy", paths: string[], dest: string) {
+  return request<{ items: DriveEntry[] }>(`/api/v1/drive/accounts/${accountId}/${action}`, {
     method: "POST",
-    body: JSON.stringify({ path, dest }),
+    body: JSON.stringify({ paths, dest }),
   });
 }
 
 export function deleteDriveEntry(accountId: string, path: string) {
+  return deleteDriveEntries(accountId, [path]);
+}
+
+export function deleteDriveEntries(accountId: string, paths: string[]) {
   return request<boolean>(`/api/v1/drive/accounts/${accountId}/delete`, {
     method: "POST",
-    body: JSON.stringify({ path }),
+    body: JSON.stringify({ paths }),
   });
 }
 

@@ -5,20 +5,20 @@ import { useLocation } from "react-router-dom";
 import {
   createDriveAccount,
   deleteDriveAccount,
-  deleteDriveEntry,
   downloadDriveEntry,
   fetchDriveAccounts,
   fetchDriveKinds,
   fetchDriveList,
   fetchDriveQuota,
   makeDriveDir,
-  moveDriveEntry,
+  relocateDriveEntries,
   pollDriveAuth,
   renameDriveEntry,
   searchDrive,
   startDriveAuth,
   updateDriveAccount,
   uploadDriveFiles,
+  deleteDriveEntries,
 } from "@/api/client";
 import type { DriveAccount, DriveAuthStart, DriveEntry, DriveKind, DriveList, DriveQuota, DriveUploadProgress } from "@/api/types";
 import { Card } from "@/components/Card";
@@ -73,15 +73,18 @@ export function DrivePage() {
   const [auth, setAuth] = useState<DriveAuthStart | null>(null);
   const [renameFrom, setRenameFrom] = useState<DriveEntry | null>(null);
   const [renameTo, setRenameTo] = useState("");
-  const [moveFrom, setMoveFrom] = useState<DriveEntry | null>(null);
+  const [pickerItems, setPickerItems] = useState<DriveEntry[] | null>(null);
+  const [pickerAction, setPickerAction] = useState<"move" | "copy">("move");
   const [moveList, setMoveList] = useState<DriveList | null>(null);
-  const [ask, setAsk] = useState<DriveEntry | null>(null);
+  const [askItems, setAskItems] = useState<DriveEntry[] | null>(null);
   const [askAccount, setAskAccount] = useState<DriveAccount | null>(null);
   const [view, setView] = useState<"grid" | "list">("grid");
   const [quota, setQuota] = useState<DriveQuota | null>(null);
   const [upload, setUpload] = useState<DriveUploadProgress | null>(null);
   const [preview, setPreview] = useState<DriveEntry | null>(null);
   const [previewText, setPreviewText] = useState("");
+  const [picked, setPicked] = useState<string[]>([]);
+  const [dropping, setDropping] = useState(false);
   const uploadRef = useRef<HTMLInputElement>(null);
   const location = useLocation();
   const current = accounts.find((item) => item.id === accountId) || null;
@@ -111,6 +114,7 @@ export function DrivePage() {
     setList(data);
     setPath(data.path);
     setHits(null);
+    setPicked([]);
   }
 
   useEffect(() => {
@@ -186,6 +190,35 @@ export function DrivePage() {
         .then(setPreviewText)
         .catch(() => setPreviewText("打不开这个文本"));
     }
+  }
+
+  function togglePick(itemPath: string) {
+    setPicked((prev) => (prev.includes(itemPath) ? prev.filter((item) => item !== itemPath) : [...prev, itemPath]));
+  }
+
+  function selectedEntries() {
+    const map = new Map(shown.map((item) => [item.path, item]));
+    return picked.map((itemPath) => map.get(itemPath)).filter((item): item is DriveEntry => Boolean(item));
+  }
+
+  function startPicker(action: "move" | "copy", items: DriveEntry[]) {
+    if (!items.length) return;
+    setPickerAction(action);
+    setPickerItems(items);
+    run(async () => setMoveList(await fetchDriveList(accountId, path)));
+  }
+
+  function startUpload(files: File[]) {
+    if (!files.length || quota?.over) return;
+    run(async () => {
+      try {
+        await uploadDriveFiles(accountId, path, files, setUpload);
+        await loadList(accountId, path);
+        await loadQuota(accountId);
+      } finally {
+        setUpload(null);
+      }
+    }, "已上传");
   }
 
   const shown = hits ?? list?.items ?? [];
@@ -339,20 +372,38 @@ export function DrivePage() {
                   onChange={(e) => {
                     const files = Array.from(e.target.files || []);
                     e.target.value = "";
-                    if (!files.length) return;
-                    run(async () => {
-                      try {
-                        await uploadDriveFiles(accountId, path, files, setUpload);
-                        await loadList(accountId, path);
-                        await loadQuota(accountId);
-                      } finally {
-                        setUpload(null);
-                      }
-                    }, "已上传");
+                    startUpload(files);
                   }}
                 />
               </label>
+              {shown.length ? (
+                <button
+                  type="button"
+                  className={btnClass}
+                  disabled={busy}
+                  onClick={() => setPicked(picked.length === shown.length ? [] : shown.map((item) => item.path))}
+                >
+                  {picked.length === shown.length ? "取消全选" : "全选"}
+                </button>
+              ) : null}
             </div>
+            {picked.length ? (
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-[13px]">
+                <span className="text-[var(--muted)]">已选 {picked.length} 项</span>
+                <button type="button" className={btnClass} disabled={busy} onClick={() => startPicker("move", selectedEntries())}>
+                  移动
+                </button>
+                <button type="button" className={btnClass} disabled={busy} onClick={() => startPicker("copy", selectedEntries())}>
+                  复制
+                </button>
+                <button type="button" className={btnClass} disabled={busy} onClick={() => setAskItems(selectedEntries())}>
+                  删除
+                </button>
+                <button type="button" className="text-[13px] text-[var(--muted)]" onClick={() => setPicked([])}>
+                  取消选择
+                </button>
+              </div>
+            ) : null}
             {upload ? (
               <div className="mt-3">
                 <p className="text-[12px] text-[var(--muted)]">
@@ -364,56 +415,93 @@ export function DrivePage() {
                 </div>
               </div>
             ) : null}
-            {list?.root ? <p className="mt-2 text-[12px] text-[var(--muted)]">应用目录：{list.root}</p> : null}
+            {list?.root ? <p className="mt-2 text-[12px] text-[var(--muted)]">应用目录：{list.root}。也可以把文件拖到下面上传。</p> : null}
           </>
         ) : null}
       </Card>
 
       {!accounts.length ? (
         <p className="text-[13px] text-[var(--muted)]">还没有账号。点「添加账号」，填开放平台的 AppKey 和 SecretKey。</p>
-      ) : current?.ready && shown.length === 0 ? (
-        <p className="text-[13px] text-[var(--muted)]">{searching ? "没有找到。" : "这个文件夹是空的。可以上传或新建文件夹。"}</p>
-      ) : current?.ready && view === "list" ? (
-        <div className="divide-y divide-[var(--line)] border border-[var(--line)]">
-          {shown.map((item) => {
-            const { Icon, color } = itemIcon(item);
-            return (
-              <div key={`${item.path}-${item.fsid}`} className="flex flex-wrap items-center gap-3 px-3 py-2 hover:bg-[var(--paper)]">
-                <button type="button" className="flex min-w-0 flex-1 items-center gap-3 text-left" onClick={() => clickItem(item)}>
-                  {itemThumb(accountId, item) ? (
-                    <img src={itemThumb(accountId, item)} alt="" referrerPolicy="no-referrer" className="h-10 w-10 shrink-0 rounded-sm object-cover" />
-                  ) : (
-                    <Icon className={`h-5 w-5 shrink-0 ${color}`} />
-                  )}
-                  <span className="min-w-0 flex-1 break-all text-[13px]">{item.name}</span>
-                  <span className="shrink-0 text-[12px] text-[var(--muted)]">{item.kind === "dir" ? "文件夹" : formatSize(item.size)}</span>
-                </button>
-                  <ItemActions item={item} busy={busy} onDownload={() => run(() => downloadDriveEntry(accountId, item.path, item.name, item.fsid))} onRename={() => { setRenameFrom(item); setRenameTo(item.name); }} onMove={() => { setMoveFrom(item); run(async () => setMoveList(await fetchDriveList(accountId, path))); }} onDelete={() => setAsk(item)} />
-              </div>
-            );
-          })}
-        </div>
       ) : current?.ready ? (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
-          {shown.map((item) => {
-            const { Icon, color } = itemIcon(item);
-            return (
-              <div key={`${item.path}-${item.fsid}`} className="rounded-md border border-[var(--line)] bg-[var(--paper)] px-3 py-3">
-                <button type="button" className="flex w-full flex-col items-center text-center" onClick={() => clickItem(item)}>
-                  {itemThumb(accountId, item) ? (
-                    <img src={itemThumb(accountId, item)} alt={item.name} referrerPolicy="no-referrer" className="h-24 w-full rounded-sm object-contain" />
-                  ) : (
-                    <Icon className={`h-10 w-10 ${color}`} />
-                  )}
-                  <div className="mt-2 line-clamp-2 w-full break-all text-[13px] leading-5">{item.name}</div>
-                  <div className="mt-1 text-[12px] text-[var(--muted)]">{item.kind === "dir" ? "文件夹" : formatSize(item.size)}</div>
-                </button>
-                <div className="mt-2 flex justify-center">
-                  <ItemActions item={item} busy={busy} onDownload={() => run(() => downloadDriveEntry(accountId, item.path, item.name, item.fsid))} onRename={() => { setRenameFrom(item); setRenameTo(item.name); }} onMove={() => { setMoveFrom(item); run(async () => setMoveList(await fetchDriveList(accountId, path))); }} onDelete={() => setAsk(item)} />
-                </div>
-              </div>
-            );
-          })}
+        <div
+          className={`min-h-40 rounded-md ${dropping ? "border border-dashed border-[var(--text)] bg-[var(--paper)]" : ""}`}
+          onDragOver={(event) => {
+            event.preventDefault();
+            if (!quota?.over) setDropping(true);
+          }}
+          onDragLeave={() => setDropping(false)}
+          onDrop={(event) => {
+            event.preventDefault();
+            setDropping(false);
+            startUpload(Array.from(event.dataTransfer.files || []));
+          }}
+        >
+          {dropping ? <p className="px-3 py-6 text-center text-[13px] text-[var(--muted)]">松开鼠标就开始上传</p> : null}
+          {!dropping && shown.length === 0 ? (
+            <p className="text-[13px] text-[var(--muted)]">{searching ? "没有找到。" : "这个文件夹是空的。可以上传、拖文件进来，或新建文件夹。"}</p>
+          ) : null}
+          {!dropping && shown.length > 0 && view === "list" ? (
+            <div className="divide-y divide-[var(--line)] border border-[var(--line)]">
+              {shown.map((item) => {
+                const { Icon, color } = itemIcon(item);
+                return (
+                  <div key={`${item.path}-${item.fsid}`} className="flex flex-wrap items-center gap-3 px-3 py-2 hover:bg-[var(--paper)]">
+                    <input type="checkbox" checked={picked.includes(item.path)} disabled={busy} onChange={() => togglePick(item.path)} />
+                    <button type="button" className="flex min-w-0 flex-1 items-center gap-3 text-left" onClick={() => clickItem(item)}>
+                      {itemThumb(accountId, item) ? (
+                        <img src={itemThumb(accountId, item)} alt="" referrerPolicy="no-referrer" className="h-10 w-10 shrink-0 rounded-sm object-cover" />
+                      ) : (
+                        <Icon className={`h-5 w-5 shrink-0 ${color}`} />
+                      )}
+                      <span className="min-w-0 flex-1 break-all text-[13px]">{item.name}</span>
+                      <span className="shrink-0 text-[12px] text-[var(--muted)]">{item.kind === "dir" ? "文件夹" : formatSize(item.size)}</span>
+                    </button>
+                    <ItemActions
+                      item={item}
+                      busy={busy}
+                      onDownload={() => run(() => downloadDriveEntry(accountId, item.path, item.name, item.fsid))}
+                      onRename={() => { setRenameFrom(item); setRenameTo(item.name); }}
+                      onMove={() => startPicker("move", [item])}
+                      onCopy={() => startPicker("copy", [item])}
+                      onDelete={() => setAskItems([item])}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
+          {!dropping && shown.length > 0 && view === "grid" ? (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
+              {shown.map((item) => {
+                const { Icon, color } = itemIcon(item);
+                return (
+                  <div key={`${item.path}-${item.fsid}`} className="relative rounded-md border border-[var(--line)] bg-[var(--paper)] px-3 py-3">
+                    <input type="checkbox" className="absolute left-2 top-2" checked={picked.includes(item.path)} disabled={busy} onChange={() => togglePick(item.path)} />
+                    <button type="button" className="flex w-full flex-col items-center text-center" onClick={() => clickItem(item)}>
+                      {itemThumb(accountId, item) ? (
+                        <img src={itemThumb(accountId, item)} alt={item.name} referrerPolicy="no-referrer" className="h-24 w-full rounded-sm object-contain" />
+                      ) : (
+                        <Icon className={`h-10 w-10 ${color}`} />
+                      )}
+                      <div className="mt-2 line-clamp-2 w-full break-all text-[13px] leading-5">{item.name}</div>
+                      <div className="mt-1 text-[12px] text-[var(--muted)]">{item.kind === "dir" ? "文件夹" : formatSize(item.size)}</div>
+                    </button>
+                    <div className="mt-2 flex justify-center">
+                      <ItemActions
+                        item={item}
+                        busy={busy}
+                        onDownload={() => run(() => downloadDriveEntry(accountId, item.path, item.name, item.fsid))}
+                        onRename={() => { setRenameFrom(item); setRenameTo(item.name); }}
+                        onMove={() => startPicker("move", [item])}
+                        onCopy={() => startPicker("copy", [item])}
+                        onDelete={() => setAskItems([item])}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -520,9 +608,12 @@ export function DrivePage() {
       </Modal>
       ) : null}
 
-      {moveFrom ? (
-      <Modal title={`移动「${moveFrom.name}」`} onClose={() => { setMoveFrom(null); setMoveList(null); }}>
-        <p className="mb-2 text-[12px] text-[var(--muted)]">点文件夹进去，然后点「移到这里」。</p>
+      {pickerItems ? (
+      <Modal
+        title={pickerAction === "copy" ? `复制${pickerItems.length > 1 ? ` ${pickerItems.length} 项` : `「${pickerItems[0].name}」`}` : `移动${pickerItems.length > 1 ? ` ${pickerItems.length} 项` : `「${pickerItems[0].name}」`}`}
+        onClose={() => { setPickerItems(null); setMoveList(null); }}
+      >
+        <p className="mb-2 text-[12px] text-[var(--muted)]">点文件夹进去，然后点「放到这里」。</p>
         <div className="mb-3 flex min-w-0 flex-wrap items-center gap-2 text-[13px]">
           {(moveList?.crumbs || []).map((item, index) => (
             <span key={`${item.path}-${item.name}`} className="flex items-center gap-2">
@@ -536,9 +627,9 @@ export function DrivePage() {
         <div className="mb-3 max-h-56 overflow-auto border border-[var(--line)]">
           {!moveList ? (
             <p className="px-3 py-2 text-[13px] text-[var(--muted)]">正在读取…</p>
-          ) : (moveList.items || []).filter((item) => item.kind === "dir" && item.path !== moveFrom.path).length ? (
+          ) : (moveList.items || []).filter((item) => item.kind === "dir" && !pickerItems.some((pickedItem) => pickedItem.path === item.path)).length ? (
             moveList.items
-              .filter((item) => item.kind === "dir" && item.path !== moveFrom.path)
+              .filter((item) => item.kind === "dir" && !pickerItems.some((pickedItem) => pickedItem.path === item.path))
               .map((item) => (
                 <button
                   key={item.path}
@@ -558,32 +649,34 @@ export function DrivePage() {
         <button
           type="button"
           className={btnClass}
-          disabled={busy || !moveList || (moveFrom.kind === "dir" && (moveList.path === moveFrom.path || moveList.path.startsWith(`${moveFrom.path}/`)))}
+          disabled={busy || !moveList || pickerItems.some((item) => item.kind === "dir" && (moveList.path === item.path || moveList.path.startsWith(`${item.path}/`)))}
           onClick={() => {
-            if (!moveFrom || !moveList) return;
+            if (!pickerItems || !moveList) return;
             run(async () => {
-              await moveDriveEntry(accountId, moveFrom.path, moveList.path);
-              setMoveFrom(null);
+              await relocateDriveEntries(accountId, pickerAction, pickerItems.map((item) => item.path), moveList.path);
+              setPickerItems(null);
               setMoveList(null);
+              setPicked([]);
               await loadList(accountId, path);
-            }, "已移动");
+            }, pickerAction === "copy" ? "已复制" : "已移动");
           }}
         >
-          移到这里
+          放到这里
         </button>
       </Modal>
       ) : null}
 
-      {ask ? (
+      {askItems ? (
       <ConfirmModal
-        title="删除这个文件？"
-        message={`确定删除「${ask.name}」？网盘里也会删掉。`}
-        onClose={() => setAsk(null)}
+        title={askItems.length > 1 ? `删除这 ${askItems.length} 项？` : "删除这个文件？"}
+        message={askItems.length > 1 ? `确定删除选中的 ${askItems.length} 项？网盘里也会删掉。` : `确定删除「${askItems[0].name}」？网盘里也会删掉。`}
+        onClose={() => setAskItems(null)}
         onConfirm={() => {
-          if (!ask) return;
+          if (!askItems.length) return;
           run(async () => {
-            await deleteDriveEntry(accountId, ask.path);
-            setAsk(null);
+            await deleteDriveEntries(accountId, askItems.map((item) => item.path));
+            setAskItems(null);
+            setPicked([]);
             await loadList(accountId, path);
           }, "已删除");
         }}
@@ -616,6 +709,7 @@ function ItemActions({
   onDownload,
   onRename,
   onMove,
+  onCopy,
   onDelete,
 }: {
   item: DriveEntry;
@@ -623,6 +717,7 @@ function ItemActions({
   onDownload: () => void;
   onRename: () => void;
   onMove: () => void;
+  onCopy: () => void;
   onDelete: () => void;
 }) {
   return (
@@ -637,6 +732,9 @@ function ItemActions({
       </button>
       <button type="button" disabled={busy} onClick={onMove}>
         移动
+      </button>
+      <button type="button" disabled={busy} onClick={onCopy}>
+        复制
       </button>
       <button type="button" disabled={busy} onClick={onDelete}>
         删除
