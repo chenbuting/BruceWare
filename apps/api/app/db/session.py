@@ -59,6 +59,7 @@ def connect_database(url: str) -> None:
     _ensure_kb_columns(_Db.engine)
     _ensure_kb_asset_columns(_Db.engine)
     _ensure_kb_chunk_columns(_Db.engine)
+    _ensure_drive_columns(_Db.engine)
 
 
 def _import_model_modules() -> None:
@@ -138,6 +139,19 @@ def _ensure_kb_chunk_columns(engine: Engine) -> None:
         return
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE kb_chunks ADD COLUMN edited INTEGER DEFAULT 0"))
+
+
+def _ensure_drive_columns(engine: Engine) -> None:
+    """旧库给订单补上分享有效期。"""
+
+    inspector = inspect(engine)
+    if "drive_orders" not in inspector.get_table_names():
+        return
+    cols = {item["name"] for item in inspector.get_columns("drive_orders")}
+    if "period_days" in cols:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE drive_orders ADD COLUMN period_days INTEGER DEFAULT 7"))
 
 
 def try_connect(url: str) -> tuple[bool, str]:

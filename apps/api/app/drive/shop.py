@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import secrets
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
@@ -26,7 +26,35 @@ class ProductIn(BaseModel):
     price: str = Field(default="1", max_length=20)
     path: str = ""
     fsid: int = 0
-    period_days: int = 7
+    period_days: int | None = None
+
+
+ALLOWED_PERIODS = {0, 1, 7, 30}
+
+
+def _period(raw: int) -> int | None:
+    """只接受百度分享认的档：1 天、7 天、30 天、永久。"""
+
+    days = int(raw)
+    if days in ALLOWED_PERIODS:
+        return days
+    return None
+
+
+def _baidu_period(days: int) -> int:
+    """发给百度时只走 1 / 7 / 30 / 永久；旧数据若不是这几档，就靠到最近一档。"""
+
+    if days <= 0:
+        return 0
+    if days <= 1:
+        return 1
+    if days <= 7:
+        return 7
+    return 30
+
+
+def _period_text(days: int) -> str:
+    return "永久有效" if days == 0 else f"{days} 天"
 
 
 def _yuan(cent: int) -> str:
@@ -52,23 +80,44 @@ def _product_dict(row: DriveProduct, account_name: str = "") -> dict:
         "path": row.path,
         "fsid": row.fsid,
         "period_days": row.period_days,
+        "period_text": _period_text(row.period_days),
         "created_at": row.created_at.isoformat() if row.created_at else "",
     }
+
+
+def _order_period(row: DriveOrder, product: DriveProduct | None) -> int:
+    if row.period_days is not None:
+        return int(row.period_days)
+    if product is not None:
+        return int(product.period_days or 7)
+    return 7
 
 
 def _order_dict(row: DriveOrder, product: DriveProduct | None = None) -> dict:
     title = product.title if product is not None else ""
     price = _yuan(product.price_cent) if product is not None else "0.00"
+    period_days = _order_period(row, product)
+    expired = False
+    expire_at = ""
+    if row.status == "paid" and row.paid_at and period_days > 0:
+        end = row.paid_at + timedelta(days=period_days)
+        expire_at = end.isoformat(timespec="seconds")
+        expired = datetime.utcnow() >= end
+    show_share = row.status == "paid" and not expired
     return {
         "id": row.id,
         "product_id": row.product_id,
         "title": title,
         "price": price,
         "token": row.token,
-        "status": row.status,
+        "status": "expired" if expired else row.status,
         "pay_channel": row.pay_channel,
-        "share_url": row.share_url if row.status == "paid" else "",
-        "share_pwd": row.share_pwd if row.status == "paid" else "",
+        "share_url": row.share_url if show_share else "",
+        "share_pwd": row.share_pwd if show_share else "",
+        "period_days": period_days,
+        "period_text": _period_text(period_days),
+        "expire_at": expire_at,
+        "expired": expired,
         "buyer_path": f"/buy/{row.token}",
         "paid_at": row.paid_at.isoformat() if row.paid_at else "",
         "created_at": row.created_at.isoformat() if row.created_at else "",
@@ -97,7 +146,7 @@ def _deliver(order: DriveOrder, product: DriveProduct) -> None:
     adapter = get_adapter(str(account.get("kind") or ""))
     if not hasattr(adapter, "share"):
         raise ValueError("这种网盘还不能生成分享链接")
-    share = adapter.share(account, product.fsid, product.period_days)
+    share = adapter.share(account, product.fsid, _baidu_period(int(order.period_days if order.period_days is not None else product.period_days)))
     _save_tokens(account)
     order.share_url = str(share.get("link") or "")
     order.share_pwd = str(share.get("pwd") or "")
@@ -122,6 +171,9 @@ def create_product(body: ProductIn, db: Session = Depends(get_db)):
     cent = _cent(body.price)
     if cent is None:
         return fail("价格请写成数字，比如 9.9")
+    days = _period(body.period_days if body.period_days is not None else 7)
+    if days is None:
+        return fail("有效期只能选 1 天、7 天、30 天或永久")
     exists = db.scalars(
         select(DriveProduct).where(DriveProduct.account_id == body.account_id, DriveProduct.path == body.path)
     ).first()
@@ -133,7 +185,7 @@ def create_product(body: ProductIn, db: Session = Depends(get_db)):
         price_cent=cent,
         path=body.path,
         fsid=int(body.fsid),
-        period_days=7 if body.period_days not in {1, 7, 30} else body.period_days,
+        period_days=days,
     )
     db.add(row)
     db.commit()
@@ -154,8 +206,11 @@ def update_product(product_id: int, body: ProductIn, db: Session = Depends(get_d
         if cent is None:
             return fail("价格请写成数字，比如 9.9")
         row.price_cent = cent
-    if body.period_days in {1, 7, 30}:
-        row.period_days = body.period_days
+    if body.period_days is not None:
+        days = _period(body.period_days)
+        if days is None:
+            return fail("有效期只能选 1 天、7 天、30 天或永久")
+        row.period_days = days
     db.commit()
     db.refresh(row)
     return ok(_product_dict(row, _account_name(row.account_id)))
@@ -185,7 +240,7 @@ def create_order(product_id: int, db: Session = Depends(get_db)):
     product = db.get(DriveProduct, product_id)
     if product is None:
         return fail("这个货品不存在", 404)
-    row = DriveOrder(product_id=product.id, token=secrets.token_urlsafe(12), status="unpaid")
+    row = DriveOrder(product_id=product.id, token=secrets.token_urlsafe(12), status="unpaid", period_days=int(product.period_days))
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -202,6 +257,7 @@ def test_pay_order(order_id: int, db: Session = Depends(get_db)):
     product = db.get(DriveProduct, order.product_id)
     if product is None:
         return fail("货品不在了")
+    order.period_days = int(product.period_days)
     try:
         _deliver(order, product)
     except ValueError as exc:
@@ -235,6 +291,7 @@ def buy_test_pay(token: str, db: Session = Depends(get_db)):
         return fail("货品不在了")
     if order.status == "paid" and order.share_url:
         return ok(_order_dict(order, product))
+    order.period_days = int(product.period_days)
     try:
         _deliver(order, product)
     except ValueError as exc:

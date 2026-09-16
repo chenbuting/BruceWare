@@ -316,7 +316,14 @@ class BaiduAdapter:
 
         if not fsid:
             raise ValueError("缺少文件夹编号，请重新打开网盘再设一次")
-        days = period if period in {1, 7, 30} else 7
+        if period <= 0:
+            days = 0
+        elif period <= 1:
+            days = 1
+        elif period <= 7:
+            days = 7
+        else:
+            days = 30
         code = "".join(ch for ch in (pwd or "").strip().lower() if ch.isalnum())[:4]
         if len(code) != 4:
             alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"

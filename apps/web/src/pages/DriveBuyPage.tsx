@@ -44,7 +44,9 @@ export function DriveBuyPage() {
           <>
             <h1 className="text-[18px] font-medium">{order.title}</h1>
             <p className="mt-2 text-[13px] text-[var(--muted)]">价格 ￥{order.price}</p>
-            {order.status === "paid" && order.share_url ? (
+            {order.expired || order.status === "expired" ? (
+              <p className="mt-4 text-[13px] leading-6 text-[var(--muted)]">分享已到期，不能再打开了。</p>
+            ) : order.status === "paid" && order.share_url ? (
               <div className="mt-4 text-[13px] leading-6">
                 <p>已付款。用百度网盘打开下面链接，可以下载，也可以保存到自己的网盘。</p>
                 <p className="mt-3 break-all">
@@ -54,6 +56,10 @@ export function DriveBuyPage() {
                   </a>
                 </p>
                 <p>提取码：{order.share_pwd}</p>
+                <p className="mt-2 text-[var(--muted)]">
+                  分享链接 {order.period_text}
+                  {order.expire_at ? `，${order.expire_at.replace("T", " ")} 到期` : ""}。
+                </p>
               </div>
             ) : (
               <div className="mt-4">

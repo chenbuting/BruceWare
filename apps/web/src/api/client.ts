@@ -1071,14 +1071,21 @@ export function fetchDriveProducts() {
   return request<{ items: DriveProduct[] }>("/api/v1/drive/products");
 }
 
-export function createDriveProduct(payload: { account_id: string; title: string; price: string; path: string; fsid: number }) {
+export function createDriveProduct(payload: {
+  account_id: string;
+  title: string;
+  price: string;
+  path: string;
+  fsid: number;
+  period_days: number;
+}) {
   return request<DriveProduct>("/api/v1/drive/products", {
     method: "POST",
     body: JSON.stringify(payload),
   });
 }
 
-export function updateDriveProduct(id: number, payload: { title?: string; price?: string }) {
+export function updateDriveProduct(id: number, payload: { title?: string; price?: string; period_days?: number }) {
   return request<DriveProduct>(`/api/v1/drive/products/${id}`, {
     method: "PUT",
     body: JSON.stringify(payload),

@@ -11,6 +11,7 @@ import {
 import type { DriveOrder, DriveProduct } from "@/api/types";
 import { Card } from "@/components/Card";
 import { ConfirmModal } from "@/components/Modal";
+import { DrivePeriodField } from "@/pages/DrivePeriodField";
 
 const inputClass = "border border-[var(--line)] bg-[var(--paper)] px-2 py-1.5 text-[13px]";
 const btnClass = "border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px] disabled:opacity-50";
@@ -41,6 +42,7 @@ export function DriveShopPanel({
   const [edit, setEdit] = useState<DriveProduct | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editPrice, setEditPrice] = useState("");
+  const [editPeriod, setEditPeriod] = useState(7);
 
   async function reload() {
     const [nextProducts, nextOrders] = await Promise.all([fetchDriveProducts(), fetchDriveOrders()]);
@@ -67,7 +69,7 @@ export function DriveShopPanel({
                 <div className="min-w-0 flex-1">
                   <div className="break-all text-[13px]">{item.title}</div>
                   <div className="text-[12px] text-[var(--muted)]">
-                    ￥{item.price} · {item.path}
+                    ￥{item.price} · 有效期 {item.period_text} · {item.path}
                   </div>
                 </div>
                 <button
@@ -92,9 +94,10 @@ export function DriveShopPanel({
                     setEdit(item);
                     setEditTitle(item.title);
                     setEditPrice(item.price);
+                    setEditPeriod(item.period_days);
                   }}
                 >
-                  改价格
+                  改货品
                 </button>
                 <button type="button" className="text-[12px] text-[var(--muted)]" disabled={busy} onClick={() => setAskId(item.id)}>
                   删除
@@ -116,7 +119,9 @@ export function DriveShopPanel({
                   <div className="min-w-0 flex-1">
                     <div className="break-all text-[13px]">{item.title}</div>
                     <div className="text-[12px] text-[var(--muted)]">
-                      ￥{item.price} · {item.status === "paid" ? "已付款（测试）" : "待付款"}
+                      ￥{item.price} · {item.expired || item.status === "expired" ? "已过期" : item.status === "paid" ? "已付款（测试）" : "待付款"}
+                      {item.period_text ? ` · 分享 ${item.period_text}` : ""}
+                      {item.expire_at && !item.expired ? ` · ${item.expire_at.replace("T", " ")} 到期` : ""}
                     </div>
                   </div>
                   <button
@@ -131,7 +136,7 @@ export function DriveShopPanel({
                   >
                     复制链接
                   </button>
-                  {item.status !== "paid" ? (
+                  {!item.expired && item.status !== "paid" && item.status !== "expired" ? (
                     <button
                       type="button"
                       className={btnClass}
@@ -147,7 +152,7 @@ export function DriveShopPanel({
                     </button>
                   ) : null}
                 </div>
-                {item.status === "paid" && item.share_url ? (
+                {!item.expired && item.status === "paid" && item.share_url ? (
                   <p className="mt-1 break-all text-[12px] leading-5 text-[var(--muted)]">
                     分享：{item.share_url}　提取码：{item.share_pwd}
                     <button
@@ -172,14 +177,16 @@ export function DriveShopPanel({
           <div className="card w-full max-w-[28rem] px-5 py-4" onClick={(event) => event.stopPropagation()}>
             <div className="mb-3 text-[13px] font-medium">改货品</div>
             <input className={`${inputClass} mb-2 w-full`} value={editTitle} onChange={(e) => setEditTitle(e.target.value)} />
-            <input className={`${inputClass} mb-3 w-full`} value={editPrice} onChange={(e) => setEditPrice(e.target.value)} placeholder="价格，比如 9.9" />
+            <input className={`${inputClass} mb-2 w-full`} value={editPrice} onChange={(e) => setEditPrice(e.target.value)} placeholder="价格，比如 9.9" />
+            <DrivePeriodField value={editPeriod} onChange={setEditPeriod} />
+            <p className="mb-3 text-[12px] leading-5 text-[var(--muted)]">只对之后新生成的分享生效，已经发出去的链接不会改。</p>
             <button
               type="button"
               className={btnClass}
               disabled={busy}
               onClick={() =>
                 onBusy(async () => {
-                  await updateDriveProduct(edit.id, { title: editTitle, price: editPrice });
+                  await updateDriveProduct(edit.id, { title: editTitle, price: editPrice, period_days: editPeriod });
                   setEdit(null);
                   await reload();
                 }, "已保存")

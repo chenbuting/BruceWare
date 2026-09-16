@@ -26,6 +26,7 @@ import { Card } from "@/components/Card";
 import { ConfirmModal, Modal } from "@/components/Modal";
 import { PdfPreview } from "@/components/PdfPreview";
 import { DriveShopPanel } from "@/pages/DriveShopPanel";
+import { DrivePeriodField } from "@/pages/DrivePeriodField";
 
 const inputClass = "border border-[var(--line)] bg-[var(--paper)] px-2 py-1.5 text-[13px]";
 const btnClass = "border border-[var(--line)] bg-[var(--paper)] px-3 py-1.5 text-[13px] disabled:opacity-50";
@@ -91,6 +92,7 @@ export function DrivePage() {
   const [sellFrom, setSellFrom] = useState<DriveEntry | null>(null);
   const [sellTitle, setSellTitle] = useState("");
   const [sellPrice, setSellPrice] = useState("1");
+  const [sellPeriod, setSellPeriod] = useState(7);
   const uploadRef = useRef<HTMLInputElement>(null);
   const location = useLocation();
   const current = accounts.find((item) => item.id === accountId) || null;
@@ -481,7 +483,7 @@ export function DrivePage() {
                       onRename={() => { setRenameFrom(item); setRenameTo(item.name); }}
                       onMove={() => startPicker("move", [item])}
                       onCopy={() => startPicker("copy", [item])}
-                      onSell={() => { setSellFrom(item); setSellTitle(item.name); setSellPrice("1"); }}
+                      onSell={() => { setSellFrom(item); setSellTitle(item.name); setSellPrice("1"); setSellPeriod(7); }}
                       onDelete={() => setAskItems([item])}
                     />
                   </div>
@@ -513,7 +515,7 @@ export function DrivePage() {
                         onRename={() => { setRenameFrom(item); setRenameTo(item.name); }}
                         onMove={() => startPicker("move", [item])}
                         onCopy={() => startPicker("copy", [item])}
-                        onSell={() => { setSellFrom(item); setSellTitle(item.name); setSellPrice("1"); }}
+                        onSell={() => { setSellFrom(item); setSellTitle(item.name); setSellPrice("1"); setSellPeriod(7); }}
                         onDelete={() => setAskItems([item])}
                       />
                     </div>
@@ -706,7 +708,8 @@ export function DrivePage() {
       <Modal title={`把「${sellFrom.name}」设为货品`} onClose={() => setSellFrom(null)}>
         <p className="mb-3 text-[13px] leading-6 text-[var(--muted)]">对方付完（现在是测试付款）会得到这个文件夹的分享链接，可以下载或保存到自己的网盘。</p>
         <input className={`${inputClass} mb-2 w-full`} value={sellTitle} onChange={(e) => setSellTitle(e.target.value)} placeholder="货品名称" />
-        <input className={`${inputClass} mb-3 w-full`} value={sellPrice} onChange={(e) => setSellPrice(e.target.value)} placeholder="价格，比如 9.9" />
+        <input className={`${inputClass} mb-2 w-full`} value={sellPrice} onChange={(e) => setSellPrice(e.target.value)} placeholder="价格，比如 9.9" />
+        <DrivePeriodField value={sellPeriod} onChange={setSellPeriod} />
         <button
           type="button"
           className={btnClass}
@@ -720,6 +723,7 @@ export function DrivePage() {
                 price: sellPrice.trim() || "1",
                 path: sellFrom.path,
                 fsid: sellFrom.fsid,
+                period_days: sellPeriod,
               });
               setSellFrom(null);
               setTab("shop");

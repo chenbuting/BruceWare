@@ -429,6 +429,7 @@ export type DriveProduct = {
   path: string;
   fsid: number;
   period_days: number;
+  period_text: string;
   created_at: string;
 };
 
@@ -438,10 +439,14 @@ export type DriveOrder = {
   title: string;
   price: string;
   token: string;
-  status: "unpaid" | "paid" | string;
+  status: "unpaid" | "paid" | "expired" | string;
   pay_channel: string;
   share_url: string;
   share_pwd: string;
+  period_days: number;
+  period_text: string;
+  expire_at: string;
+  expired: boolean;
   buyer_path: string;
   paid_at: string;
   created_at: string;

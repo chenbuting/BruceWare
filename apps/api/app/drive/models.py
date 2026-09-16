@@ -36,4 +36,5 @@ class DriveOrder(Base):
     share_pwd = Column(String(16), nullable=False, default="")
     note = Column(Text, nullable=False, default="")
     paid_at = Column(DateTime, nullable=True)
+    period_days = Column(Integer, nullable=False, default=7)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
