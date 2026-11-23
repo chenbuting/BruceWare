@@ -2186,6 +2186,8 @@ function PreviewPane({
       </div>
       {item.tags ? <p className="mb-2 text-[var(--muted)]">{item.tags}</p> : null}
       <DocModuleBar pane={pane} onChange={setPane} />
+      {/* 高度固定，换模块时弹框不再跟着变高矮。 */}
+      <div className="h-[62vh] overflow-auto">
       {isFlowPane(pane) ? (
         <FlowModulePanel
           pane={pane}
@@ -2210,7 +2212,7 @@ function PreviewPane({
         ) : null}
         {item.preview === "pdf" ? <PdfPreview url={url} /> : null}
         {item.preview === "text" ? (
-          <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap bg-[var(--bg)] px-2 py-2 leading-6">{text || "正在读取…"}</pre>
+          <pre className="whitespace-pre-wrap bg-[var(--bg)] px-2 py-2 leading-6">{text || "正在读取…"}</pre>
         ) : null}
         {!item.preview ? <p className="text-[var(--muted)]">这种文件一期先不预览内容，可以下载查看。</p> : null}
         <a className="mt-3 inline-block text-[var(--muted)] underline" href={url} target="_blank" rel="noreferrer">
@@ -2315,6 +2317,7 @@ function PreviewPane({
             这个库还没开 Wiki。去「管理库」勾选并保存规则后，再回到这里写摘要。开了也不会自动写。
           </p>
         )}
+      </div>
       </div>
       {zoomFile ? <ImageLightbox items={[{ src: url, alt: item.title }]} index={0} onClose={() => setZoomFile(false)} /> : null}
     </div>
