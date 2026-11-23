@@ -352,9 +352,22 @@ export type KbAskHistoryItem = {
   answer: string;
 };
 
+export type KbCleanRule = {
+  find: string;
+  replace: string;
+};
+
+/** 清洗后某一类的质量结果。过了是留下来的，挡了是被改掉或丢掉的。 */
+export type KbQuality = {
+  name: string;
+  passed: number;
+  blocked: number;
+};
+
 export type KbDocFlow = {
   parse: "standard" | "head";
-  clean: "collapse" | "keep" | "blank" | "dedupe";
+  cleans: string[];
+  rules: KbCleanRule[];
   chunk: "chars" | "paragraph" | "whole";
   vector: boolean;
   chunk_size: number;

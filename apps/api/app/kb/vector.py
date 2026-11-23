@@ -473,21 +473,20 @@ def _index_with_saved_flow(db: Session, row: KbDocument, saved: dict, force: boo
     if has_edited_chunks(db, row.id):
         return "skipped_edited"
     chunks = list_chunks(db, row.id)
-    if not force and chunks:
-        if not saved.get("vector", True):
-            return "skipped"
-        if not can_embed():
-            return "no_key"
+    if not chunks:
+        return "skipped"
+    if not saved.get("vector", True):
+        return "skipped"
+    if not can_embed():
+        return "no_key"
+    if not force:
         profile = embedding_profile()
         stamp = row.vector_stamp or ""
         now = content_stamp(row, chunks)
         current_ok = [item for item in chunks if (item.profile or "") == profile and (item.embedding or "").strip() not in {"", "[]"}]
         if len(current_ok) == len(chunks) and (not stamp or stamp == now):
             return "skipped"
-        return embed_current_chunks(db, row)
-    from app.kb.flow import apply_document_flow
-
-    return apply_document_flow(db, row, saved)
+    return embed_current_chunks(db, row)
 
 
 def _sync_chunks(chunks: list[KbChunk], profile: str) -> None:

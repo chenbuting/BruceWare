@@ -38,12 +38,12 @@ import {
   updateKbLibraryPolicy,
   uploadKbDocument,
 } from "@/api/client";
-import type { KbAskKind, KbAskResult, KbChunk, KbDocAsset, KbDocFlow, KbDocument, KbEvidenceMode, KbFolder, KbLibrary, KbSession, KbVisionEngine, KbWikiList } from "@/api/types";
+import type { KbAskKind, KbAskResult, KbChunk, KbDocAsset, KbDocFlow, KbDocument, KbEvidenceMode, KbFolder, KbLibrary, KbQuality, KbSession, KbVisionEngine, KbWikiList } from "@/api/types";
 import { answerHasAsset, KbAnswerContent } from "@/components/KbAnswerContent";
 import { ImageLightbox } from "@/components/ImageLightbox";
 import { ConfirmModal, Modal } from "@/components/Modal";
 import { PdfPreview } from "@/components/PdfPreview";
-import { DocModuleBar, FlowModulePanel, isFlowPane, type DocPane } from "@/pages/kb/DocModules";
+import { DocModuleBar, FlowModulePanel, isFlowPane, type DocPane, type FlowPane } from "@/pages/kb/DocModules";
 
 const inputClass = "border border-[var(--line)] bg-[var(--paper)] px-2 py-1.5 text-[13px]";
 const btnClass = "border border-[var(--line)] bg-[var(--paper)] px-2.5 py-1.5 text-[13px] disabled:opacity-50";
@@ -2049,11 +2049,12 @@ function ChunkWords({
 
 function flowChoice(item: KbDocument): KbDocFlow {
   const flow = item.flow;
-  const clean = flow?.clean;
   const chunk = flow?.chunk;
+  const cleans = Array.isArray(flow?.cleans) ? flow.cleans : ["collapse"];
   return {
     parse: flow?.parse === "head" ? "head" : "standard",
-    clean: clean === "keep" || clean === "blank" || clean === "dedupe" ? clean : "collapse",
+    cleans,
+    rules: Array.isArray(flow?.rules) ? flow.rules : [],
     chunk: chunk === "paragraph" || chunk === "whole" ? chunk : "chars",
     vector: flow?.vector !== false,
     chunk_size: flow?.chunk_size || 400,
@@ -2102,6 +2103,9 @@ function PreviewPane({
   const [chunkOverlap, setChunkOverlap] = useState(() => String(item.flow?.chunk_overlap ?? 60));
   const [maxChunks, setMaxChunks] = useState(() => String(item.flow?.max_chunks || 40));
   const [pane, setPane] = useState<DocPane>("file");
+  const [ruleFind, setRuleFind] = useState("");
+  const [ruleReplace, setRuleReplace] = useState("");
+  const [quality, setQuality] = useState<KbQuality[]>([]);
 
   function tellVector(message: string, ok: boolean) {
     setVectorNote({ text: message, ok });
@@ -2126,6 +2130,9 @@ function PreviewPane({
     setZoomFile(false);
     setVectorNote(null);
     setPane("file");
+    setRuleFind("");
+    setRuleReplace("");
+    setQuality([]);
     setFlow(flowChoice(item));
     setChunkSize(String(item.flow?.chunk_size || 400));
     setChunkOverlap(String(item.flow?.chunk_overlap ?? 60));
@@ -2135,14 +2142,17 @@ function PreviewPane({
   }, [item.id]);
 
   function applyFlow() {
+    if (!isFlowPane(pane)) return;
     const num = (raw: string, fallback: number) => {
       const value = Number(raw);
       return Number.isFinite(value) ? value : fallback;
     };
+    const step: FlowPane = pane;
     setProcessing(true);
-    processKbDocument(item.id, {
+    processKbDocument(item.id, step, {
       parse: flow.parse,
-      clean: flow.clean,
+      cleans: flow.cleans,
+      rules: flow.rules,
       chunk: flow.chunk,
       vector: flow.vector,
       chunkSize: num(chunkSize, 400),
@@ -2151,6 +2161,7 @@ function PreviewPane({
     })
       .then((row) => {
         const message = row.message || row.vector_hint || "已按你选的方式处理这一份。";
+        if (step === "clean") setQuality(row.quality || []);
         tellVector(message, !!row.vector_ok || row.vector_state === "ready");
         onSaved(row);
       })
@@ -2186,6 +2197,7 @@ function PreviewPane({
       </div>
       {item.tags ? <p className="mb-2 text-[var(--muted)]">{item.tags}</p> : null}
       <DocModuleBar pane={pane} onChange={setPane} />
+      {vectorNote ? <p className={`mb-2 ${vectorNote.ok ? "text-[var(--ok)]" : "text-amber-800"}`}>{vectorNote.text}</p> : null}
       {/* 高度固定，换模块时弹框不再跟着变高矮。 */}
       <div className="h-[62vh] overflow-auto">
       {isFlowPane(pane) ? (
@@ -2195,15 +2207,27 @@ function PreviewPane({
           chunkSize={chunkSize}
           chunkOverlap={chunkOverlap}
           maxChunks={maxChunks}
+          ruleFind={ruleFind}
+          ruleReplace={ruleReplace}
           busy={busy || processing || reindexing}
           onFlow={setFlow}
           onChunkSize={setChunkSize}
           onChunkOverlap={setChunkOverlap}
           onMaxChunks={setMaxChunks}
+          onRuleFind={setRuleFind}
+          onRuleReplace={setRuleReplace}
+          onAddRule={() => {
+            const find = ruleFind.trim();
+            if (!find) return;
+            setFlow({ ...flow, rules: [...flow.rules, { find, replace: ruleReplace }] });
+            setRuleFind("");
+            setRuleReplace("");
+          }}
+          onRemoveRule={(index) => setFlow({ ...flow, rules: flow.rules.filter((_, item) => item !== index) })}
           onApply={applyFlow}
+          quality={quality}
         />
       ) : null}
-      {vectorNote ? <p className={`mb-2 ${vectorNote.ok ? "text-[var(--ok)]" : "text-amber-800"}`}>{vectorNote.text}</p> : null}
       <div className={pane === "file" ? "" : "hidden"}>
         {item.preview === "image" ? (
           <button type="button" className="block max-w-full" title="点图放大" onClick={() => setZoomFile(true)}>

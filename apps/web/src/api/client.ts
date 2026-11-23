@@ -578,9 +578,11 @@ export function updateKbLibraryPolicy(
 
 export function processKbDocument(
   id: number,
+  step: "parse" | "clean" | "chunk" | "vector",
   flow: {
     parse: string;
-    clean: string;
+    cleans: string[];
+    rules: { find: string; replace: string }[];
     chunk: string;
     vector: boolean;
     chunkSize: number;
@@ -588,11 +590,13 @@ export function processKbDocument(
     maxChunks: number;
   },
 ) {
-  return request<KbDocument & { message?: string }>(`/api/v1/kb/documents/${id}/process`, {
+  return request<KbDocument & { message?: string; quality?: { name: string; passed: number; blocked: number }[] }>(`/api/v1/kb/documents/${id}/process`, {
     method: "POST",
     body: JSON.stringify({
+      step,
       parse: flow.parse,
-      clean: flow.clean,
+      cleans: flow.cleans,
+      rules: flow.rules,
       chunk: flow.chunk,
       vector: flow.vector,
       chunk_size: flow.chunkSize,

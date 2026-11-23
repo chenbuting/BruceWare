@@ -39,12 +39,11 @@ def normalize_flow(raw: dict | None) -> dict:
 
     data = raw or {}
     parse = str(data.get("parse") or "standard")
-    clean = str(data.get("clean") or "collapse")
     chunk = str(data.get("chunk") or "chars")
     if parse not in {"standard", "head"}:
         parse = "standard"
-    if clean not in {"collapse", "keep", "blank", "dedupe"}:
-        clean = "collapse"
+    cleans = _cleans(data.get("cleans", data.get("clean")))
+    rules = _rules(data.get("rules"))
     if chunk not in {"chars", "paragraph", "whole"}:
         chunk = "chars"
     try:
@@ -65,13 +64,50 @@ def normalize_flow(raw: dict | None) -> dict:
     max_chunks = min(200, max(5, max_chunks))
     return {
         "parse": parse,
-        "clean": clean,
+        "cleans": cleans,
+        "rules": rules,
         "chunk": chunk,
         "vector": bool(data.get("vector", True)),
         "chunk_size": size,
         "chunk_overlap": overlap,
         "max_chunks": max_chunks,
     }
+
+
+def _cleans(raw) -> list[str]:
+    """勾选的清洗做法。旧数据只有一个词时，收成一行仍是默认。"""
+
+    allowed = {"half", "punct", "mask", "page", "blank", "dedupe", "collapse"}
+    if isinstance(raw, str):
+        if raw == "blank":
+            return ["blank"]
+        if raw == "dedupe":
+            return ["dedupe"]
+        if raw == "keep":
+            return []
+        return ["collapse"]
+    if not isinstance(raw, list):
+        return ["collapse"]
+    picked = [str(item) for item in raw if str(item) in allowed]
+    return picked
+
+
+def _rules(raw) -> list[dict]:
+    """用户自己加的替换。空的找到内容不算。最多 20 条。"""
+
+    if not isinstance(raw, list):
+        return []
+    rules: list[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        find = str(item.get("find") or "").strip()[:80]
+        if not find:
+            continue
+        rules.append({"find": find, "replace": str(item.get("replace") or "")[:80]})
+        if len(rules) >= 20:
+            break
+    return rules
 
 
 def stored_flow(row: KbDocument) -> dict | None:

@@ -16,8 +16,8 @@ from app.core.ai import chat_complete, chat_complete_stream, llm_public
 from app.core.response import fail, ok
 from app.db.session import get_db, new_session
 from app.kb.extract import extract_search_text, extract_sheet_grid, is_sheet_name, sheet_rows_for_ask
-from app.kb.flow import apply_document_flow
-from app.kb.pipeline import flow_view, normalize_flow, remember_parsed, search_text_for_index
+from app.kb.flow import apply_document_step
+from app.kb.pipeline import flow_view, remember_parsed, search_text_for_index
 from app.kb.assets import (
     OCR_SKIP,
     already_extracted,
@@ -1317,9 +1317,16 @@ def update_document_assets(doc_id: int, body: AssetBatchIn, db: Session = Depend
     return ok({"items": [asset_edit_dict(item) for item in list_doc_assets(db, row.id)], **vector_payload("pending")})
 
 
+class CleanRuleIn(BaseModel):
+    find: str = ""
+    replace: str = ""
+
+
 class FlowIn(BaseModel):
+    step: str = ""
     parse: str = "standard"
-    clean: str = "collapse"
+    cleans: list[str] = ["collapse"]
+    rules: list[CleanRuleIn] = []
     chunk: str = "chars"
     vector: bool = True
     chunk_size: int = 400
@@ -1328,11 +1335,14 @@ class FlowIn(BaseModel):
 
 
 _FLOW_HINTS = {
-    "updated": "已按你选的方式处理这一份。",
-    "skipped": "已按你选的方式处理这一份。这一份只按关键词找。",
-    "no_key": "字已按你选的方式切好，但没填 AI Key，向量没算。",
-    "skipped_edited": "这份有手改过的切片，没有整份重做。",
-    "failed": "这份抽不出字，没有改。",
+    "parsed": "只抽出了正文。清洗、切片和向量没动。",
+    "cleaned": "只清洗了这一份。切片和向量没动。",
+    "chunked": "只重新切片了。向量没算。",
+    "updated": "只算了这一份的向量。",
+    "skipped": "这一份改为只按关键词，没有算向量。",
+    "no_key": "还没填 AI Key，向量没算。",
+    "skipped_edited": "这份有手改过的切片，没有重切。",
+    "failed": "这一步没做成。",
 }
 
 
@@ -1343,14 +1353,14 @@ def process_document(doc_id: int, body: FlowIn, db: Session = Depends(get_db)):
     row = db.get(KbDocument, doc_id)
     if row is None:
         return fail("这份资料不存在", 404)
-    status = apply_document_flow(db, row, normalize_flow(body.model_dump()))
+    status, quality = apply_document_step(db, row, body.model_dump())
     row.updated_at = datetime.utcnow()
     db.commit()
     extra = vector_payload(status)
     hint = _FLOW_HINTS.get(status)
     if hint:
         extra["vector_hint"] = hint
-    return ok({**_doc_dict(row, db), **extra, "message": extra["vector_hint"]})
+    return ok({**_doc_dict(row, db), **extra, "message": extra["vector_hint"], "quality": quality})
 
 
 @router.post("/kb/documents/{doc_id}/vector")
