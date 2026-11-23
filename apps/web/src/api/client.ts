@@ -612,7 +612,10 @@ export function uploadKbDocument(libraryId: number, file: File, folderId: number
   return request<KbDocument>(`/api/v1/kb/libraries/${libraryId}/documents`, { method: "POST", body });
 }
 
-export function updateKbDocument(id: number, payload: { title?: string; tags?: string; folder_id?: number | null }) {
+export function updateKbDocument(
+  id: number,
+  payload: { title?: string; tags?: string; folder_id?: number | null; disabled?: boolean },
+) {
   return request<KbDocument>(`/api/v1/kb/documents/${id}`, {
     method: "PUT",
     body: JSON.stringify(payload),

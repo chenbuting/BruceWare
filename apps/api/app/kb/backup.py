@@ -101,6 +101,8 @@ def dump_kb(db: Session) -> dict[str, list[dict[str, Any]]]:
                 "vector_stamp": row.vector_stamp or "",
                 "extra": row.extra or "",
                 "search_text": row.search_text or "",
+                "disabled": int(row.disabled or 0),
+                "sheet_json": row.sheet_json or "",
                 "created_at": _iso(row.created_at),
                 "updated_at": _iso(row.updated_at),
             }
@@ -409,6 +411,8 @@ def _document_fields(item: dict[str, Any]) -> dict[str, Any]:
         "vector_stamp": str(item.get("vector_stamp") or "")[:40],
         "extra": str(item.get("extra") or ""),
         "search_text": str(item.get("search_text") or ""),
+        "disabled": 1 if _int(item.get("disabled")) else 0,
+        "sheet_json": str(item.get("sheet_json") or ""),
         "created_at": _dt(item.get("created_at")),
         "updated_at": _dt(item.get("updated_at")),
     }

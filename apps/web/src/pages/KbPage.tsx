@@ -1130,7 +1130,8 @@ export function KbPage() {
                 >
                   <button type="button" className="flex min-w-0 items-center gap-2 text-left" onClick={() => setPreview(item)}>
                     <Icon className={`h-4 w-4 shrink-0 ${color}`} />
-                    <span className="truncate">{item.title}</span>
+                    <span className={`truncate ${item.disabled ? "text-[var(--muted)] line-through" : ""}`}>{item.title}</span>
+                    {item.disabled ? <span className="shrink-0 text-[11px] text-[var(--muted)]">已停用</span> : null}
                     {vectorBadge(item.vector_state)}
                     {item.tags ? <span className="truncate text-[var(--muted)]">{item.tags}</span> : null}
                   </button>
@@ -1145,6 +1146,19 @@ export function KbPage() {
                         }}
                       >
                         编辑
+                      </button>
+                      <button
+                        type="button"
+                        disabled={rowBusy}
+                        onClick={() =>
+                          run(async () => {
+                            const row = await updateKbDocument(item.id, { disabled: !item.disabled });
+                            applyDoc(row);
+                            setHint(row.disabled ? "已停用，提问会跳过这份" : "已恢复，提问可以再找到");
+                          })
+                        }
+                      >
+                        {item.disabled ? "恢复" : "停用"}
                       </button>
                     <button type="button" disabled={rowBusy} onClick={() => setAskDeleteDoc(item)}>
                       删除

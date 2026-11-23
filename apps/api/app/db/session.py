@@ -113,6 +113,10 @@ def _ensure_kb_columns(engine: Engine) -> None:
             conn.execute(text("ALTER TABLE kb_documents ADD COLUMN search_text TEXT DEFAULT ''"))
         if "vector_stamp" not in cols:
             conn.execute(text("ALTER TABLE kb_documents ADD COLUMN vector_stamp VARCHAR(40) DEFAULT ''"))
+        if "disabled" not in cols:
+            conn.execute(text("ALTER TABLE kb_documents ADD COLUMN disabled INTEGER DEFAULT 0"))
+        if "sheet_json" not in cols:
+            conn.execute(text("ALTER TABLE kb_documents ADD COLUMN sheet_json TEXT DEFAULT ''"))
 
 
 def _ensure_kb_asset_columns(engine: Engine) -> None:

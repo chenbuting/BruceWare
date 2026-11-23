@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from pathlib import Path
 
 
@@ -116,6 +117,158 @@ def _from_docx(data: bytes) -> str:
 
     doc = Document(io.BytesIO(data))
     return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+
+
+_SHEET_COLS = 30
+_CELL_LEN = 80
+
+
+def _clip_cell(value: object) -> str:
+    """格子收成短文本。空值丢掉。"""
+
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text or text.lower() == "none":
+        return ""
+    return text[:_CELL_LEN]
+
+
+def _grid_rows(raw_rows: list[list[object]]) -> list[list[str]]:
+    """限制列数，整行都空的不要。"""
+
+    rows: list[list[str]] = []
+    for raw in raw_rows:
+        cells = [_clip_cell(item) for item in raw[:_SHEET_COLS]]
+        if any(cells):
+            rows.append(cells)
+    return rows
+
+
+def _grid_of(file_name: str, data: bytes) -> list[dict]:
+    """按文件类型抽出工作表。失败由调用方接住。"""
+
+    suffix = Path(file_name or "").suffix.lower()
+    if suffix == ".csv":
+        text = _decode_text(data)
+        reader = csv.reader(io.StringIO(text))
+        raw: list[list[object]] = []
+        for index, row in enumerate(reader):
+            if index >= _SHEET_ROWS:
+                break
+            raw.append(list(row))
+        rows = _grid_rows(raw)
+        return [{"name": "", "rows": rows}] if rows else []
+    if suffix == ".xlsx":
+        from openpyxl import load_workbook
+
+        book = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+        sheets: list[dict] = []
+        try:
+            for sheet in book.worksheets[:_SHEET_SHEETS]:
+                raw = []
+                for index, row in enumerate(sheet.iter_rows(values_only=True)):
+                    if index >= _SHEET_ROWS:
+                        break
+                    raw.append(list(row))
+                rows = _grid_rows(raw)
+                if rows:
+                    sheets.append({"name": str(sheet.title or "").strip(), "rows": rows})
+        finally:
+            book.close()
+        return sheets
+    if suffix == ".xls":
+        import xlrd
+
+        book = xlrd.open_workbook(file_contents=data)
+        sheets = []
+        for sheet in book.sheets()[:_SHEET_SHEETS]:
+            raw = []
+            for index in range(min(sheet.nrows, _SHEET_ROWS)):
+                raw.append([sheet.cell_value(index, col) for col in range(min(sheet.ncols, _SHEET_COLS))])
+            rows = _grid_rows(raw)
+            if rows:
+                sheets.append({"name": str(sheet.name or "").strip(), "rows": rows})
+        return sheets
+    return []
+
+
+def extract_sheet_grid(file_name: str, data: bytes) -> str:
+    """抽出表格格子的 JSON。失败返回空，调用方继续用原来的正文。"""
+
+    if not is_sheet_name(file_name):
+        return ""
+    try:
+        sheets = _grid_of(file_name, data)
+    except Exception:
+        return ""
+    if not sheets:
+        return ""
+    import json
+
+    return json.dumps({"sheets": sheets}, ensure_ascii=False)
+
+
+def _row_matches(blob: str, terms: list[str]) -> bool:
+    """中文按包含。数字必须整段对上，避免 48 撞上 4804。"""
+
+    for term in terms:
+        if term.isdigit():
+            if re.search(rf"(?<!\d){re.escape(term)}(?!\d)", blob):
+                return True
+        elif term in blob:
+            return True
+    return False
+
+
+def sheet_rows_for_ask(grid_json: str, question: str, limit: int = 12) -> str:
+    """挑出和问句对得上的格子行。对不上返回空，回答仍用原来的正文。"""
+
+    if not (grid_json or "").strip() or not (question or "").strip():
+        return ""
+    import json
+
+    from app.kb.search import search_terms
+
+    try:
+        data = json.loads(grid_json)
+    except json.JSONDecodeError:
+        return ""
+    sheets = data.get("sheets") if isinstance(data, dict) else None
+    if not isinstance(sheets, list):
+        return ""
+    terms = [item.lower() for item in search_terms(question)]
+    if not terms:
+        return ""
+    blocks: list[str] = []
+    left = limit
+    for sheet in sheets:
+        if left <= 0 or not isinstance(sheet, dict):
+            break
+        rows = sheet.get("rows")
+        if not isinstance(rows, list) or not rows:
+            continue
+        header = rows[0] if isinstance(rows[0], list) else []
+        picked: list[tuple[int, list[str]]] = []
+        for index, row in enumerate(rows[1:], start=2):
+            if not isinstance(row, list):
+                continue
+            blob = " ".join(str(cell) for cell in row).lower()
+            if _row_matches(blob, terms):
+                picked.append((index, [str(cell) for cell in row]))
+        if not picked:
+            continue
+        name = str(sheet.get("name") or "").strip()
+        lines = [f"工作表：{name}" if name else "工作表"]
+        if header:
+            lines.append("表头：" + _join_cells([str(cell) for cell in header]))
+        for index, row in picked[:left]:
+            lines.append(f"第{index}行：" + _join_cells(row))
+        left -= len(picked[:left])
+        blocks.append("\n".join(lines))
+    if not blocks:
+        return ""
+    return "【表格格子】金额、编号以这里的格子为准，不要从旁边正文猜。\n" + "\n\n".join(blocks)
 
 
 def _from_pdf(data: bytes) -> str:

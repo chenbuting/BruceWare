@@ -18,5 +18,6 @@
 接口和页面：`apps/api/app/kb`、`apps/web/src/pages/KbPage.tsx`。这个文件夹用 `manifest.yaml` 让底座发现模块。
 
 - [总体设计](../../docs/design/知识库总体设计.md)
+- [对接设计](../../docs/design/知识库对接设计.md)
 - [详细设计](../../docs/design/知识库详细设计.md)
 - [Agent 模块计划（以后可能做）](../../docs/design/Agent模块计划.md)

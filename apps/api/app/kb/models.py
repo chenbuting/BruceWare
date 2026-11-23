@@ -54,6 +54,10 @@ class KbDocument(Base):
     vector_stamp = Column(String(40), nullable=False, default="")
     extra = Column(Text, nullable=False, default="")
     search_text = Column(Text, nullable=False, default="")
+    # 1 表示停用：提问跳过，原件和向量仍留着
+    disabled = Column(Integer, nullable=False, default=0)
+    # 表格格子 JSON。抽失败就空着，回答仍用 search_text
+    sheet_json = Column(Text, nullable=False, default="")
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 

@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.core.ai import chat_complete, chat_complete_stream, llm_public
 from app.core.response import fail, ok
 from app.db.session import get_db, new_session
-from app.kb.extract import extract_search_text, is_sheet_name
+from app.kb.extract import extract_search_text, extract_sheet_grid, is_sheet_name, sheet_rows_for_ask
 from app.kb.assets import (
     OCR_SKIP,
     already_extracted,
@@ -127,6 +127,7 @@ class DocumentPatch(BaseModel):
     title: str | None = Field(default=None, max_length=255)
     tags: str | None = Field(default=None, max_length=500)
     folder_id: int | None = None
+    disabled: bool | None = None
 
 
 # 本页连续问只带最近几轮，不落库。
@@ -209,6 +210,7 @@ def _doc_dict(row: KbDocument, db: Session | None = None) -> dict:
         "wiki_updated_at": note.updated_at,
         "wiki_stale": note.stale,
         "vector_state": state,
+        "disabled": bool(row.disabled),
         "created_at": _iso(row.created_at),
         "updated_at": _iso(row.updated_at),
     }
@@ -512,6 +514,7 @@ async def upload_document(
         parse_status=parse_status_of(kind),
         kind=kind,
         search_text=extract_search_text(file_name, data),
+        sheet_json=extract_sheet_grid(file_name, data),
         updated_at=datetime.utcnow(),
     )
     db.add(row)
@@ -541,6 +544,10 @@ def _fill_search_text(row: KbDocument) -> None:
     text = extract_search_text(row.file_name, data)
     if sheet or not (row.search_text or "").strip():
         row.search_text = text
+    if sheet:
+        grid = extract_sheet_grid(row.file_name, data)
+        if grid:
+            row.sheet_json = grid
 
 
 def _fill_assets(row: KbDocument, db: Session, force: bool = False) -> None:
@@ -899,6 +906,7 @@ def _prepare_ask(library_id: int, body: AskIn, db):
     rows = list(db.scalars(stmt).all())
     if scope is not None:
         rows = [row for row in rows if row.folder_id in scope]
+    rows = [row for row in rows if not row.disabled]
     for row in rows:
         _fill_search_text(row)
         _fill_assets(row, db)
@@ -925,6 +933,9 @@ def _prepare_ask(library_id: int, body: AskIn, db):
             }
         )
         block = f"【资料{index}】{row.title or row.file_name}\n{snippet or snippet_of(search_q, row)}"
+        grid = sheet_rows_for_ask(row.sheet_json or "", search_q)
+        if grid:
+            block += "\n" + grid
         notes = asset_notes_for_ask(note_pics.get(row.id, []))
         if notes:
             block += f"\n【图上的说明】\n{notes}"
@@ -1387,6 +1398,8 @@ def update_document(doc_id: int, body: DocumentPatch, db: Session = Depends(get_
         if not _folder_in_library(db, row.library_id, body.folder_id):
             return fail("文件夹不在这个库里")
         row.folder_id = body.folder_id
+    if "disabled" in body.model_fields_set and body.disabled is not None:
+        row.disabled = 1 if body.disabled else 0
     row.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(row)
