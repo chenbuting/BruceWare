@@ -9,6 +9,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from app.core.ai import chat_complete, clear_embed_fail, llm_public
+from app.kb.milvus_store import milvus_public, reset_milvus_client
 from app.core.config import describe_database, get_settings, resolve_database_url
 from app.core.generated import generated_info, move_app_data, sqlite_path_for, uses_local_sqlite
 from app.core.local_settings import (
@@ -58,6 +59,7 @@ def _settings_payload() -> dict[str, Any]:
             "form": parse_database_form(url, db_stored if isinstance(db_stored, dict) else {}),
         },
         "llm": llm_public(),
+        "milvus": milvus_public(),
         "files": {
             "root": files_root,
             "ready": bool(files_root) and Path(files_root).expanduser().is_dir(),
@@ -142,6 +144,9 @@ class LlmForm(BaseModel):
     api_key: str = Field(default="", description="留空表示不改原 Key")
     image_api_key: str = Field(default="", description="留空表示不改原生图 Key")
     embedding_api_key: str = Field(default="", description="留空表示不改原向量 Key")
+    milvus_uri: str | None = None
+    milvus_token: str = Field(default="", description="留空表示不改原 Milvus 口令")
+    milvus_collection: str | None = None
 
 
 @router.put("/settings/llm")
@@ -165,6 +170,16 @@ def save_llm(form: LlmForm):
         "embedding_api_key": embedding_key,
         "embedding_model": form.embedding_model.strip() or "text-embedding-3-small",
     }
+    if form.milvus_uri is not None:
+        old_milvus = existing.get("milvus") if isinstance(existing.get("milvus"), dict) else {}
+        token = form.milvus_token.strip() or str(old_milvus.get("token") or "")
+        collection = (form.milvus_collection or "").strip() or "kb_chunks"
+        existing["milvus"] = {
+            "uri": form.milvus_uri.strip(),
+            "token": token,
+            "collection": collection,
+        }
+        reset_milvus_client()
     save_local_settings(settings.repo_root, existing)
     clear_embed_fail()
     return ok(_settings_payload())

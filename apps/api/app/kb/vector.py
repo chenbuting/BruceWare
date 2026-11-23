@@ -6,10 +6,18 @@ import hashlib
 import json
 import math
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.ai import can_embed, embed_texts, embedding_profile
+from app.kb.milvus_store import (
+    delete_document_vectors,
+    enabled as milvus_enabled,
+    replace_document_vectors,
+    search_hits,
+    take_milvus_note,
+    upsert_vectors,
+)
 from app.kb.models import KbChunk, KbDocument
 from app.kb.search import _haystack, score_document, snippet_of, uncovered_terms
 
@@ -65,6 +73,7 @@ def cosine(a: list[float], b: list[float]) -> float:
 
 def clear_chunks(db: Session, document_id: int) -> None:
     db.execute(KbChunk.__table__.delete().where(KbChunk.document_id == document_id))
+    delete_document_vectors(document_id)
 
 
 def list_chunks(db: Session, document_id: int) -> list[KbChunk]:
@@ -99,9 +108,14 @@ def vector_payload(status: str, *, chunk: bool = False) -> dict:
             "vector_hint": f"字已保存，向量更新失败：{status[7:].strip()}",
         }
     key = "updated_chunk" if status == "updated" and chunk else status
+    hint = VECTOR_HINTS.get(key, VECTOR_HINTS["failed"])
+    note = take_milvus_note()
+    if note:
+        hint = f"{hint} {note}"
     return {
         "vector_ok": status == "updated",
-        "vector_hint": VECTOR_HINTS.get(key, VECTOR_HINTS["failed"]),
+        "vector_hint": hint,
+        "milvus_hint": note,
     }
 
 
@@ -206,6 +220,7 @@ def update_chunk_text(db: Session, row: KbChunk, text: str) -> tuple[KbChunk, st
         return row, "failed"
     row.embedding = json.dumps(vectors[0], ensure_ascii=False)
     row.profile = embedding_profile()
+    upsert_vectors(row.library_id, row.document_id, row.profile, [(row.chunk_index, vectors[0])])
     doc = db.get(KbDocument, row.document_id)
     if doc is not None:
         mark_vector_ready(doc, list_chunks(db, doc.id))
@@ -257,7 +272,9 @@ def index_document(db: Session, row: KbDocument, force: bool = False) -> str:
             )
         )
     db.flush()
-    mark_vector_ready(row, list_chunks(db, row.id))
+    saved = list_chunks(db, row.id)
+    mark_vector_ready(row, saved)
+    _sync_chunks(saved, profile)
     return "updated"
 
 
@@ -332,23 +349,16 @@ def pack_ask_snippets(
     return packed
 
 
-def score_chunks(db: Session, library_id: int, question: str, doc_ids: set[int] | None) -> DocHits:
-    """每份资料按向量挑出分散的几块，并带上最高分左右邻居。"""
+def _sync_chunks(chunks: list[KbChunk], profile: str) -> None:
+    """本机写完后同步到 Milvus。没开或失败都不影响保存。"""
 
-    if not question.strip() or not can_embed():
-        return {}
-    try:
-        query_vec = embed_texts([question])[0]
-    except (ValueError, IndexError):
-        return {}
-    stmt = select(KbChunk).where(KbChunk.library_id == library_id, KbChunk.profile == embedding_profile())
-    rows = list(db.scalars(stmt).all())
-    grouped: dict[int, list[ChunkPick]] = {}
-    for row in rows:
-        if doc_ids is not None and row.document_id not in doc_ids:
-            continue
-        score = cosine(query_vec, _parse_vec(row.embedding))
-        grouped.setdefault(row.document_id, []).append((row.chunk_index, score, row.text or ""))
+    if not chunks:
+        return
+    rows = [(item.chunk_index, vec) for item in chunks if (vec := _parse_vec(item.embedding))]
+    replace_document_vectors(chunks[0].library_id, chunks[0].document_id, profile, rows)
+
+
+def _best_from_grouped(grouped: dict[int, list[ChunkPick]]) -> DocHits:
     best: DocHits = {}
     for document_id, items in grouped.items():
         by_index = {index: (score, text) for index, score, text in items}
@@ -360,6 +370,63 @@ def score_chunks(db: Session, library_id: int, question: str, doc_ids: set[int] 
         selected = _with_neighbors(by_index, spread, candidates[0][0])
         best[document_id] = (candidates[0][1], selected)
     return best
+
+
+def _grouped_from_remote(db: Session, library_id: int, hits: list[tuple[int, int, float]]) -> dict[int, list[ChunkPick]]:
+    """Milvus 只给段号和分数，正文和邻居仍从本机读。"""
+
+    scores: dict[int, dict[int, float]] = {}
+    for document_id, chunk_index, score in hits:
+        scores.setdefault(document_id, {})[chunk_index] = score
+    if not scores:
+        return {}
+    rows = list(
+        db.scalars(
+            select(KbChunk).where(
+                KbChunk.library_id == library_id,
+                KbChunk.document_id.in_(list(scores)),
+                KbChunk.profile == embedding_profile(),
+            )
+        ).all()
+    )
+    grouped: dict[int, list[ChunkPick]] = {}
+    for row in rows:
+        score = scores.get(row.document_id, {}).get(row.chunk_index, 0.0)
+        grouped.setdefault(row.document_id, []).append((row.chunk_index, score, row.text or ""))
+    return grouped
+
+
+def score_chunks(db: Session, library_id: int, question: str, doc_ids: set[int] | None) -> DocHits:
+    """每份资料按向量挑出分散的几块，并带上最高分左右邻居。"""
+
+    if not question.strip() or not can_embed():
+        return {}
+    try:
+        query_vec = embed_texts([question])[0]
+    except (ValueError, IndexError):
+        return {}
+    remote = None
+    if milvus_enabled():
+        count_stmt = select(func.count()).select_from(KbChunk).where(
+            KbChunk.library_id == library_id,
+            KbChunk.profile == embedding_profile(),
+        )
+        if doc_ids is not None:
+            count_stmt = count_stmt.where(KbChunk.document_id.in_(doc_ids or [-1]))
+        expect = int(db.scalar(count_stmt) or 0)
+        if expect > 0:
+            remote = search_hits(library_id, embedding_profile(), query_vec, doc_ids, expect)
+    if remote is not None:
+        return _best_from_grouped(_grouped_from_remote(db, library_id, remote))
+    stmt = select(KbChunk).where(KbChunk.library_id == library_id, KbChunk.profile == embedding_profile())
+    rows = list(db.scalars(stmt).all())
+    grouped: dict[int, list[ChunkPick]] = {}
+    for row in rows:
+        if doc_ids is not None and row.document_id not in doc_ids:
+            continue
+        score = cosine(query_vec, _parse_vec(row.embedding))
+        grouped.setdefault(row.document_id, []).append((row.chunk_index, score, row.text or ""))
+    return _best_from_grouped(grouped)
 
 
 def hybrid_rank(

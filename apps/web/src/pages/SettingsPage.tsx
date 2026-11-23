@@ -44,6 +44,10 @@ export function SettingsPage() {
   const [hasLlmKey, setHasLlmKey] = useState(false);
   const [hasImageKey, setHasImageKey] = useState(false);
   const [hasEmbeddingKey, setHasEmbeddingKey] = useState(false);
+  const [milvusUri, setMilvusUri] = useState("");
+  const [milvusToken, setMilvusToken] = useState("");
+  const [milvusCollection, setMilvusCollection] = useState("kb_chunks");
+  const [hasMilvusToken, setHasMilvusToken] = useState(false);
   const [filesRoot, setFilesRoot] = useState("");
   const [sftpHost, setSftpHost] = useState("");
   const [sftpPort, setSftpPort] = useState("22");
@@ -95,6 +99,10 @@ export function SettingsPage() {
       setLlmImageKey("");
       setLlmEmbeddingKey("");
     }
+    setMilvusUri(data.milvus?.uri || "");
+    setMilvusCollection(data.milvus?.collection || "kb_chunks");
+    setHasMilvusToken(Boolean(data.milvus?.has_token));
+    setMilvusToken("");
     setFilesRoot(data.files?.root || "");
     const sftp = data.files?.sftp;
     setSftpHost(sftp?.host || "");
@@ -230,6 +238,9 @@ export function SettingsPage() {
       api_key: llmKey,
       image_api_key: llmImageKey,
       embedding_api_key: llmEmbeddingKey,
+      milvus_uri: milvusUri,
+      milvus_token: milvusToken,
+      milvus_collection: milvusCollection,
     })
       .then((data) => {
         setInfo(data);
@@ -720,6 +731,24 @@ export function SettingsPage() {
                   <label className="mt-3 block">
                     <span className="mb-1 block text-rose-900">向量 Key{hasEmbeddingKey ? "（已保存，不改请留空）" : ""}</span>
                     <input className={inputClass} type="password" value={llmEmbeddingKey} onChange={(e) => setLlmEmbeddingKey(e.target.value)} placeholder="不填就用上面的对话 Key" />
+                  </label>
+                </div>
+                <div className="sm:col-span-2 rounded-md border border-[var(--line)] px-3 py-3">
+                  <p className="text-[14px] font-semibold">可选 Milvus</p>
+                  <p className="mt-1 text-[13px] leading-6 text-[var(--muted)]">
+                    不填地址就还是本机逐条比。填了以后，新算的向量会同步过去，查找用 Milvus 自己的方式。还没同步齐时，提问仍走本机。口令不回显，不改请留空。
+                  </p>
+                  <label className="mt-3 block">
+                    <span className="mb-1 block text-[var(--muted)]">Milvus 地址</span>
+                    <input className={inputClass} value={milvusUri} onChange={(e) => setMilvusUri(e.target.value)} placeholder="例如 http://127.0.0.1:19530" />
+                  </label>
+                  <label className="mt-3 block">
+                    <span className="mb-1 block text-[var(--muted)]">集合名</span>
+                    <input className={inputClass} value={milvusCollection} onChange={(e) => setMilvusCollection(e.target.value)} placeholder="kb_chunks" />
+                  </label>
+                  <label className="mt-3 block">
+                    <span className="mb-1 block text-[var(--muted)]">口令{hasMilvusToken ? "（已保存，不改请留空）" : ""}</span>
+                    <input className={inputClass} type="password" value={milvusToken} onChange={(e) => setMilvusToken(e.target.value)} placeholder="没有就留空" />
                   </label>
                 </div>
               </div>

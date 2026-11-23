@@ -61,12 +61,20 @@ export type FolderBrowse = {
   folders: { name: string; path: string }[];
 };
 
+export type MilvusInfo = {
+  uri: string;
+  collection: string;
+  enabled: boolean;
+  has_token: boolean;
+};
+
 export type SettingsInfo = {
   app_name: string;
   api_host: string;
   api_port: number;
   database: DatabaseInfo;
   llm: LlmInfo;
+  milvus?: MilvusInfo;
   files: FilesSettings;
 };
 
@@ -113,6 +121,9 @@ export type LlmWrite = {
   api_key: string;
   image_api_key: string;
   embedding_api_key: string;
+  milvus_uri: string;
+  milvus_token: string;
+  milvus_collection: string;
 };
 
 export type WardrobeItem = {

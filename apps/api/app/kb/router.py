@@ -47,6 +47,7 @@ from app.kb.sessions import (
 )
 from app.kb.policy import dump_policy, parse_policy, resolve_mode
 from app.kb.search import folder_scope, snippet_of
+from app.kb.milvus_store import delete_library_vectors, take_milvus_note
 from app.kb.vector import (
     chunk_dict,
     clear_chunks,
@@ -367,6 +368,7 @@ def delete_library(library_id: int, db: Session = Depends(get_db)):
     db.execute(KbFolder.__table__.delete().where(KbFolder.library_id == library_id))
     db.delete(row)
     db.commit()
+    delete_library_vectors(library_id)
     remove_library_dir(library_id)
     _ensure_default(db)
     return ok(True)
@@ -527,7 +529,11 @@ async def upload_document(
     index_document(db, row)
     db.commit()
     db.refresh(row)
-    return ok(_doc_dict(row, db))
+    data = _doc_dict(row, db)
+    note = take_milvus_note()
+    if note:
+        data["vector_hint"] = note
+    return ok(data)
 
 
 def _fill_search_text(row: KbDocument) -> None:
@@ -1288,6 +1294,8 @@ def rebuild_document_vector(doc_id: int, db: Session = Depends(get_db)):
     extra = vector_payload(status)
     if status == "updated":
         extra["vector_hint"] = "这份资料的向量已重算。"
+        if extra.get("milvus_hint"):
+            extra["vector_hint"] += " " + extra["milvus_hint"]
     return ok({**_doc_dict(row, db), **extra})
 
 
