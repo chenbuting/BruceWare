@@ -544,6 +544,16 @@ export function updateKbLibraryPolicy(
   wikiLearn = false,
   visionEnabled = false,
   visionEngine: KbVisionEngine = "vision",
+  flow: {
+    textLimit?: number;
+    sheetLimit?: number;
+    sheetRows?: number;
+    cleanCollapse?: boolean;
+    chunkSize?: number;
+    chunkOverlap?: number;
+    maxChunks?: number;
+    vectorEnabled?: boolean;
+  } = {},
 ) {
   return request<KbLibrary>(`/api/v1/kb/libraries/${id}/policy`, {
     method: "PUT",
@@ -554,6 +564,40 @@ export function updateKbLibraryPolicy(
       vision_engine: visionEngine,
       evidence_mode: evidenceMode,
       rule,
+      text_limit: flow.textLimit ?? 20000,
+      sheet_limit: flow.sheetLimit ?? 40000,
+      sheet_rows: flow.sheetRows ?? 500,
+      clean_collapse: flow.cleanCollapse ?? true,
+      chunk_size: flow.chunkSize ?? 400,
+      chunk_overlap: flow.chunkOverlap ?? 60,
+      max_chunks: flow.maxChunks ?? 40,
+      vector_enabled: flow.vectorEnabled ?? true,
+    }),
+  });
+}
+
+export function processKbDocument(
+  id: number,
+  flow: {
+    parse: string;
+    clean: string;
+    chunk: string;
+    vector: boolean;
+    chunkSize: number;
+    chunkOverlap: number;
+    maxChunks: number;
+  },
+) {
+  return request<KbDocument & { message?: string }>(`/api/v1/kb/documents/${id}/process`, {
+    method: "POST",
+    body: JSON.stringify({
+      parse: flow.parse,
+      clean: flow.clean,
+      chunk: flow.chunk,
+      vector: flow.vector,
+      chunk_size: flow.chunkSize,
+      chunk_overlap: flow.chunkOverlap,
+      max_chunks: flow.maxChunks,
     }),
   });
 }

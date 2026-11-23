@@ -1,4 +1,4 @@
-"""知识库文本向量：切段、入库、和关键词一起打分。"""
+"""知识库向量：给切好的段算数字、同步，并在提问时打分。"""
 
 from __future__ import annotations
 
@@ -18,12 +18,12 @@ from app.kb.milvus_store import (
     take_milvus_note,
     upsert_vectors,
 )
-from app.kb.models import KbChunk, KbDocument
+from app.kb.chunk import split_chunks
+from app.kb.models import KbChunk, KbDocument, KbLibrary
+from app.kb.pipeline import stored_flow
+from app.kb.policy import parse_policy
 from app.kb.search import _haystack, score_document, snippet_of, uncovered_terms
 
-_CHUNK_SIZE = 400
-_CHUNK_OVERLAP = 60
-_MAX_CHUNKS = 40
 _VEC_FLOOR = 0.28
 _PER_DOC_CHUNKS = 3
 _INDEX_GAP = 1
@@ -32,22 +32,6 @@ _ASK_CHUNK_LIMIT = 10
 # 一份资料：最高分，以及候选块 (块序号, 分数, 正文)
 type ChunkPick = tuple[int, float, str]
 type DocHits = dict[int, tuple[float, list[ChunkPick]]]
-
-
-def split_chunks(text: str) -> list[str]:
-    """按字数切段，相邻留一点重叠。"""
-
-    body = " ".join((text or "").split())
-    if not body:
-        return []
-    if len(body) <= _CHUNK_SIZE:
-        return [body]
-    parts: list[str] = []
-    start = 0
-    while start < len(body) and len(parts) < _MAX_CHUNKS:
-        parts.append(body[start : start + _CHUNK_SIZE])
-        start += _CHUNK_SIZE - _CHUNK_OVERLAP
-    return parts
 
 
 def _parse_vec(raw: str) -> list[float]:
@@ -184,7 +168,8 @@ def ensure_chunks(db: Session, row: KbDocument) -> list[KbChunk]:
     if existing:
         return existing
     body = (row.search_text or "").strip()
-    parts = split_chunks(f"{row.title or ''} {row.tags or ''} {body}")
+    size, overlap, limit, _vector_on = _library_flow(db, row.library_id)
+    parts = split_chunks(f"{row.title or ''} {row.tags or ''} {body}", size=size, overlap=overlap, limit=limit)
     if not parts:
         return []
     for index, text in enumerate(parts):
@@ -227,12 +212,51 @@ def update_chunk_text(db: Session, row: KbChunk, text: str) -> tuple[KbChunk, st
     return row, "updated"
 
 
+def has_edited_chunks(db: Session, document_id: int) -> bool:
+    """有手改过的段时，不整份重切。"""
+
+    edited = db.scalar(select(KbChunk.id).where(KbChunk.document_id == document_id, KbChunk.edited == 1).limit(1))
+    return edited is not None
+
+
+def replace_chunk_texts(db: Session, row: KbDocument, parts: list[str], with_vector: bool) -> str:
+    """用新的段换掉旧切片。with_vector 为假时不算数字，提问只走关键词。"""
+
+    if has_edited_chunks(db, row.id):
+        return "skipped_edited"
+    if not parts:
+        return "failed"
+    clear_chunks(db, row.id)
+    for index, text in enumerate(parts):
+        db.add(
+            KbChunk(
+                library_id=row.library_id,
+                document_id=row.id,
+                chunk_index=index,
+                text=text,
+                embedding="",
+                profile="",
+            )
+        )
+    db.flush()
+    if not with_vector:
+        row.embedding_profile = ""
+        row.vector_stamp = ""
+        return "skipped"
+    return embed_current_chunks(db, row)
+
+
 def index_document(db: Session, row: KbDocument, force: bool = False) -> str:
     """抽出正文后写入向量。返回 updated / skipped / skipped_edited / no_key / failed。"""
 
-    edited = db.scalar(select(KbChunk.id).where(KbChunk.document_id == row.id, KbChunk.edited == 1).limit(1))
-    if edited:
+    saved = stored_flow(row)
+    if saved is not None:
+        return _index_with_saved_flow(db, row, saved, force)
+    if has_edited_chunks(db, row.id):
         return "skipped_edited"
+    size, overlap, limit, vector_on = _library_flow(db, row.library_id)
+    if not vector_on:
+        return _tile_without_vectors(db, row, size, overlap, limit, force)
     if not can_embed():
         return "no_key"
     profile = embedding_profile()
@@ -250,7 +274,7 @@ def index_document(db: Session, row: KbDocument, force: bool = False) -> str:
     body = (row.search_text or "").strip()
     if not body:
         return "failed"
-    parts = split_chunks(f"{row.title or ''} {row.tags or ''} {body}")
+    parts = split_chunks(f"{row.title or ''} {row.tags or ''} {body}", size=size, overlap=overlap, limit=limit)
     if not parts:
         return "failed"
     try:
@@ -349,6 +373,123 @@ def pack_ask_snippets(
     return packed
 
 
+def _library_flow(db: Session, library_id: int) -> tuple[int, int, int, bool]:
+    """这个库的切片和向量开关。没配过就是 400 字、重叠 60、最多 40 段、向量开着。"""
+
+    lib = db.get(KbLibrary, library_id)
+    if lib is None:
+        return 400, 60, 40, True
+    policy = parse_policy(lib)
+    return int(policy["chunk_size"]), int(policy["chunk_overlap"]), int(policy["max_chunks"]), bool(policy["vector_enabled"])
+
+
+def _tile_without_vectors(db: Session, row: KbDocument, size: int, overlap: int, limit: int, force: bool) -> str:
+    """这个库关了向量。新资料或点了重算才重切，不调用向量接口。"""
+
+    if not force and list_chunks(db, row.id):
+        return "skipped"
+    body = (row.search_text or "").strip()
+    if not body:
+        return "failed"
+    parts = split_chunks(f"{row.title or ''} {row.tags or ''} {body}", size=size, overlap=overlap, limit=limit)
+    if not parts:
+        return "failed"
+    clear_chunks(db, row.id)
+    for index, text in enumerate(parts):
+        db.add(
+            KbChunk(
+                library_id=row.library_id,
+                document_id=row.id,
+                chunk_index=index,
+                text=text,
+                embedding="",
+                profile="",
+            )
+        )
+    db.flush()
+    row.embedding_profile = ""
+    row.vector_stamp = ""
+    return "skipped"
+
+
+def retile_chunks(db: Session, row: KbDocument) -> str:
+    """只按当前正文重新切片，不算向量。手改过的段不覆盖。"""
+
+    edited = db.scalar(select(KbChunk.id).where(KbChunk.document_id == row.id, KbChunk.edited == 1).limit(1))
+    if edited:
+        return "skipped_edited"
+    body = (row.search_text or "").strip()
+    if not body:
+        return "failed:还没有清洗后的正文"
+    size, overlap, limit, _vector_on = _library_flow(db, row.library_id)
+    parts = split_chunks(f"{row.title or ''} {row.tags or ''} {body}", size=size, overlap=overlap, limit=limit)
+    if not parts:
+        return "failed:切不出段"
+    clear_chunks(db, row.id)
+    for index, text in enumerate(parts):
+        db.add(
+            KbChunk(
+                library_id=row.library_id,
+                document_id=row.id,
+                chunk_index=index,
+                text=text,
+                embedding="",
+                profile="",
+            )
+        )
+    db.flush()
+    row.embedding_profile = ""
+    row.vector_stamp = ""
+    return "chunked"
+
+
+def embed_current_chunks(db: Session, row: KbDocument) -> str:
+    """只给现有切片算向量，不重新切。"""
+
+    chunks = [item for item in list_chunks(db, row.id) if (item.text or "").strip()]
+    if not chunks:
+        return "failed:还没有切片"
+    if not can_embed():
+        return "no_key"
+    try:
+        vectors = embed_texts([item.text for item in chunks])
+    except Exception as exc:
+        return _fail_status(exc)
+    if len(vectors) != len(chunks):
+        return "failed:向量条数对不上"
+    profile = embedding_profile()
+    for item, vec in zip(chunks, vectors):
+        item.embedding = json.dumps(vec, ensure_ascii=False)
+        item.profile = profile
+    saved = list_chunks(db, row.id)
+    mark_vector_ready(row, saved)
+    _sync_chunks(saved, profile)
+    return "updated"
+
+
+def _index_with_saved_flow(db: Session, row: KbDocument, saved: dict, force: bool) -> str:
+    """这份已经选定过做法。平时不重做；点了重算才按记住的方式再来一遍。"""
+
+    if has_edited_chunks(db, row.id):
+        return "skipped_edited"
+    chunks = list_chunks(db, row.id)
+    if not force and chunks:
+        if not saved.get("vector", True):
+            return "skipped"
+        if not can_embed():
+            return "no_key"
+        profile = embedding_profile()
+        stamp = row.vector_stamp or ""
+        now = content_stamp(row, chunks)
+        current_ok = [item for item in chunks if (item.profile or "") == profile and (item.embedding or "").strip() not in {"", "[]"}]
+        if len(current_ok) == len(chunks) and (not stamp or stamp == now):
+            return "skipped"
+        return embed_current_chunks(db, row)
+    from app.kb.flow import apply_document_flow
+
+    return apply_document_flow(db, row, saved)
+
+
 def _sync_chunks(chunks: list[KbChunk], profile: str) -> None:
     """本机写完后同步到 Milvus。没开或失败都不影响保存。"""
 
@@ -399,7 +540,12 @@ def _grouped_from_remote(db: Session, library_id: int, hits: list[tuple[int, int
 def score_chunks(db: Session, library_id: int, question: str, doc_ids: set[int] | None) -> DocHits:
     """每份资料按向量挑出分散的几块，并带上最高分左右邻居。"""
 
-    if not question.strip() or not can_embed():
+    if not question.strip():
+        return {}
+    lib = db.get(KbLibrary, library_id)
+    if lib is not None and not parse_policy(lib)["vector_enabled"]:
+        return {}
+    if not can_embed():
         return {}
     try:
         query_vec = embed_texts([question])[0]

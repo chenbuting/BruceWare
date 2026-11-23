@@ -16,6 +16,8 @@ from app.core.ai import chat_complete, chat_complete_stream, llm_public
 from app.core.response import fail, ok
 from app.db.session import get_db, new_session
 from app.kb.extract import extract_search_text, extract_sheet_grid, is_sheet_name, sheet_rows_for_ask
+from app.kb.flow import apply_document_flow
+from app.kb.pipeline import flow_view, normalize_flow, remember_parsed, search_text_for_index
 from app.kb.assets import (
     OCR_SKIP,
     already_extracted,
@@ -88,6 +90,14 @@ class PolicyIn(BaseModel):
     vision_engine: str = "vision"
     evidence_mode: str = "strict"
     rule: str = Field(default="", max_length=500)
+    text_limit: int = 20000
+    sheet_limit: int = 40000
+    sheet_rows: int = 500
+    clean_collapse: bool = True
+    chunk_size: int = 400
+    chunk_overlap: int = 60
+    max_chunks: int = 40
+    vector_enabled: bool = True
 
 
 class WikiIn(BaseModel):
@@ -174,6 +184,14 @@ def _library_dict(row: KbLibrary) -> dict:
         "vision_engine": policy["vision_engine"],
         "evidence_mode": policy["evidence_mode"],
         "rule": policy["rule"],
+        "text_limit": policy["text_limit"],
+        "sheet_limit": policy["sheet_limit"],
+        "sheet_rows": policy["sheet_rows"],
+        "clean_collapse": policy["clean_collapse"],
+        "chunk_size": policy["chunk_size"],
+        "chunk_overlap": policy["chunk_overlap"],
+        "max_chunks": policy["max_chunks"],
+        "vector_enabled": policy["vector_enabled"],
         "created_at": _iso(row.created_at),
     }
 
@@ -212,6 +230,7 @@ def _doc_dict(row: KbDocument, db: Session | None = None) -> dict:
         "wiki_stale": note.stale,
         "vector_state": state,
         "disabled": bool(row.disabled),
+        "flow": flow_view(row),
         "created_at": _iso(row.created_at),
         "updated_at": _iso(row.updated_at),
     }
@@ -295,7 +314,20 @@ def update_library_policy(library_id: int, body: PolicyIn, db: Session = Depends
         return fail("这个库不存在", 404)
     mode = body.evidence_mode if body.evidence_mode in {"strict", "loose"} else "strict"
     row.policy_json = dump_policy(
-        body.wiki_enabled, mode, body.rule, body.wiki_learn, body.vision_enabled, body.vision_engine
+        body.wiki_enabled,
+        mode,
+        body.rule,
+        body.wiki_learn,
+        body.vision_enabled,
+        body.vision_engine,
+        body.chunk_size,
+        body.chunk_overlap,
+        body.text_limit,
+        body.sheet_limit,
+        body.sheet_rows,
+        body.clean_collapse,
+        body.max_chunks,
+        body.vector_enabled,
     )
     db.commit()
     db.refresh(row)
@@ -504,6 +536,7 @@ async def upload_document(
         return fail(f"库里已有相同文件「{existing.title or existing.file_name}」，确认后可另存")
     file_name = safe_filename(file.filename or "未命名")
     kind = kind_of(file_name)
+    policy = parse_policy(lib)
     row = KbDocument(
         library_id=library_id,
         folder_id=folder_id,
@@ -515,8 +548,9 @@ async def upload_document(
         file_hash=digest,
         parse_status=parse_status_of(kind),
         kind=kind,
-        search_text=extract_search_text(file_name, data),
-        sheet_json=extract_sheet_grid(file_name, data),
+        search_text=search_text_for_index(file_name, data, policy),
+        extra="",
+        sheet_json=extract_sheet_grid(file_name, data, policy["sheet_rows"]),
         updated_at=datetime.utcnow(),
     )
     db.add(row)
@@ -525,6 +559,7 @@ async def upload_document(
     write_bytes(library_id, rel_path, data)
     row.rel_path = rel_path
     alts = save_extracted_images(db, row, data)
+    remember_parsed(row, extract_search_text(file_name, data, collapse=False))
     append_asset_alts(row, alts)
     index_document(db, row)
     db.commit()
@@ -536,22 +571,24 @@ async def upload_document(
     return ok(data)
 
 
-def _fill_search_text(row: KbDocument) -> None:
-    """旧文件还没抽过正文时补一次。表格每次按新规则重抽，方便修好乱码。"""
+def _fill_search_text(row: KbDocument, db: Session, force: bool = False) -> None:
+    """旧文件还没抽过正文时补一次。表格每次按新规则重抽。force 时按本库设置重抽。"""
 
     sheet = is_sheet_name(row.file_name)
-    if not sheet and (row.search_text or "").strip():
+    if not force and not sheet and (row.search_text or "").strip():
         return
     try:
         path = abs_path(row.library_id, row.rel_path)
         data = path.read_bytes()
     except (ValueError, OSError):
         return
-    text = extract_search_text(row.file_name, data)
-    if sheet or not (row.search_text or "").strip():
+    lib = db.get(KbLibrary, row.library_id)
+    policy = parse_policy(lib) if lib is not None else None
+    text = search_text_for_index(row.file_name, data, policy)
+    if force or sheet or not (row.search_text or "").strip():
         row.search_text = text
     if sheet:
-        grid = extract_sheet_grid(row.file_name, data)
+        grid = extract_sheet_grid(row.file_name, data, None if policy is None else policy["sheet_rows"])
         if grid:
             row.sheet_json = grid
 
@@ -914,7 +951,7 @@ def _prepare_ask(library_id: int, body: AskIn, db):
         rows = [row for row in rows if row.folder_id in scope]
     rows = [row for row in rows if not row.disabled]
     for row in rows:
-        _fill_search_text(row)
+        _fill_search_text(row, db)
         _fill_assets(row, db)
         index_document(db, row)
     db.commit()
@@ -1155,7 +1192,7 @@ def list_document_chunks(doc_id: int, db: Session = Depends(get_db)):
     row = db.get(KbDocument, doc_id)
     if row is None:
         return fail("这份资料不存在", 404)
-    _fill_search_text(row)
+    _fill_search_text(row, db)
     index_document(db, row)
     items = ensure_chunks(db, row)
     db.commit()
@@ -1280,6 +1317,42 @@ def update_document_assets(doc_id: int, body: AssetBatchIn, db: Session = Depend
     return ok({"items": [asset_edit_dict(item) for item in list_doc_assets(db, row.id)], **vector_payload("pending")})
 
 
+class FlowIn(BaseModel):
+    parse: str = "standard"
+    clean: str = "collapse"
+    chunk: str = "chars"
+    vector: bool = True
+    chunk_size: int = 400
+    chunk_overlap: int = 60
+    max_chunks: int = 40
+
+
+_FLOW_HINTS = {
+    "updated": "已按你选的方式处理这一份。",
+    "skipped": "已按你选的方式处理这一份。这一份只按关键词找。",
+    "no_key": "字已按你选的方式切好，但没填 AI Key，向量没算。",
+    "skipped_edited": "这份有手改过的切片，没有整份重做。",
+    "failed": "这份抽不出字，没有改。",
+}
+
+
+@router.post("/kb/documents/{doc_id}/process")
+def process_document(doc_id: int, body: FlowIn, db: Session = Depends(get_db)):
+    """按预览里选的方式，只处理这一份资料。"""
+
+    row = db.get(KbDocument, doc_id)
+    if row is None:
+        return fail("这份资料不存在", 404)
+    status = apply_document_flow(db, row, normalize_flow(body.model_dump()))
+    row.updated_at = datetime.utcnow()
+    db.commit()
+    extra = vector_payload(status)
+    hint = _FLOW_HINTS.get(status)
+    if hint:
+        extra["vector_hint"] = hint
+    return ok({**_doc_dict(row, db), **extra, "message": extra["vector_hint"]})
+
+
 @router.post("/kb/documents/{doc_id}/vector")
 def rebuild_document_vector(doc_id: int, db: Session = Depends(get_db)):
     """按当前正文和图说明，整份重算一次向量。改完图说明后点一次即可。"""
@@ -1287,7 +1360,8 @@ def rebuild_document_vector(doc_id: int, db: Session = Depends(get_db)):
     row = db.get(KbDocument, doc_id)
     if row is None:
         return fail("这份资料不存在", 404)
-    _fill_search_text(row)
+    _fill_search_text(row, db, force=True)
+    rebuild_search_text(db, row)
     status = index_document(db, row, force=True)
     row.updated_at = datetime.utcnow()
     db.commit()
@@ -1343,7 +1417,7 @@ def generate_wiki(doc_id: int, db: Session = Depends(get_db)):
         return fail("这个库还没开启 Wiki")
     if not llm_public().get("has_key"):
         return fail("请先在设置里填写 AI Key")
-    _fill_search_text(row)
+    _fill_search_text(row, db)
     db.commit()
     body = (row.search_text or "").strip()
     if not body:
@@ -1493,7 +1567,7 @@ def read_document_text(doc_id: int, db: Session = Depends(get_db)):
         return fail("读不了这份文本", 404)
     text = extract_search_text(row.file_name, data, collapse=False)
     if is_sheet_name(row.file_name):
-        _fill_search_text(row)
+        _fill_search_text(row, db)
         index_document(db, row)
         if db.dirty:
             db.commit()

@@ -7,6 +7,8 @@ import io
 import re
 from pathlib import Path
 
+from app.kb.clean import clean_text
+
 
 _MAX_CHARS = 20000
 _SHEET_MAX_CHARS = 40000
@@ -23,29 +25,43 @@ def is_sheet_name(file_name: str) -> bool:
     return Path(file_name or "").suffix.lower() in _SHEET_SUFFIXES
 
 
-def extract_search_text(file_name: str, data: bytes, *, collapse: bool = True) -> str:
+def extract_search_text(
+    file_name: str,
+    data: bytes,
+    *,
+    collapse: bool = True,
+    text_limit: int | None = None,
+    sheet_limit: int | None = None,
+    sheet_rows: int | None = None,
+    sheet_sheets: int | None = None,
+) -> str:
     """按后缀抽正文，失败返回空字符串。collapse=False 时保留换行，给预览用。"""
 
     suffix = Path(file_name or "").suffix.lower()
+    rows = sheet_rows or _SHEET_ROWS
+    sheets = sheet_sheets or _SHEET_SHEETS
     text = ""
     try:
         if suffix in _TEXT_SUFFIXES:
             text = _decode_text(data)
         elif suffix == ".csv":
-            text = _from_csv(data)
+            text = _from_csv(data, rows)
         elif suffix == ".xlsx":
-            text = _from_xlsx(data)
+            text = _from_xlsx(data, rows, sheets)
         elif suffix == ".xls":
-            text = _from_xls(data)
+            text = _from_xls(data, rows, sheets)
         elif suffix == ".docx":
             text = _from_docx(data)
         elif suffix == ".pdf":
             text = _from_pdf(data)
     except Exception:
         text = ""
-    limit = _SHEET_MAX_CHARS if suffix in _SHEET_SUFFIXES else _MAX_CHARS
+    if suffix in _SHEET_SUFFIXES:
+        limit = sheet_limit or _SHEET_MAX_CHARS
+    else:
+        limit = text_limit or _MAX_CHARS
     if collapse:
-        return " ".join(text.split())[:limit]
+        return clean_text(text, limit)
     return text[:limit]
 
 
@@ -64,12 +80,12 @@ def _join_cells(cells: list[str]) -> str:
     return " | ".join(item for item in cells if item)
 
 
-def _from_csv(data: bytes) -> str:
+def _from_csv(data: bytes, sheet_rows: int = _SHEET_ROWS) -> str:
     text = _decode_text(data)
     reader = csv.reader(io.StringIO(text))
     lines: list[str] = []
     for index, row in enumerate(reader):
-        if index >= _SHEET_ROWS:
+        if index >= sheet_rows:
             break
         line = _join_cells([str(cell).strip() for cell in row])
         if line:
@@ -77,17 +93,17 @@ def _from_csv(data: bytes) -> str:
     return "\n".join(lines) or text
 
 
-def _from_xlsx(data: bytes) -> str:
+def _from_xlsx(data: bytes, sheet_rows: int = _SHEET_ROWS, sheet_sheets: int = _SHEET_SHEETS) -> str:
     from openpyxl import load_workbook
 
     book = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     lines: list[str] = []
     try:
-        for sheet in book.worksheets[:_SHEET_SHEETS]:
+        for sheet in book.worksheets[:sheet_sheets]:
             if sheet.title:
                 lines.append(str(sheet.title).strip())
             for index, row in enumerate(sheet.iter_rows(values_only=True)):
-                if index >= _SHEET_ROWS:
+                if index >= sheet_rows:
                     break
                 line = _join_cells([str(cell).strip() for cell in row if cell is not None])
                 if line:
@@ -97,15 +113,15 @@ def _from_xlsx(data: bytes) -> str:
     return "\n".join(lines)
 
 
-def _from_xls(data: bytes) -> str:
+def _from_xls(data: bytes, sheet_rows: int = _SHEET_ROWS, sheet_sheets: int = _SHEET_SHEETS) -> str:
     import xlrd
 
     book = xlrd.open_workbook(file_contents=data)
     lines: list[str] = []
-    for sheet in book.sheets()[:_SHEET_SHEETS]:
+    for sheet in book.sheets()[:sheet_sheets]:
         if sheet.name:
             lines.append(str(sheet.name).strip())
-        for index in range(min(sheet.nrows, _SHEET_ROWS)):
+        for index in range(min(sheet.nrows, sheet_rows)):
             line = _join_cells([str(sheet.cell_value(index, col)).strip() for col in range(sheet.ncols)])
             if line:
                 lines.append(line)
@@ -145,7 +161,7 @@ def _grid_rows(raw_rows: list[list[object]]) -> list[list[str]]:
     return rows
 
 
-def _grid_of(file_name: str, data: bytes) -> list[dict]:
+def _grid_of(file_name: str, data: bytes, sheet_rows: int = _SHEET_ROWS, sheet_sheets: int = _SHEET_SHEETS) -> list[dict]:
     """按文件类型抽出工作表。失败由调用方接住。"""
 
     suffix = Path(file_name or "").suffix.lower()
@@ -154,7 +170,7 @@ def _grid_of(file_name: str, data: bytes) -> list[dict]:
         reader = csv.reader(io.StringIO(text))
         raw: list[list[object]] = []
         for index, row in enumerate(reader):
-            if index >= _SHEET_ROWS:
+            if index >= sheet_rows:
                 break
             raw.append(list(row))
         rows = _grid_rows(raw)
@@ -165,10 +181,10 @@ def _grid_of(file_name: str, data: bytes) -> list[dict]:
         book = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
         sheets: list[dict] = []
         try:
-            for sheet in book.worksheets[:_SHEET_SHEETS]:
+            for sheet in book.worksheets[:sheet_sheets]:
                 raw = []
                 for index, row in enumerate(sheet.iter_rows(values_only=True)):
-                    if index >= _SHEET_ROWS:
+                    if index >= sheet_rows:
                         break
                     raw.append(list(row))
                 rows = _grid_rows(raw)
@@ -182,9 +198,9 @@ def _grid_of(file_name: str, data: bytes) -> list[dict]:
 
         book = xlrd.open_workbook(file_contents=data)
         sheets = []
-        for sheet in book.sheets()[:_SHEET_SHEETS]:
+        for sheet in book.sheets()[:sheet_sheets]:
             raw = []
-            for index in range(min(sheet.nrows, _SHEET_ROWS)):
+            for index in range(min(sheet.nrows, sheet_rows)):
                 raw.append([sheet.cell_value(index, col) for col in range(min(sheet.ncols, _SHEET_COLS))])
             rows = _grid_rows(raw)
             if rows:
@@ -193,13 +209,13 @@ def _grid_of(file_name: str, data: bytes) -> list[dict]:
     return []
 
 
-def extract_sheet_grid(file_name: str, data: bytes) -> str:
+def extract_sheet_grid(file_name: str, data: bytes, sheet_rows: int | None = None, sheet_sheets: int | None = None) -> str:
     """抽出表格格子的 JSON。失败返回空，调用方继续用原来的正文。"""
 
     if not is_sheet_name(file_name):
         return ""
     try:
-        sheets = _grid_of(file_name, data)
+        sheets = _grid_of(file_name, data, sheet_rows or _SHEET_ROWS, sheet_sheets or _SHEET_SHEETS)
     except Exception:
         return ""
     if not sheets:

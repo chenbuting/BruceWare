@@ -252,6 +252,14 @@ export type KbLibrary = {
   vision_engine: KbVisionEngine;
   evidence_mode: KbEvidenceMode;
   rule: string;
+  text_limit: number;
+  sheet_limit: number;
+  sheet_rows: number;
+  clean_collapse: boolean;
+  chunk_size: number;
+  chunk_overlap: number;
+  max_chunks: number;
+  vector_enabled: boolean;
   created_at: string;
 };
 
@@ -344,6 +352,17 @@ export type KbAskHistoryItem = {
   answer: string;
 };
 
+export type KbDocFlow = {
+  parse: "standard" | "head";
+  clean: "collapse" | "keep" | "blank" | "dedupe";
+  chunk: "chars" | "paragraph" | "whole";
+  vector: boolean;
+  chunk_size: number;
+  chunk_overlap: number;
+  max_chunks: number;
+  saved?: boolean;
+};
+
 export type KbDocument = {
   id: number;
   library_id: number;
@@ -362,6 +381,7 @@ export type KbDocument = {
   disabled?: boolean;
   vector_ok?: boolean;
   vector_hint?: string;
+  flow?: KbDocFlow;
   created_at: string;
   updated_at: string;
 };

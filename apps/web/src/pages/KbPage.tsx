@@ -27,6 +27,7 @@ import {
   recognizeKbAsset,
   renameKbFolder,
   renameKbSession,
+  processKbDocument,
   reindexKbDocument,
   saveKbAssetOcr,
   saveKbAssetsBatch,
@@ -37,11 +38,12 @@ import {
   updateKbLibraryPolicy,
   uploadKbDocument,
 } from "@/api/client";
-import type { KbAskKind, KbAskResult, KbChunk, KbDocAsset, KbDocument, KbEvidenceMode, KbFolder, KbLibrary, KbSession, KbVisionEngine, KbWikiList } from "@/api/types";
+import type { KbAskKind, KbAskResult, KbChunk, KbDocAsset, KbDocFlow, KbDocument, KbEvidenceMode, KbFolder, KbLibrary, KbSession, KbVisionEngine, KbWikiList } from "@/api/types";
 import { answerHasAsset, KbAnswerContent } from "@/components/KbAnswerContent";
 import { ImageLightbox } from "@/components/ImageLightbox";
 import { ConfirmModal, Modal } from "@/components/Modal";
 import { PdfPreview } from "@/components/PdfPreview";
+import { DocModuleBar, FlowModulePanel, isFlowPane, type DocPane } from "@/pages/kb/DocModules";
 
 const inputClass = "border border-[var(--line)] bg-[var(--paper)] px-2 py-1.5 text-[13px]";
 const btnClass = "border border-[var(--line)] bg-[var(--paper)] px-2.5 py-1.5 text-[13px] disabled:opacity-50";
@@ -1269,7 +1271,7 @@ export function KbPage() {
             <p className="mb-3 text-[12px] leading-5 text-[var(--muted)]">
               Wiki 只是开关，打开后才允许写摘要，不会自动给全库写。
               <br />
-              要手写：关掉本框 → 点一份资料打开预览 → 滚到最下面 → 点「写摘要」或自己填。
+              要手写：关掉本框 → 点一份资料打开预览 → 点「摘要」。
               <br />
               「跟着提问更新」开着：问完后只改这次出处里最相关的最多 5 份摘要。没出处就不改、也不提示。
               <br />
@@ -1326,15 +1328,7 @@ export function KbPage() {
               onClick={() =>
                 run(async () => {
                   if (!library) return;
-                  const row = await updateKbLibraryPolicy(
-                    library.id,
-                    wikiEnabled,
-                    libMode,
-                    libRule,
-                    wikiLearn,
-                    visionEnabled,
-                    visionEngine,
-                  );
+                  const row = await updateKbLibraryPolicy(library.id, wikiEnabled, libMode, libRule, wikiLearn, visionEnabled, visionEngine);
                   setLibraries((items) => items.map((item) => (item.id === row.id ? row : item)));
                   setHint("已保存库规则");
                 })
@@ -2053,6 +2047,21 @@ function ChunkWords({
   );
 }
 
+function flowChoice(item: KbDocument): KbDocFlow {
+  const flow = item.flow;
+  const clean = flow?.clean;
+  const chunk = flow?.chunk;
+  return {
+    parse: flow?.parse === "head" ? "head" : "standard",
+    clean: clean === "keep" || clean === "blank" || clean === "dedupe" ? clean : "collapse",
+    chunk: chunk === "paragraph" || chunk === "whole" ? chunk : "chars",
+    vector: flow?.vector !== false,
+    chunk_size: flow?.chunk_size || 400,
+    chunk_overlap: flow?.chunk_overlap ?? 60,
+    max_chunks: flow?.max_chunks || 40,
+  };
+}
+
 function PreviewPane({
   item,
   text,
@@ -2087,6 +2096,12 @@ function PreviewPane({
   const [zoomFile, setZoomFile] = useState(false);
   const [vectorNote, setVectorNote] = useState<{ text: string; ok: boolean } | null>(null);
   const [reindexing, setReindexing] = useState(false);
+  const [processing, setProcessing] = useState(false);
+  const [flow, setFlow] = useState<KbDocFlow>(() => flowChoice(item));
+  const [chunkSize, setChunkSize] = useState(() => String(item.flow?.chunk_size || 400));
+  const [chunkOverlap, setChunkOverlap] = useState(() => String(item.flow?.chunk_overlap ?? 60));
+  const [maxChunks, setMaxChunks] = useState(() => String(item.flow?.max_chunks || 40));
+  const [pane, setPane] = useState<DocPane>("file");
 
   function tellVector(message: string, ok: boolean) {
     setVectorNote({ text: message, ok });
@@ -2110,9 +2125,38 @@ function PreviewPane({
     setShowExtras(false);
     setZoomFile(false);
     setVectorNote(null);
+    setPane("file");
+    setFlow(flowChoice(item));
+    setChunkSize(String(item.flow?.chunk_size || 400));
+    setChunkOverlap(String(item.flow?.chunk_overlap ?? 60));
+    setMaxChunks(String(item.flow?.max_chunks || 40));
     const timer = window.setTimeout(() => setShowExtras(true), 0);
     return () => window.clearTimeout(timer);
   }, [item.id]);
+
+  function applyFlow() {
+    const num = (raw: string, fallback: number) => {
+      const value = Number(raw);
+      return Number.isFinite(value) ? value : fallback;
+    };
+    setProcessing(true);
+    processKbDocument(item.id, {
+      parse: flow.parse,
+      clean: flow.clean,
+      chunk: flow.chunk,
+      vector: flow.vector,
+      chunkSize: num(chunkSize, 400),
+      chunkOverlap: num(chunkOverlap, 60),
+      maxChunks: num(maxChunks, 40),
+    })
+      .then((row) => {
+        const message = row.message || row.vector_hint || "已按你选的方式处理这一份。";
+        tellVector(message, !!row.vector_ok || row.vector_state === "ready");
+        onSaved(row);
+      })
+      .catch((err: Error) => onError(err.message))
+      .finally(() => setProcessing(false));
+  }
 
   function runWiki(task: () => Promise<void>, hint: string) {
     setSaving(true);
@@ -2130,7 +2174,7 @@ function PreviewPane({
           {vectorBadge(item.vector_state)}
         </p>
         <div className="flex flex-wrap gap-2">
-          <button type="button" className={btnClass} disabled={reindexing || busy} onClick={rebuildVector}>
+          <button type="button" className={btnClass} disabled={reindexing || busy || processing} onClick={rebuildVector}>
             {reindexing ? "在算…" : "重算向量"}
           </button>
           {visionEnabled ? (
@@ -2141,23 +2185,41 @@ function PreviewPane({
         </div>
       </div>
       {item.tags ? <p className="mb-2 text-[var(--muted)]">{item.tags}</p> : null}
+      <DocModuleBar pane={pane} onChange={setPane} />
+      {isFlowPane(pane) ? (
+        <FlowModulePanel
+          pane={pane}
+          flow={flow}
+          chunkSize={chunkSize}
+          chunkOverlap={chunkOverlap}
+          maxChunks={maxChunks}
+          busy={busy || processing || reindexing}
+          onFlow={setFlow}
+          onChunkSize={setChunkSize}
+          onChunkOverlap={setChunkOverlap}
+          onMaxChunks={setMaxChunks}
+          onApply={applyFlow}
+        />
+      ) : null}
       {vectorNote ? <p className={`mb-2 ${vectorNote.ok ? "text-[var(--ok)]" : "text-amber-800"}`}>{vectorNote.text}</p> : null}
-      {item.preview === "image" ? (
-        <button type="button" className="block max-w-full" title="点图放大" onClick={() => setZoomFile(true)}>
-          <img src={url} alt={item.title} className="max-h-[40vh] max-w-full cursor-zoom-in object-contain" />
-        </button>
-      ) : null}
-      {item.preview === "pdf" ? <PdfPreview url={url} /> : null}
-      {item.preview === "text" ? (
-        <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap bg-[var(--bg)] px-2 py-2 leading-6">{text || "正在读取…"}</pre>
-      ) : null}
-      {!item.preview ? <p className="text-[var(--muted)]">这种文件一期先不预览内容，可以下载查看。</p> : null}
-      <a className="mt-3 inline-block text-[var(--muted)] underline" href={url} target="_blank" rel="noreferrer">
-        打开 / 下载
-      </a>
+      <div className={pane === "file" ? "" : "hidden"}>
+        {item.preview === "image" ? (
+          <button type="button" className="block max-w-full" title="点图放大" onClick={() => setZoomFile(true)}>
+            <img src={url} alt={item.title} className="max-h-[40vh] max-w-full cursor-zoom-in object-contain" />
+          </button>
+        ) : null}
+        {item.preview === "pdf" ? <PdfPreview url={url} /> : null}
+        {item.preview === "text" ? (
+          <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap bg-[var(--bg)] px-2 py-2 leading-6">{text || "正在读取…"}</pre>
+        ) : null}
+        {!item.preview ? <p className="text-[var(--muted)]">这种文件一期先不预览内容，可以下载查看。</p> : null}
+        <a className="mt-3 inline-block text-[var(--muted)] underline" href={url} target="_blank" rel="noreferrer">
+          打开 / 下载
+        </a>
+      </div>
 
-      {showExtras ? (
-        <>
+      <div className={pane === "images" ? "" : "hidden"}>
+        {showExtras ? (
           <AssetWords
             docId={item.id}
             refreshTick={assetTick}
@@ -2168,6 +2230,12 @@ function PreviewPane({
               void fetchKbDocument(item.id).then(onSaved);
             }}
           />
+        ) : (
+          <p className="text-[12px] text-[var(--muted)]">正在加载图…</p>
+        )}
+      </div>
+      <div className={pane === "chunks" ? "" : "hidden"}>
+        {showExtras ? (
           <ChunkWords
             docId={item.id}
             onHint={tellVector}
@@ -2176,12 +2244,12 @@ function PreviewPane({
               void fetchKbDocument(item.id).then(onSaved);
             }}
           />
-        </>
-      ) : (
-        <p className="mt-4 text-[12px] text-[var(--muted)]">正在加载图和切片…</p>
-      )}
+        ) : (
+          <p className="text-[12px] text-[var(--muted)]">正在加载切片…</p>
+        )}
+      </div>
 
-      <div className="mt-4 border-t border-[var(--line)] pt-3">
+      <div className={pane === "wiki" ? "border-t border-[var(--line)] pt-3" : "hidden"}>
         <p className="mb-1 font-medium">
           摘要
           {item.wiki_stale ? <span className="ml-2 font-normal text-[var(--muted)]">可能过期</span> : null}

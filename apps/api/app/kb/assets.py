@@ -11,8 +11,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.ai import chat_complete, llm_public
-from app.kb.extract import extract_search_text
-from app.kb.models import KbAsset, KbDocument
+from app.kb.models import KbAsset, KbDocument, KbLibrary
+from app.kb.pipeline import search_text_for_index
+from app.kb.policy import parse_policy
 from app.kb.search import alias_needles
 from app.kb.store import abs_path, kind_of, remove_file, write_bytes
 
@@ -576,10 +577,12 @@ def list_doc_assets(db: Session, document_id: int) -> list[KbAsset]:
 def rebuild_search_text(db: Session, row: KbDocument) -> None:
     """按原文 + 图名 + 识图文字重拼检索正文。"""
 
+    lib = db.get(KbLibrary, row.library_id)
+    policy = parse_policy(lib) if lib is not None else None
     body = ""
     try:
         data = abs_path(row.library_id, row.rel_path).read_bytes()
-        body = extract_search_text(row.file_name, data)
+        body = search_text_for_index(row.file_name, data, policy)
     except (ValueError, OSError):
         body = ""
     parts = [body]
@@ -589,4 +592,5 @@ def rebuild_search_text(db: Session, row: KbDocument) -> None:
         extra = ocr_for_search(item.ocr_text or "")
         if extra:
             parts.append(extra)
-    row.search_text = " ".join(part for part in parts if part).strip()[:20000]
+    limit = 20000 if policy is None else int(policy["text_limit"])
+    row.search_text = " ".join(part for part in parts if part).strip()[:limit]
