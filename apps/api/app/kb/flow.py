@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.kb.assets import list_doc_assets, ocr_for_search
 from app.kb.chunk import split_chunks, split_paragraphs, split_whole
-from app.kb.clean import clean_document
+from app.kb.clean import CleanScriptError, clean_document
 from app.kb.extract import extract_search_text, extract_sheet_grid, is_sheet_name
 from app.kb.models import KbDocument
 from app.kb.milvus_store import delete_document_vectors
@@ -65,7 +65,10 @@ def _clean(db: Session, row: KbDocument, flow: dict) -> tuple[str, list[dict]]:
         raw_text, limit, _rows, data = _read_raw(row, flow)
         if data is None and not raw_text.strip():
             return "failed", []
-    body, quality = clean_document(raw_text, flow["cleans"], flow["rules"], limit)
+    try:
+        body, quality = clean_document(raw_text, flow["cleans"], flow["rules"], limit, flow.get("script") or "")
+    except CleanScriptError as exc:
+        return f"clean_failed:{exc}", []
     notes = _notes(db, row)
     text = " ".join(part for part in [body, *notes] if part).strip()[:limit]
     if not text:

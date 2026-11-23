@@ -1,5 +1,7 @@
-"""知识库清洗：默认收成一行。勾上的做法按顺序做，特殊规则最后替换。"""
+"""知识库清洗：默认收成一行。勾上的做法按顺序做，自定义规则和脚本最后做。"""
 
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
 import re
 
 
@@ -50,6 +52,7 @@ def clean_document(
     methods: list[str] | None,
     rules: list[dict] | None = None,
     limit: int | None = None,
+    script: str = "",
 ) -> tuple[str, list[dict]]:
     """按勾选的做法清洗，并给出每一类过了几条、挡了几条。"""
 
@@ -118,24 +121,158 @@ def clean_document(
             add("规范性", max(0, examined - norm_changed), norm_changed)
     else:
         body = body.strip()
-    rule_passed = 0
-    rule_blocked = 0
-    for rule in rules or []:
+    if rules:
+        rule_passed, rule_blocked, body = _apply_rules(body, rules)
+        add("自定义规则", rule_passed, rule_blocked)
+    source = (script or "").strip()
+    if source:
+        before = body
+        body = _run_script(before, source)
+        add("处理脚本", 0 if body != before else 1, 1 if body != before else 0)
+    if limit is not None:
+        body = body[:limit]
+    order = ["完整性", "唯一性", "规范性", "有效性", "安全性", "自定义规则", "处理脚本"]
+    return body, [scores[name] for name in order if name in scores]
+
+
+class CleanScriptError(ValueError):
+    """自定义规则或脚本没做成。正文先不改。"""
+
+
+def _apply_rules(body: str, rules: list[dict]) -> tuple[int, int, str]:
+    """按怎么认、怎么处理来改。返回过了几条、挡了几条和新正文。"""
+
+    passed = blocked = 0
+    for rule in rules:
         find = str(rule.get("find") or "")
         if not find:
             continue
+        how = str(rule.get("how") or "contains")
+        action = str(rule.get("action") or "replace")
+        repl = "" if action == "cut" else str(rule.get("replace") or "")
+        pattern = _compile_rule(how, find)
+        if action in {"drop_line", "keep_line"}:
+            lines = body.splitlines()
+            kept: list[str] = []
+            for line in lines:
+                hit = _line_hit(line, how, find, pattern)
+                stay = hit if action == "keep_line" else not hit
+                if stay:
+                    kept.append(line)
+                    passed += 1
+                else:
+                    blocked += 1
+            body = "\n".join(kept)
+            continue
+        if how == "regex" and pattern is not None:
+            try:
+                body, count = pattern.subn(repl, body)
+            except re.error as exc:
+                raise CleanScriptError(f"这条正则写错了：{exc}") from exc
+            blocked += count
+            passed += 0 if count else 1
+            continue
+        if how in {"start", "end"}:
+            lines = body.splitlines()
+            changed: list[str] = []
+            for line in lines:
+                nxt, count = _edge_replace(line, how, find, repl)
+                if count:
+                    blocked += count
+                else:
+                    passed += 1
+                changed.append(nxt)
+            body = "\n".join(changed)
+            continue
         count = body.count(find)
         if count:
-            rule_blocked += count
-            body = body.replace(find, str(rule.get("replace") or ""))
+            blocked += count
+            body = body.replace(find, repl)
         else:
-            rule_passed += 1
-    if rules:
-        add("自定义规则", rule_passed, rule_blocked)
-    if limit is not None:
-        body = body[:limit]
-    order = ["完整性", "唯一性", "规范性", "有效性", "安全性", "自定义规则"]
-    return body, [scores[name] for name in order if name in scores]
+            passed += 1
+    return passed, blocked, body
+
+
+def _compile_rule(how: str, find: str) -> re.Pattern[str] | None:
+    if how != "regex":
+        return None
+    try:
+        return re.compile(find)
+    except re.error as exc:
+        raise CleanScriptError(f"这条正则写错了：{exc}") from exc
+
+
+def _line_hit(line: str, how: str, find: str, pattern: re.Pattern[str] | None) -> bool:
+    if how == "start":
+        return line.startswith(find)
+    if how == "end":
+        return line.rstrip().endswith(find)
+    if how == "regex":
+        return bool(pattern.search(line)) if pattern else False
+    return find in line
+
+
+def _edge_replace(line: str, how: str, find: str, repl: str) -> tuple[str, int]:
+    if how == "start" and line.startswith(find):
+        return repl + line[len(find) :], 1
+    if how == "end" and line.rstrip().endswith(find):
+        core = line.rstrip()
+        tail = line[len(core) :]
+        return core[: len(core) - len(find)] + repl + tail, 1
+    return line, 0
+
+
+# 脚本只能改 text。不给读文件、不给导入别的库。
+_SAFE_BUILTINS = {
+    "len": len,
+    "range": range,
+    "str": str,
+    "int": int,
+    "float": float,
+    "bool": bool,
+    "list": list,
+    "dict": dict,
+    "set": set,
+    "tuple": tuple,
+    "min": min,
+    "max": max,
+    "sum": sum,
+    "abs": abs,
+    "round": round,
+    "enumerate": enumerate,
+    "zip": zip,
+    "map": map,
+    "filter": filter,
+    "sorted": sorted,
+    "reversed": reversed,
+    "any": any,
+    "all": all,
+    "True": True,
+    "False": False,
+    "None": None,
+}
+
+
+def _run_script(text: str, source: str) -> str:
+    """跑用户写的处理脚本。text 改完必须还是一段文字。"""
+
+    def work() -> str:
+        env: dict = {"text": text, "re": re, "__builtins__": _SAFE_BUILTINS}
+        exec(source, env, env)
+        result = env.get("text")
+        if not isinstance(result, str):
+            raise CleanScriptError("脚本要把结果放回 text，而且必须是一段文字")
+        return result
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(work).result(timeout=3)
+    except CleanScriptError:
+        raise
+    except FuturesTimeout as exc:
+        raise CleanScriptError("脚本跑太久，已停掉") from exc
+    except Exception as exc:
+        raise CleanScriptError(f"脚本没跑成：{exc}") from exc
 
 
 def _to_halfwidth(text: str) -> str:

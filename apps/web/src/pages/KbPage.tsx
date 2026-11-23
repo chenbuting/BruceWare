@@ -38,7 +38,7 @@ import {
   updateKbLibraryPolicy,
   uploadKbDocument,
 } from "@/api/client";
-import type { KbAskKind, KbAskResult, KbChunk, KbDocAsset, KbDocFlow, KbDocument, KbEvidenceMode, KbFolder, KbLibrary, KbQuality, KbSession, KbVisionEngine, KbWikiList } from "@/api/types";
+import type { KbAskKind, KbAskResult, KbChunk, KbCleanRule, KbDocAsset, KbDocFlow, KbDocument, KbEvidenceMode, KbFolder, KbLibrary, KbQuality, KbSession, KbVisionEngine, KbWikiList } from "@/api/types";
 import { answerHasAsset, KbAnswerContent } from "@/components/KbAnswerContent";
 import { ImageLightbox } from "@/components/ImageLightbox";
 import { ConfirmModal, Modal } from "@/components/Modal";
@@ -2047,6 +2047,12 @@ function ChunkWords({
   );
 }
 
+function ruleChoice(rule: Partial<KbCleanRule>): KbCleanRule {
+  const how = rule.how === "start" || rule.how === "end" || rule.how === "regex" ? rule.how : "contains";
+  const action = rule.action === "cut" || rule.action === "drop_line" || rule.action === "keep_line" ? rule.action : "replace";
+  return { how, action, find: rule.find || "", replace: rule.replace || "" };
+}
+
 function flowChoice(item: KbDocument): KbDocFlow {
   const flow = item.flow;
   const chunk = flow?.chunk;
@@ -2054,7 +2060,8 @@ function flowChoice(item: KbDocument): KbDocFlow {
   return {
     parse: flow?.parse === "head" ? "head" : "standard",
     cleans,
-    rules: Array.isArray(flow?.rules) ? flow.rules : [],
+    rules: Array.isArray(flow?.rules) ? flow.rules.map(ruleChoice) : [],
+    script: flow?.script || "",
     chunk: chunk === "paragraph" || chunk === "whole" ? chunk : "chars",
     vector: flow?.vector !== false,
     chunk_size: flow?.chunk_size || 400,
@@ -2103,6 +2110,8 @@ function PreviewPane({
   const [chunkOverlap, setChunkOverlap] = useState(() => String(item.flow?.chunk_overlap ?? 60));
   const [maxChunks, setMaxChunks] = useState(() => String(item.flow?.max_chunks || 40));
   const [pane, setPane] = useState<DocPane>("file");
+  const [ruleHow, setRuleHow] = useState<KbCleanRule["how"]>("contains");
+  const [ruleAction, setRuleAction] = useState<KbCleanRule["action"]>("replace");
   const [ruleFind, setRuleFind] = useState("");
   const [ruleReplace, setRuleReplace] = useState("");
   const [quality, setQuality] = useState<KbQuality[]>([]);
@@ -2153,6 +2162,7 @@ function PreviewPane({
       parse: flow.parse,
       cleans: flow.cleans,
       rules: flow.rules,
+      script: flow.script,
       chunk: flow.chunk,
       vector: flow.vector,
       chunkSize: num(chunkSize, 400),
@@ -2207,6 +2217,8 @@ function PreviewPane({
           chunkSize={chunkSize}
           chunkOverlap={chunkOverlap}
           maxChunks={maxChunks}
+          ruleHow={ruleHow}
+          ruleAction={ruleAction}
           ruleFind={ruleFind}
           ruleReplace={ruleReplace}
           busy={busy || processing || reindexing}
@@ -2214,12 +2226,17 @@ function PreviewPane({
           onChunkSize={setChunkSize}
           onChunkOverlap={setChunkOverlap}
           onMaxChunks={setMaxChunks}
+          onRuleHow={setRuleHow}
+          onRuleAction={setRuleAction}
           onRuleFind={setRuleFind}
           onRuleReplace={setRuleReplace}
           onAddRule={() => {
             const find = ruleFind.trim();
             if (!find) return;
-            setFlow({ ...flow, rules: [...flow.rules, { find, replace: ruleReplace }] });
+            setFlow({
+              ...flow,
+              rules: [...flow.rules, { how: ruleHow, action: ruleAction, find, replace: ruleAction === "replace" ? ruleReplace : "" }],
+            });
             setRuleFind("");
             setRuleReplace("");
           }}

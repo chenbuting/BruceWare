@@ -20,6 +20,20 @@ export const VIEW_MODULES = [
 ] as const;
 
 /** 清洗按数仓质量那几类分组。默认只勾「收成一行」，和以前一样。 */
+const RULE_HOWS = [
+  { id: "contains", label: "包含这段" },
+  { id: "start", label: "开头是" },
+  { id: "end", label: "结尾是" },
+  { id: "regex", label: "符合正则" },
+] as const;
+
+const RULE_ACTIONS = [
+  { id: "replace", label: "换成" },
+  { id: "cut", label: "删掉这段" },
+  { id: "drop_line", label: "删掉整行" },
+  { id: "keep_line", label: "只留符合的行" },
+] as const;
+
 const CLEAN_GROUPS = [
   { name: "完整性", hint: "空的不要", options: [{ id: "blank", label: "去掉空行" }] },
   { name: "唯一性", hint: "重复只留一份", options: [{ id: "dedupe", label: "去掉重复段落" }] },
@@ -83,6 +97,8 @@ export function FlowModulePanel({
   chunkSize,
   chunkOverlap,
   maxChunks,
+  ruleHow,
+  ruleAction,
   ruleFind,
   ruleReplace,
   busy,
@@ -90,6 +106,8 @@ export function FlowModulePanel({
   onChunkSize,
   onChunkOverlap,
   onMaxChunks,
+  onRuleHow,
+  onRuleAction,
   onRuleFind,
   onRuleReplace,
   onAddRule,
@@ -102,6 +120,8 @@ export function FlowModulePanel({
   chunkSize: string;
   chunkOverlap: string;
   maxChunks: string;
+  ruleHow: KbCleanRule["how"];
+  ruleAction: KbCleanRule["action"];
   ruleFind: string;
   ruleReplace: string;
   busy: boolean;
@@ -109,6 +129,8 @@ export function FlowModulePanel({
   onChunkSize: (value: string) => void;
   onChunkOverlap: (value: string) => void;
   onMaxChunks: (value: string) => void;
+  onRuleHow: (value: KbCleanRule["how"]) => void;
+  onRuleAction: (value: KbCleanRule["action"]) => void;
   onRuleFind: (value: string) => void;
   onRuleReplace: (value: string) => void;
   onAddRule: () => void;
@@ -152,17 +174,42 @@ export function FlowModulePanel({
             </div>
           ))}
           <p className="mb-1">自定义规则</p>
-          <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">上面的做法做完后，再按你写的字替换。找到的内容会原样换成新的。</p>
+          <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">上面的做法做完后，按你写的规则改。可以多条，从上到下做。</p>
           <div className="mb-2 flex flex-wrap items-center gap-2">
-            <input className={`${inputClass} w-36`} placeholder="找到" value={ruleFind} onChange={(e) => onRuleFind(e.target.value)} />
-            <input className={`${inputClass} w-36`} placeholder="换成" value={ruleReplace} onChange={(e) => onRuleReplace(e.target.value)} />
+            <select className={inputClass} value={ruleHow} onChange={(e) => onRuleHow(e.target.value as KbCleanRule["how"])}>
+              {RULE_HOWS.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+            <select className={inputClass} value={ruleAction} onChange={(e) => onRuleAction(e.target.value as KbCleanRule["action"])}>
+              {RULE_ACTIONS.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+            <input className={`${inputClass} w-36`} placeholder="要认的内容" value={ruleFind} onChange={(e) => onRuleFind(e.target.value)} />
+            {ruleAction === "replace" ? (
+              <input className={`${inputClass} w-36`} placeholder="换成" value={ruleReplace} onChange={(e) => onRuleReplace(e.target.value)} />
+            ) : null}
             <button type="button" className={btnClass} onClick={onAddRule}>
               添加
             </button>
           </div>
           {flow.rules.map((rule, index) => (
-            <RuleRow key={`${rule.find}-${index}`} rule={rule} onRemove={() => onRemoveRule(index)} />
+            <RuleRow key={`${rule.how}-${rule.find}-${index}`} rule={rule} onRemove={() => onRemoveRule(index)} />
           ))}
+          <p className="mb-1 mt-3">处理脚本</p>
+          <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">规则做完后再跑。text 是现在的正文，改完还放回 text。可以用 re。只能改这段字。</p>
+          <textarea
+            className={`${inputClass} w-full`}
+            rows={4}
+            placeholder={'text = text.replace("旧", "新")'}
+            value={flow.script || ""}
+            onChange={(e) => onFlow({ ...flow, script: e.target.value })}
+          />
           <StepButton busy={busy} label="只清洗这一份" onApply={onApply} />
           <QualityReport items={quality} />
         </>
@@ -235,9 +282,12 @@ function StepButton({ busy, label, onApply }: { busy: boolean; label: string; on
 }
 
 function RuleRow({ rule, onRemove }: { rule: KbCleanRule; onRemove: () => void }) {
+  const how = RULE_HOWS.find((item) => item.id === rule.how)?.label || "包含这段";
+  const action = RULE_ACTIONS.find((item) => item.id === rule.action)?.label || "换成";
+  const text = rule.action === "replace" ? `${how}「${rule.find}」，换成「${rule.replace || "空"}」` : `${how}「${rule.find}」，${action}`;
   return (
     <p className="mb-1 flex flex-wrap items-center gap-2">
-      <span>把「{rule.find}」换成「{rule.replace || "空"}」</span>
+      <span>{text}</span>
       <button type="button" className="text-[var(--muted)]" onClick={onRemove}>
         删除
       </button>

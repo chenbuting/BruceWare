@@ -582,7 +582,8 @@ export function processKbDocument(
   flow: {
     parse: string;
     cleans: string[];
-    rules: { find: string; replace: string }[];
+    rules: { how: string; action: string; find: string; replace: string }[];
+    script: string;
     chunk: string;
     vector: boolean;
     chunkSize: number;
@@ -597,6 +598,7 @@ export function processKbDocument(
       parse: flow.parse,
       cleans: flow.cleans,
       rules: flow.rules,
+      script: flow.script,
       chunk: flow.chunk,
       vector: flow.vector,
       chunk_size: flow.chunkSize,

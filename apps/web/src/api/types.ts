@@ -353,6 +353,8 @@ export type KbAskHistoryItem = {
 };
 
 export type KbCleanRule = {
+  how: "contains" | "start" | "end" | "regex";
+  action: "replace" | "cut" | "drop_line" | "keep_line";
   find: string;
   replace: string;
 };
@@ -368,6 +370,7 @@ export type KbDocFlow = {
   parse: "standard" | "head";
   cleans: string[];
   rules: KbCleanRule[];
+  script: string;
   chunk: "chars" | "paragraph" | "whole";
   vector: boolean;
   chunk_size: number;

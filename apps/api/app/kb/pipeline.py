@@ -66,6 +66,7 @@ def normalize_flow(raw: dict | None) -> dict:
         "parse": parse,
         "cleans": cleans,
         "rules": rules,
+        "script": str(data.get("script") or "")[:4000],
         "chunk": chunk,
         "vector": bool(data.get("vector", True)),
         "chunk_size": size,
@@ -93,7 +94,7 @@ def _cleans(raw) -> list[str]:
 
 
 def _rules(raw) -> list[dict]:
-    """用户自己加的替换。空的找到内容不算。最多 20 条。"""
+    """用户自己加的规则。旧数据只有找到和换成，仍按包含后替换。最多 20 条。"""
 
     if not isinstance(raw, list):
         return []
@@ -101,10 +102,16 @@ def _rules(raw) -> list[dict]:
     for item in raw:
         if not isinstance(item, dict):
             continue
-        find = str(item.get("find") or "").strip()[:80]
+        find = str(item.get("find") or "").strip()[:200]
         if not find:
             continue
-        rules.append({"find": find, "replace": str(item.get("replace") or "")[:80]})
+        how = str(item.get("how") or "contains")
+        action = str(item.get("action") or "replace")
+        if how not in {"contains", "start", "end", "regex"}:
+            how = "contains"
+        if action not in {"replace", "cut", "drop_line", "keep_line"}:
+            action = "replace"
+        rules.append({"how": how, "action": action, "find": find, "replace": str(item.get("replace") or "")[:200]})
         if len(rules) >= 20:
             break
     return rules

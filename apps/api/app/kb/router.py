@@ -1318,6 +1318,8 @@ def update_document_assets(doc_id: int, body: AssetBatchIn, db: Session = Depend
 
 
 class CleanRuleIn(BaseModel):
+    how: str = "contains"
+    action: str = "replace"
     find: str = ""
     replace: str = ""
 
@@ -1327,6 +1329,7 @@ class FlowIn(BaseModel):
     parse: str = "standard"
     cleans: list[str] = ["collapse"]
     rules: list[CleanRuleIn] = []
+    script: str = ""
     chunk: str = "chars"
     vector: bool = True
     chunk_size: int = 400
@@ -1356,7 +1359,9 @@ def process_document(doc_id: int, body: FlowIn, db: Session = Depends(get_db)):
     status, quality = apply_document_step(db, row, body.model_dump())
     row.updated_at = datetime.utcnow()
     db.commit()
-    extra = vector_payload(status)
+    extra = vector_payload("failed" if status.startswith("clean_failed:") else status)
+    if status.startswith("clean_failed:"):
+        extra["vector_hint"] = status.split(":", 1)[1]
     hint = _FLOW_HINTS.get(status)
     if hint:
         extra["vector_hint"] = hint
