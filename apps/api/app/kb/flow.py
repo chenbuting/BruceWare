@@ -6,8 +6,8 @@ from sqlalchemy.orm import Session
 
 from app.kb.assets import list_doc_assets, ocr_for_search
 from app.kb.chunk import split_chunks, split_paragraphs, split_whole
-from app.kb.clean import CleanScriptError, clean_document
-from app.kb.extract import extract_search_text, extract_sheet_grid, is_sheet_name
+from app.kb.clean import CleanScriptError, _run_script, clean_document
+from app.kb.extract import ParseChoiceError, extract_search_text, extract_sheet_grid, is_sheet_name
 from app.kb.models import KbDocument
 from app.kb.milvus_store import delete_document_vectors
 from app.kb.pipeline import normalize_flow, remember_flow, remember_parsed, stored_flow
@@ -43,14 +43,32 @@ def apply_document_step(db: Session, row: KbDocument, raw: dict) -> tuple[str, l
 
 
 def _parse(db: Session, row: KbDocument, flow: dict) -> str:
-    raw_text, _limit, _rows, data = _read_raw(row, flow)
+    try:
+        raw_text, _limit, _rows, data = _read_raw(row, flow)
+    except ParseChoiceError as exc:
+        return f"parse_failed:{exc}"
     if data is None:
         return "failed"
+    source = str(flow.get("parse_script") or "").strip()
+    if source:
+        try:
+            raw_text = _run_script(raw_text, source)
+        except CleanScriptError as exc:
+            return f"parse_failed:{exc}"
     if not raw_text.strip():
         return "failed"
     remember_parsed(row, raw_text)
     if is_sheet_name(row.file_name):
-        grid = extract_sheet_grid(row.file_name, data, _rows)
+        hint = str(flow.get("parse_hint") or "")
+        mode = flow["parse"]
+        grid = extract_sheet_grid(
+            row.file_name,
+            data,
+            _rows,
+            only_name=hint if mode == "sheet_name" else "",
+            only_cols=hint if mode == "sheet_cols" else "",
+            first_only=mode == "sheet_first",
+        )
         if grid:
             row.sheet_json = grid
     return "parsed"
@@ -62,7 +80,10 @@ def _clean(db: Session, row: KbDocument, flow: dict) -> tuple[str, list[dict]]:
     if saved.strip():
         raw_text = saved
     else:
-        raw_text, limit, _rows, data = _read_raw(row, flow)
+        try:
+            raw_text, limit, _rows, data = _read_raw(row, flow)
+        except ParseChoiceError as exc:
+            return f"parse_failed:{exc}", []
         if data is None and not raw_text.strip():
             return "failed", []
     try:
@@ -124,6 +145,8 @@ def _read_raw(row: KbDocument, flow: dict) -> tuple[str, int, int, bytes | None]
         text_limit=text_limit,
         sheet_limit=sheet_limit,
         sheet_rows=sheet_rows,
+        mode=str(flow.get("parse") or "standard"),
+        hint=str(flow.get("parse_hint") or ""),
     )
     return raw_text, limit, sheet_rows, data
 

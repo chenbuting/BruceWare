@@ -40,7 +40,18 @@ def normalize_flow(raw: dict | None) -> dict:
     data = raw or {}
     parse = str(data.get("parse") or "standard")
     chunk = str(data.get("chunk") or "chars")
-    if parse not in {"standard", "head"}:
+    if parse not in {
+        "standard",
+        "head",
+        "word_both",
+        "word_table",
+        "pdf_pages",
+        "sheet_first",
+        "sheet_name",
+        "sheet_cols",
+        "text_utf8",
+        "text_gb",
+    }:
         parse = "standard"
     cleans = _cleans(data.get("cleans", data.get("clean")))
     rules = _rules(data.get("rules"))
@@ -64,6 +75,8 @@ def normalize_flow(raw: dict | None) -> dict:
     max_chunks = min(200, max(5, max_chunks))
     return {
         "parse": parse,
+        "parse_hint": str(data.get("parse_hint") or "")[:200],
+        "parse_script": str(data.get("parse_script") or "")[:4000],
         "cleans": cleans,
         "rules": rules,
         "script": str(data.get("script") or "")[:4000],

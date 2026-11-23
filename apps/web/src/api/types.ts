@@ -367,7 +367,9 @@ export type KbQuality = {
 };
 
 export type KbDocFlow = {
-  parse: "standard" | "head";
+  parse: string;
+  parse_hint: string;
+  parse_script: string;
   cleans: string[];
   rules: KbCleanRule[];
   script: string;

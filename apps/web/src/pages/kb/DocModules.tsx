@@ -93,6 +93,7 @@ function ModuleRow<T extends DocPane>({
 
 export function FlowModulePanel({
   pane,
+  fileName,
   flow,
   chunkSize,
   chunkOverlap,
@@ -116,6 +117,7 @@ export function FlowModulePanel({
   quality,
 }: {
   pane: FlowPane;
+  fileName: string;
   flow: KbDocFlow;
   chunkSize: string;
   chunkOverlap: string;
@@ -143,10 +145,7 @@ export function FlowModulePanel({
       {pane === "parse" ? (
         <>
           <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">只抽出正文。清洗、切片和向量不会跟着变。</p>
-          <select className={inputClass} value={flow.parse} onChange={(e) => onFlow({ ...flow, parse: e.target.value === "head" ? "head" : "standard" })}>
-            <option value="standard">标准抽出</option>
-            <option value="head">只抽开头（更短）</option>
-          </select>
+          <ParseFields fileName={fileName} flow={flow} onFlow={onFlow} />
           <StepButton busy={busy} label="只解析这一份" onApply={onApply} />
         </>
       ) : null}
@@ -254,6 +253,77 @@ export function FlowModulePanel({
         </>
       ) : null}
     </div>
+  );
+}
+
+function parseOptions(fileName: string) {
+  const suffix = fileName.split(".").pop()?.toLowerCase() || "";
+  const head = { id: "head", label: "只抽开头（更短）" };
+  if (suffix === "docx") {
+    return [
+      { id: "standard", label: "标准抽出（只要段落）" },
+      head,
+      { id: "word_both", label: "段落加表格" },
+      { id: "word_table", label: "只要表格" },
+    ];
+  }
+  if (suffix === "pdf") {
+    return [{ id: "standard", label: "标准抽出（全部文字）" }, head, { id: "pdf_pages", label: "指定页" }];
+  }
+  if (suffix === "xlsx" || suffix === "xls") {
+    return [
+      { id: "standard", label: "标准抽出（全部表）" },
+      head,
+      { id: "sheet_first", label: "只要第一张表" },
+      { id: "sheet_name", label: "指定表名" },
+      { id: "sheet_cols", label: "指定列名" },
+    ];
+  }
+  if (suffix === "csv") {
+    return [{ id: "standard", label: "标准抽出（全部表）" }, head, { id: "sheet_cols", label: "指定列名" }];
+  }
+  if (["txt", "md", "log", "json", "yaml", "yml", "ini"].includes(suffix)) {
+    return [
+      { id: "standard", label: "标准抽出（自动识别编码）" },
+      head,
+      { id: "text_utf8", label: "强制 UTF-8" },
+      { id: "text_gb", label: "强制国标" },
+    ];
+  }
+  return [{ id: "standard", label: "标准抽出" }, head];
+}
+
+function ParseFields({ fileName, flow, onFlow }: { fileName: string; flow: KbDocFlow; onFlow: (next: KbDocFlow) => void }) {
+  const options = parseOptions(fileName);
+  const value = options.some((item) => item.id === flow.parse) ? flow.parse : "standard";
+  const hintLabel = value === "pdf_pages" ? "页码，例如 1-3,5" : value === "sheet_name" ? "表名" : value === "sheet_cols" ? "列名，用逗号分开" : "";
+  return (
+    <>
+      <select className={inputClass} value={value} onChange={(e) => onFlow({ ...flow, parse: e.target.value })}>
+        {options.map((item) => (
+          <option key={item.id} value={item.id}>
+            {item.label}
+          </option>
+        ))}
+      </select>
+      {hintLabel ? (
+        <input
+          className={`${inputClass} mt-2 w-full`}
+          placeholder={hintLabel}
+          value={flow.parse_hint || ""}
+          onChange={(e) => onFlow({ ...flow, parse_hint: e.target.value })}
+        />
+      ) : null}
+      <p className="mb-1 mt-3">处理脚本</p>
+      <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">抽出后再跑。text 是抽出的正文，改完还放回 text。可以用 re。只能改这段字。</p>
+      <textarea
+        className={`${inputClass} w-full`}
+        rows={4}
+        placeholder={'text = text.replace("旧", "新")'}
+        value={flow.parse_script || ""}
+        onChange={(e) => onFlow({ ...flow, parse_script: e.target.value })}
+      />
+    </>
   );
 }
 

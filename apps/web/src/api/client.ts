@@ -581,6 +581,8 @@ export function processKbDocument(
   step: "parse" | "clean" | "chunk" | "vector",
   flow: {
     parse: string;
+    parseHint: string;
+    parseScript: string;
     cleans: string[];
     rules: { how: string; action: string; find: string; replace: string }[];
     script: string;
@@ -596,6 +598,8 @@ export function processKbDocument(
     body: JSON.stringify({
       step,
       parse: flow.parse,
+      parse_hint: flow.parseHint,
+      parse_script: flow.parseScript,
       cleans: flow.cleans,
       rules: flow.rules,
       script: flow.script,

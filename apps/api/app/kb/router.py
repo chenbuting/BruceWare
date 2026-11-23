@@ -1327,6 +1327,8 @@ class CleanRuleIn(BaseModel):
 class FlowIn(BaseModel):
     step: str = ""
     parse: str = "standard"
+    parse_hint: str = ""
+    parse_script: str = ""
     cleans: list[str] = ["collapse"]
     rules: list[CleanRuleIn] = []
     script: str = ""
@@ -1359,9 +1361,13 @@ def process_document(doc_id: int, body: FlowIn, db: Session = Depends(get_db)):
     status, quality = apply_document_step(db, row, body.model_dump())
     row.updated_at = datetime.utcnow()
     db.commit()
-    extra = vector_payload("failed" if status.startswith("clean_failed:") else status)
-    if status.startswith("clean_failed:"):
-        extra["vector_hint"] = status.split(":", 1)[1]
+    detail = ""
+    for prefix in ("clean_failed:", "parse_failed:"):
+        if status.startswith(prefix):
+            detail = status[len(prefix) :]
+    extra = vector_payload("failed" if detail else status)
+    if detail:
+        extra["vector_hint"] = detail
     hint = _FLOW_HINTS.get(status)
     if hint:
         extra["vector_hint"] = hint

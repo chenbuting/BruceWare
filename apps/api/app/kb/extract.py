@@ -25,6 +25,10 @@ def is_sheet_name(file_name: str) -> bool:
     return Path(file_name or "").suffix.lower() in _SHEET_SUFFIXES
 
 
+class ParseChoiceError(ValueError):
+    """页码、表名或列名没写对。这份正文先不改。"""
+
+
 def extract_search_text(
     file_name: str,
     data: bytes,
@@ -34,6 +38,8 @@ def extract_search_text(
     sheet_limit: int | None = None,
     sheet_rows: int | None = None,
     sheet_sheets: int | None = None,
+    mode: str = "standard",
+    hint: str = "",
 ) -> str:
     """按后缀抽正文，失败返回空字符串。collapse=False 时保留换行，给预览用。"""
 
@@ -42,7 +48,10 @@ def extract_search_text(
     sheets = sheet_sheets or _SHEET_SHEETS
     text = ""
     try:
-        if suffix in _TEXT_SUFFIXES:
+        picked = _extract_mode(suffix, data, mode, hint, rows, sheets)
+        if picked is not None:
+            text = picked
+        elif suffix in _TEXT_SUFFIXES:
             text = _decode_text(data)
         elif suffix == ".csv":
             text = _from_csv(data, rows)
@@ -54,6 +63,8 @@ def extract_search_text(
             text = _from_docx(data)
         elif suffix == ".pdf":
             text = _from_pdf(data)
+    except ParseChoiceError:
+        raise
     except Exception:
         text = ""
     if suffix in _SHEET_SUFFIXES:
@@ -209,7 +220,15 @@ def _grid_of(file_name: str, data: bytes, sheet_rows: int = _SHEET_ROWS, sheet_s
     return []
 
 
-def extract_sheet_grid(file_name: str, data: bytes, sheet_rows: int | None = None, sheet_sheets: int | None = None) -> str:
+def extract_sheet_grid(
+    file_name: str,
+    data: bytes,
+    sheet_rows: int | None = None,
+    sheet_sheets: int | None = None,
+    only_name: str = "",
+    only_cols: str = "",
+    first_only: bool = False,
+) -> str:
     """抽出表格格子的 JSON。失败返回空，调用方继续用原来的正文。"""
 
     if not is_sheet_name(file_name):
@@ -218,6 +237,20 @@ def extract_sheet_grid(file_name: str, data: bytes, sheet_rows: int | None = Non
         sheets = _grid_of(file_name, data, sheet_rows or _SHEET_ROWS, sheet_sheets or _SHEET_SHEETS)
     except Exception:
         return ""
+    if first_only:
+        sheets = sheets[:1]
+    name = only_name.strip()
+    if name:
+        sheets = [item for item in sheets if str(item.get("name") or "").strip() == name]
+    col_names = _hint_names(only_cols)
+    if col_names:
+        kept: list[dict] = []
+        for item in sheets:
+            rows = item.get("rows") if isinstance(item, dict) else None
+            picked = _keep_named_cols(rows if isinstance(rows, list) else [], col_names)
+            if picked:
+                kept.append({**item, "rows": picked})
+        sheets = kept
     if not sheets:
         return ""
     import json
@@ -285,6 +318,200 @@ def sheet_rows_for_ask(grid_json: str, question: str, limit: int = 12) -> str:
     if not blocks:
         return ""
     return "【表格格子】金额、编号以这里的格子为准，不要从旁边正文猜。\n" + "\n\n".join(blocks)
+
+
+def _extract_mode(suffix: str, data: bytes, mode: str, hint: str, rows: int, sheets: int) -> str | None:
+    """特殊抽法。返回 None 表示还按原来的标准抽出。"""
+
+    if mode in {"", "standard", "head"}:
+        return None
+    if mode == "word_both" and suffix == ".docx":
+        return _from_docx_parts(data, True, True)
+    if mode == "word_table" and suffix == ".docx":
+        return _from_docx_parts(data, False, True)
+    if mode == "pdf_pages" and suffix == ".pdf":
+        return _from_pdf_pages(data, hint)
+    if mode == "sheet_first" and suffix in _SHEET_SUFFIXES:
+        return _sheet_text(suffix, data, rows, 1, "", [])
+    if mode == "sheet_name" and suffix in {".xlsx", ".xls"}:
+        name = hint.strip()
+        if not name:
+            raise ParseChoiceError("先写表名")
+        return _sheet_text(suffix, data, rows, sheets, name, [])
+    if mode == "sheet_cols" and suffix in _SHEET_SUFFIXES:
+        names = _hint_names(hint)
+        if not names:
+            raise ParseChoiceError("先写列名，用逗号分开")
+        return _sheet_text(suffix, data, rows, sheets, "", names)
+    if mode == "text_utf8" and suffix in _TEXT_SUFFIXES:
+        return data.decode("utf-8-sig", errors="replace")
+    if mode == "text_gb" and suffix in _TEXT_SUFFIXES:
+        return data.decode("gb18030", errors="replace")
+    return None
+
+
+def _hint_names(hint: str) -> list[str]:
+    return [part.strip() for part in re.split(r"[,，、]", hint or "") if part.strip()]
+
+
+def _from_docx_parts(data: bytes, paragraphs: bool, tables: bool) -> str:
+    """Word 可以只要段落、只要表格，或两样都要。"""
+
+    from docx import Document
+
+    doc = Document(io.BytesIO(data))
+    parts: list[str] = []
+    if paragraphs:
+        parts.extend(item.text.strip() for item in doc.paragraphs if item.text.strip())
+    if tables:
+        for table in doc.tables:
+            for row in table.rows:
+                line = _join_cells([cell.text.strip() for cell in row.cells])
+                if line:
+                    parts.append(line)
+    return "\n".join(parts)
+
+
+def _sheet_text(suffix: str, data: bytes, rows: int, sheets: int, only_name: str, names: list[str]) -> str:
+    """按表名或列名抽表格正文。"""
+
+    if suffix == ".csv":
+        blocks = [("", _csv_rows(data, rows))]
+    elif suffix == ".xlsx":
+        blocks = _xlsx_rows(data, rows, sheets, only_name)
+    else:
+        blocks = _xls_rows(data, rows, sheets, only_name)
+    lines: list[str] = []
+    for title, body in blocks:
+        lines.extend(_lines_from_rows(title, body, names))
+    return "\n".join(lines)
+
+
+def _csv_rows(data: bytes, sheet_rows: int) -> list[list[str]]:
+    reader = csv.reader(io.StringIO(_decode_text(data)))
+    rows: list[list[str]] = []
+    for index, row in enumerate(reader):
+        if index >= sheet_rows:
+            break
+        rows.append([str(cell).strip() for cell in row])
+    return rows
+
+
+def _xlsx_rows(data: bytes, sheet_rows: int, sheet_sheets: int, only_name: str) -> list[tuple[str, list[list[str]]]]:
+    from openpyxl import load_workbook
+
+    book = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    blocks: list[tuple[str, list[list[str]]]] = []
+    try:
+        chosen = book.worksheets
+        if only_name:
+            chosen = [sheet for sheet in chosen if str(sheet.title or "").strip() == only_name]
+        for sheet in chosen[:sheet_sheets]:
+            rows: list[list[str]] = []
+            for index, row in enumerate(sheet.iter_rows(values_only=True)):
+                if index >= sheet_rows:
+                    break
+                rows.append(["" if cell is None else str(cell).strip() for cell in row])
+            blocks.append((str(sheet.title or "").strip(), rows))
+    finally:
+        book.close()
+    return blocks
+
+
+def _xls_rows(data: bytes, sheet_rows: int, sheet_sheets: int, only_name: str) -> list[tuple[str, list[list[str]]]]:
+    import xlrd
+
+    book = xlrd.open_workbook(file_contents=data)
+    blocks: list[tuple[str, list[list[str]]]] = []
+    chosen = book.sheets()
+    if only_name:
+        chosen = [sheet for sheet in chosen if str(sheet.name or "").strip() == only_name]
+    for sheet in chosen[:sheet_sheets]:
+        rows: list[list[str]] = []
+        for index in range(min(sheet.nrows, sheet_rows)):
+            rows.append([str(sheet.cell_value(index, col)).strip() for col in range(sheet.ncols)])
+        blocks.append((str(sheet.name or "").strip(), rows))
+    return blocks
+
+
+def _lines_from_rows(title: str, rows: list[list[str]], names: list[str]) -> list[str]:
+    usable = [row for row in rows if any(cell.strip() for cell in row)]
+    if not usable:
+        return []
+    if names:
+        usable = _keep_named_cols(usable, names)
+        if not usable:
+            return []
+    lines = [title] if title else []
+    for row in usable:
+        line = _join_cells([cell.strip() for cell in row])
+        if line:
+            lines.append(line)
+    return lines
+
+
+def _keep_named_cols(rows: list, names: list[str]) -> list[list[str]]:
+    """按第一行的列名留下对应格子。对不上就整表不要。"""
+
+    if not rows or not isinstance(rows[0], list):
+        return []
+    header = [str(cell).strip() for cell in rows[0]]
+    indexes: list[int] = []
+    for name in names:
+        for index, cell in enumerate(header):
+            if cell == name and index not in indexes:
+                indexes.append(index)
+                break
+    if not indexes:
+        return []
+    picked: list[list[str]] = []
+    for row in rows:
+        if not isinstance(row, list):
+            continue
+        picked.append([str(row[index]).strip() if index < len(row) else "" for index in indexes])
+    return picked
+
+
+def _page_indexes(hint: str, total: int) -> list[int]:
+    """把 1-3,5 收成从 0 开始的页码。写错就报给上面。"""
+
+    found: list[int] = []
+    for part in re.split(r"[,，、\s]+", (hint or "").strip()):
+        if not part:
+            continue
+        chunk = part.replace("—", "-")
+        try:
+            if "-" in chunk:
+                left, right = chunk.split("-", 1)
+                start, end = int(left), int(right)
+                if start > end:
+                    start, end = end, start
+                found.extend(range(start, end + 1))
+            else:
+                found.append(int(chunk))
+        except ValueError as exc:
+            raise ParseChoiceError("页码写成这样：1-3,5") from exc
+    indexes: list[int] = []
+    for number in found:
+        if 1 <= number <= total and number - 1 not in indexes:
+            indexes.append(number - 1)
+        if len(indexes) >= 40:
+            break
+    if not indexes:
+        raise ParseChoiceError("这些页码在这份里没有，例如 1-3,5")
+    return indexes
+
+
+def _from_pdf_pages(data: bytes, hint: str) -> str:
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        return ""
+    reader = PdfReader(io.BytesIO(data))
+    parts: list[str] = []
+    for index in _page_indexes(hint, len(reader.pages)):
+        parts.append(reader.pages[index].extract_text() or "")
+    return "\n".join(parts)
 
 
 def _from_pdf(data: bytes) -> str:

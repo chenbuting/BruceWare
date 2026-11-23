@@ -2058,7 +2058,9 @@ function flowChoice(item: KbDocument): KbDocFlow {
   const chunk = flow?.chunk;
   const cleans = Array.isArray(flow?.cleans) ? flow.cleans : ["collapse"];
   return {
-    parse: flow?.parse === "head" ? "head" : "standard",
+    parse: flow?.parse || "standard",
+    parse_hint: flow?.parse_hint || "",
+    parse_script: flow?.parse_script || "",
     cleans,
     rules: Array.isArray(flow?.rules) ? flow.rules.map(ruleChoice) : [],
     script: flow?.script || "",
@@ -2160,6 +2162,8 @@ function PreviewPane({
     setProcessing(true);
     processKbDocument(item.id, step, {
       parse: flow.parse,
+      parseHint: flow.parse_hint,
+      parseScript: flow.parse_script,
       cleans: flow.cleans,
       rules: flow.rules,
       script: flow.script,
@@ -2213,6 +2217,7 @@ function PreviewPane({
       {isFlowPane(pane) ? (
         <FlowModulePanel
           pane={pane}
+          fileName={item.file_name}
           flow={flow}
           chunkSize={chunkSize}
           chunkOverlap={chunkOverlap}
