@@ -578,7 +578,7 @@ export function updateKbLibraryPolicy(
 
 export function processKbDocument(
   id: number,
-  step: "parse" | "clean" | "chunk" | "vector",
+  step: "parse" | "clean" | "chunk" | "vector" | "all",
   flow: {
     parse: string;
     parseHint: string;
@@ -593,7 +593,7 @@ export function processKbDocument(
     maxChunks: number;
   },
 ) {
-  return request<KbDocument & { message?: string; quality?: { name: string; passed: number; blocked: number }[] }>(`/api/v1/kb/documents/${id}/process`, {
+  return request<KbDocument & { message?: string; quality?: { name: string; passed: number; blocked: number }[]; result_text?: string; chunks?: { id: number; index: number; text: string; edited: boolean; preview: string }[] }>(`/api/v1/kb/documents/${id}/process`, {
     method: "POST",
     body: JSON.stringify({
       step,
@@ -744,10 +744,17 @@ export function fetchKbDocumentChunks(id: number) {
   return request<{ items: KbChunk[] }>(`/api/v1/kb/documents/${id}/chunks`);
 }
 
-export function saveKbChunk(id: number, text: string) {
+export function saveKbChunk(id: number, text: string, embed = true) {
   return request<KbChunk>(`/api/v1/kb/chunks/${id}`, {
     method: "PUT",
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, embed }),
+  });
+}
+
+export function saveKbStage(id: number, step: "parse" | "clean", text: string) {
+  return request<KbDocument & { result_text?: string; message?: string }>(`/api/v1/kb/documents/${id}/stage`, {
+    method: "PUT",
+    body: JSON.stringify({ step, text }),
   });
 }
 

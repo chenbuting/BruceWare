@@ -32,6 +32,7 @@ import {
   saveKbAssetOcr,
   saveKbAssetsBatch,
   saveKbChunk,
+  saveKbStage,
   saveKbWiki,
   updateKbDocument,
   updateKbLibrary,
@@ -2117,6 +2118,9 @@ function PreviewPane({
   const [ruleFind, setRuleFind] = useState("");
   const [ruleReplace, setRuleReplace] = useState("");
   const [quality, setQuality] = useState<KbQuality[]>([]);
+  const [parseDraft, setParseDraft] = useState<string | null>(null);
+  const [cleanDraft, setCleanDraft] = useState<string | null>(null);
+  const [chunkDrafts, setChunkDrafts] = useState<KbChunk[] | null>(null);
 
   function tellVector(message: string, ok: boolean) {
     setVectorNote({ text: message, ok });
@@ -2144,6 +2148,9 @@ function PreviewPane({
     setRuleFind("");
     setRuleReplace("");
     setQuality([]);
+    setParseDraft(null);
+    setCleanDraft(null);
+    setChunkDrafts(null);
     setFlow(flowChoice(item));
     setChunkSize(String(item.flow?.chunk_size || 400));
     setChunkOverlap(String(item.flow?.chunk_overlap ?? 60));
@@ -2175,8 +2182,72 @@ function PreviewPane({
     })
       .then((row) => {
         const message = row.message || row.vector_hint || "已按你选的方式处理这一份。";
-        if (step === "clean") setQuality(row.quality || []);
+        if (step === "clean" || step === "all") setQuality(row.quality || []);
+        if ((step === "parse" || step === "clean") && row.result_text != null) {
+          if (step === "parse") setParseDraft(row.result_text);
+          else setCleanDraft(row.result_text);
+        }
+        if (step === "all" && row.result_text != null) setCleanDraft(row.result_text);
+        if ((step === "chunk" || step === "all") && row.chunks) setChunkDrafts(row.chunks);
         tellVector(message, !!row.vector_ok || row.vector_state === "ready");
+        onSaved(row);
+      })
+      .catch((err: Error) => onError(err.message))
+      .finally(() => setProcessing(false));
+  }
+
+  function saveReview() {
+    if (pane !== "parse" && pane !== "clean") return;
+    const text = pane === "parse" ? parseDraft : cleanDraft;
+    if (text == null) return;
+    setProcessing(true);
+    saveKbStage(item.id, pane, text)
+      .then((row) => {
+        const saved = row.result_text || text;
+        if (pane === "parse") setParseDraft(saved);
+        else setCleanDraft(saved);
+        tellVector(row.message || "已保存修改。下一步会用这段字。", true);
+        onSaved(row);
+      })
+      .catch((err: Error) => onError(err.message))
+      .finally(() => setProcessing(false));
+  }
+
+  function saveChunkDraft(id: number, text: string) {
+    setProcessing(true);
+    saveKbChunk(id, text, false)
+      .then((row) => {
+        setChunkDrafts((list) => (list ? list.map((one) => (one.id === row.id ? row : one)) : list));
+        tellVector(row.vector_hint || "已保存这块。点「只处理向量」才算确认。", false);
+      })
+      .catch((err: Error) => onError(err.message))
+      .finally(() => setProcessing(false));
+  }
+
+  function runAll() {
+    const num = (raw: string, fallback: number) => {
+      const value = Number(raw);
+      return Number.isFinite(value) ? value : fallback;
+    };
+    setProcessing(true);
+    processKbDocument(item.id, "all", {
+      parse: flow.parse,
+      parseHint: flow.parse_hint,
+      parseScript: flow.parse_script,
+      cleans: flow.cleans,
+      rules: flow.rules,
+      script: flow.script,
+      chunk: flow.chunk,
+      vector: flow.vector,
+      chunkSize: num(chunkSize, 400),
+      chunkOverlap: num(chunkOverlap, 60),
+      maxChunks: num(maxChunks, 40),
+    })
+      .then((row) => {
+        if (row.quality) setQuality(row.quality);
+        if (row.result_text != null) setCleanDraft(row.result_text);
+        if (row.chunks) setChunkDrafts(row.chunks);
+        tellVector(row.message || row.vector_hint || "已按设置做完。", !!row.vector_ok || row.vector_state === "ready");
         onSaved(row);
       })
       .catch((err: Error) => onError(err.message))
@@ -2199,6 +2270,9 @@ function PreviewPane({
           {vectorBadge(item.vector_state)}
         </p>
         <div className="flex flex-wrap gap-2">
+          <button type="button" className={btnClass} disabled={reindexing || busy || processing} onClick={runAll}>
+            {processing ? "在处理…" : "按设置一次做完"}
+          </button>
           <button type="button" className={btnClass} disabled={reindexing || busy || processing} onClick={rebuildVector}>
             {reindexing ? "在算…" : "重算向量"}
           </button>
@@ -2248,6 +2322,14 @@ function PreviewPane({
           onRemoveRule={(index) => setFlow({ ...flow, rules: flow.rules.filter((_, item) => item !== index) })}
           onApply={applyFlow}
           quality={quality}
+          parseDraft={parseDraft}
+          cleanDraft={cleanDraft}
+          chunkDrafts={chunkDrafts}
+          onParseDraft={setParseDraft}
+          onCleanDraft={setCleanDraft}
+          onChunkDraft={(id, text) => setChunkDrafts((list) => (list ? list.map((one) => (one.id === id ? { ...one, text } : one)) : list))}
+          onSaveReview={saveReview}
+          onSaveChunk={saveChunkDraft}
         />
       ) : null}
       <div className={pane === "file" ? "" : "hidden"}>

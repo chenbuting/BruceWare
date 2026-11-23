@@ -1,6 +1,6 @@
 /** 资料预览里的小模块。点开哪一块只显示那一块，按钮也只做那一块。 */
 
-import type { KbCleanRule, KbDocFlow, KbQuality } from "@/api/types";
+import type { KbChunk, KbCleanRule, KbDocFlow, KbQuality } from "@/api/types";
 
 const inputClass = "border border-[var(--line)] bg-[var(--paper)] px-2 py-1.5 text-[13px]";
 const btnClass = "border border-[var(--line)] bg-[var(--paper)] px-2.5 py-1.5 text-[13px] disabled:opacity-50";
@@ -115,6 +115,14 @@ export function FlowModulePanel({
   onRemoveRule,
   onApply,
   quality,
+  parseDraft,
+  cleanDraft,
+  chunkDrafts,
+  onParseDraft,
+  onCleanDraft,
+  onChunkDraft,
+  onSaveReview,
+  onSaveChunk,
 }: {
   pane: FlowPane;
   fileName: string;
@@ -139,6 +147,14 @@ export function FlowModulePanel({
   onRemoveRule: (index: number) => void;
   onApply: () => void;
   quality: KbQuality[];
+  parseDraft: string | null;
+  cleanDraft: string | null;
+  chunkDrafts: KbChunk[] | null;
+  onParseDraft: (value: string) => void;
+  onCleanDraft: (value: string) => void;
+  onChunkDraft: (id: number, text: string) => void;
+  onSaveReview: () => void;
+  onSaveChunk: (id: number, text: string) => void;
 }) {
   return (
     <div className="text-[13px]">
@@ -147,6 +163,13 @@ export function FlowModulePanel({
           <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">只抽出正文。清洗、切片和向量不会跟着变。</p>
           <ParseFields fileName={fileName} flow={flow} onFlow={onFlow} />
           <StepButton busy={busy} label="只解析这一份" onApply={onApply} />
+          <TextReview
+            text={parseDraft}
+            busy={busy}
+            hint="可以改。点「保存修改」后，清洗会用这段字。没保存就点清洗，仍用刚抽出的结果。"
+            onChange={onParseDraft}
+            onSave={onSaveReview}
+          />
         </>
       ) : null}
       {pane === "clean" ? (
@@ -210,6 +233,13 @@ export function FlowModulePanel({
             onChange={(e) => onFlow({ ...flow, script: e.target.value })}
           />
           <StepButton busy={busy} label="只清洗这一份" onApply={onApply} />
+          <TextReview
+            text={cleanDraft}
+            busy={busy}
+            hint="可以改。点「保存修改」后，切片会用这段字。没保存就点切片，仍用刚清洗的结果。"
+            onChange={onCleanDraft}
+            onSave={onSaveReview}
+          />
           <QualityReport items={quality} />
         </>
       ) : null}
@@ -240,6 +270,7 @@ export function FlowModulePanel({
             ) : null}
           </div>
           <StepButton busy={busy} label="只切片这一份" onApply={onApply} />
+          <ChunkReview items={chunkDrafts} busy={busy} onChange={onChunkDraft} onSave={onSaveChunk} />
         </>
       ) : null}
       {pane === "vector" ? (
@@ -324,6 +355,62 @@ function ParseFields({ fileName, flow, onFlow }: { fileName: string; flow: KbDoc
         onChange={(e) => onFlow({ ...flow, parse_script: e.target.value })}
       />
     </>
+  );
+}
+
+function TextReview({
+  text,
+  busy,
+  hint,
+  onChange,
+  onSave,
+}: {
+  text: string | null;
+  busy: boolean;
+  hint: string;
+  onChange: (value: string) => void;
+  onSave: () => void;
+}) {
+  if (text == null) return null;
+  return (
+    <div className="mt-3 border border-[var(--line)] px-2 py-2">
+      <p className="mb-1">这次的结果</p>
+      <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">{hint}</p>
+      <textarea className={`${inputClass} min-h-[8rem] w-full`} value={text} onChange={(e) => onChange(e.target.value)} />
+      <button type="button" className={`${btnClass} mt-2`} disabled={busy || !text.trim()} onClick={onSave}>
+        {busy ? "在保存…" : "保存修改"}
+      </button>
+    </div>
+  );
+}
+
+function ChunkReview({
+  items,
+  busy,
+  onChange,
+  onSave,
+}: {
+  items: KbChunk[] | null;
+  busy: boolean;
+  onChange: (id: number, text: string) => void;
+  onSave: (id: number, text: string) => void;
+}) {
+  if (!items) return null;
+  if (!items.length) return <p className="mt-3 text-[12px] text-[var(--muted)]">这次没有切出切片。</p>;
+  return (
+    <div className="mt-3 border border-[var(--line)] px-2 py-2">
+      <p className="mb-1">这次的切片</p>
+      <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">可以改每一块。保存后，点「只处理向量」才算确认。</p>
+      {items.map((item, index) => (
+        <div key={item.id} className="mb-3">
+          <p className="mb-1 text-[12px] text-[var(--muted)]">第 {index + 1} 块</p>
+          <textarea className={`${inputClass} min-h-[5rem] w-full`} value={item.text} onChange={(e) => onChange(item.id, e.target.value)} />
+          <button type="button" className={`${btnClass} mt-1`} disabled={busy || !item.text.trim()} onClick={() => onSave(item.id, item.text)}>
+            {busy ? "在保存…" : "保存修改"}
+          </button>
+        </div>
+      ))}
+    </div>
   );
 }
 

@@ -20,6 +20,38 @@ _HEAD_ROWS = 80
 _STEPS = {"parse", "clean", "chunk", "vector"}
 
 
+def apply_document_all(db: Session, row: KbDocument, raw: dict) -> tuple[str, list[dict]]:
+    """按当前设置把解析、清洗、切片、向量一次做完。中途失败就停。"""
+
+    current = stored_flow(row) or normalize_flow(None)
+    chosen = normalize_flow({**current, **raw})
+    quality: list[dict] = []
+    status = "failed"
+    for step in ("parse", "clean", "chunk", "vector"):
+        status, step_quality = apply_document_step(db, row, {**chosen, "step": step})
+        if step_quality:
+            quality = step_quality
+        if _flow_stopped(status):
+            return status, quality
+    if status == "updated":
+        return "done", quality
+    if status == "skipped":
+        return "done_keywords", quality
+    return status, quality
+
+
+def _flow_stopped(status: str) -> bool:
+    if status in {"failed", "skipped_edited"}:
+        return True
+    return status.startswith("failed") or status.startswith("parse_failed") or status.startswith("clean_failed")
+
+
+def saved_parsed(row: KbDocument) -> str:
+    """上次解析留下的正文。"""
+
+    return _saved_parsed(row)
+
+
 def apply_document_step(db: Session, row: KbDocument, raw: dict) -> tuple[str, list[dict]]:
     """只做 raw 里的 step。清洗会带上每一类过了几条、挡了几条。"""
 

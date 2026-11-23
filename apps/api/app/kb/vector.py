@@ -188,13 +188,22 @@ def ensure_chunks(db: Session, row: KbDocument) -> list[KbChunk]:
     return list_chunks(db, row.id)
 
 
-def update_chunk_text(db: Session, row: KbChunk, text: str) -> tuple[KbChunk, str]:
-    """改一块的字，并尽量重算这一块的向量。返回这块和结果：updated / no_key / failed。"""
+def update_chunk_text(db: Session, row: KbChunk, text: str, embed: bool = True) -> tuple[KbChunk, str]:
+    """改一块的字。embed 为假时只存字，向量等以后再算。"""
 
     row.text = (text or "").strip()
     row.edited = 1
     if not row.text:
         return row, "failed"
+    if not embed:
+        row.embedding = ""
+        row.profile = ""
+        doc = db.get(KbDocument, row.document_id)
+        if doc is not None:
+            doc.embedding_profile = ""
+            doc.vector_stamp = ""
+            delete_document_vectors(doc.id)
+        return row, "saved"
     if not can_embed():
         return row, "no_key"
     try:

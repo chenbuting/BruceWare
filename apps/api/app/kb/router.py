@@ -16,7 +16,7 @@ from app.core.ai import chat_complete, chat_complete_stream, llm_public
 from app.core.response import fail, ok
 from app.db.session import get_db, new_session
 from app.kb.extract import extract_search_text, extract_sheet_grid, is_sheet_name, sheet_rows_for_ask
-from app.kb.flow import apply_document_step
+from app.kb.flow import apply_document_all, apply_document_step, saved_parsed
 from app.kb.pipeline import flow_view, remember_parsed, search_text_for_index
 from app.kb.assets import (
     OCR_SKIP,
@@ -53,6 +53,7 @@ from app.kb.milvus_store import delete_library_vectors, take_milvus_note
 from app.kb.vector import (
     chunk_dict,
     clear_chunks,
+    list_chunks,
     document_vector_state,
     ensure_chunks,
     hybrid_rank,
@@ -127,6 +128,14 @@ class AssetBatchIn(BaseModel):
 
 class ChunkPatch(BaseModel):
     text: str = Field(default="", max_length=8000)
+    embed: bool = True
+
+
+class StageIn(BaseModel):
+    """手改解析或清洗结果。只存字，不自动做下一步。"""
+
+    step: str = ""
+    text: str = Field(default="", max_length=40000)
 
 
 class FolderIn(BaseModel):
@@ -1209,7 +1218,11 @@ def update_document_chunk(chunk_id: int, body: ChunkPatch, db: Session = Depends
     text = body.text.strip()
     if not text:
         return fail("请先写下切片内容")
-    _, status = update_chunk_text(db, row, text)
+    _, status = update_chunk_text(db, row, text, body.embed)
+    if not body.embed:
+        db.commit()
+        db.refresh(row)
+        return ok({**chunk_dict(row), "vector_ok": False, "vector_hint": "已保存这块。点「只处理向量」才算确认。"})
     db.commit()
     db.refresh(row)
     return ok({**chunk_dict(row), **vector_payload(status, chunk=True)})
@@ -1348,6 +1361,8 @@ _FLOW_HINTS = {
     "no_key": "还没填 AI Key，向量没算。",
     "skipped_edited": "这份有手改过的切片，没有重切。",
     "failed": "这一步没做成。",
+    "done": "已按设置做完解析、清洗、切片和向量。",
+    "done_keywords": "已按设置做完。这一份只按关键词，没有算向量。",
 }
 
 
@@ -1358,20 +1373,59 @@ def process_document(doc_id: int, body: FlowIn, db: Session = Depends(get_db)):
     row = db.get(KbDocument, doc_id)
     if row is None:
         return fail("这份资料不存在", 404)
-    status, quality = apply_document_step(db, row, body.model_dump())
-    row.updated_at = datetime.utcnow()
-    db.commit()
+    runner = apply_document_all if body.step == "all" else apply_document_step
+    status, quality = runner(db, row, body.model_dump())
     detail = ""
     for prefix in ("clean_failed:", "parse_failed:"):
         if status.startswith(prefix):
             detail = status[len(prefix) :]
+    if body.step == "all" and (detail or status == "failed" or status.startswith("failed")):
+        db.rollback()
+        return fail(detail or _FLOW_HINTS.get(status) or "这一步没做成。")
+    row.updated_at = datetime.utcnow()
+    db.commit()
     extra = vector_payload("failed" if detail else status)
     if detail:
         extra["vector_hint"] = detail
     hint = _FLOW_HINTS.get(status)
     if hint:
         extra["vector_hint"] = hint
-    return ok({**_doc_dict(row, db), **extra, "message": extra["vector_hint"], "quality": quality})
+    return ok({**_doc_dict(row, db), **extra, **_flow_preview(row, db, status), "message": extra["vector_hint"], "quality": quality})
+
+
+def _flow_preview(row: KbDocument, db: Session, status: str) -> dict:
+    """把这一步做出来的字带回页面，方便看和改。"""
+
+    data: dict = {}
+    if status == "parsed":
+        data["result_text"] = saved_parsed(row)
+    elif status in {"cleaned", "done", "done_keywords"}:
+        data["result_text"] = row.search_text or ""
+    if status in {"chunked", "done", "done_keywords"}:
+        data["chunks"] = [chunk_dict(item) for item in list_chunks(db, row.id)]
+    return data
+
+
+@router.put("/kb/documents/{doc_id}/stage")
+def save_document_stage(doc_id: int, body: StageIn, db: Session = Depends(get_db)):
+    """保存手改过的解析或清洗结果。不自动做下一步。"""
+
+    row = db.get(KbDocument, doc_id)
+    if row is None:
+        return fail("这份资料不存在", 404)
+    text = body.text.strip()
+    if not text:
+        return fail("请先留下要保存的字")
+    if body.step == "parse":
+        remember_parsed(row, text)
+    elif body.step == "clean":
+        row.search_text = text
+    else:
+        return fail("这一步不能这样存")
+    row.updated_at = datetime.utcnow()
+    db.commit()
+    saved = saved_parsed(row) if body.step == "parse" else row.search_text or ""
+    return ok({**_doc_dict(row, db), "result_text": saved, "message": "已保存修改。下一步会用这段字。"})
 
 
 @router.post("/kb/documents/{doc_id}/vector")
