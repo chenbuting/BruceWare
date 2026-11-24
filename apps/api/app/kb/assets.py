@@ -138,26 +138,39 @@ def _from_pdf(data: bytes) -> list[tuple[int, bytes]]:
 
 
 def _from_docx(data: bytes) -> list[tuple[int, bytes]]:
+    """按正文里先出现的图来抽。正文没提到的图补在最后。"""
+
     try:
         from docx import Document
+        from docx.oxml.ns import qn
     except ImportError:
         return []
-    found: list[tuple[int, bytes]] = []
     try:
         doc = Document(io.BytesIO(data))
-        rels = doc.part.rels.values()
     except Exception:
         return []
-    for rel in rels:
+    found: list[tuple[int, bytes]] = []
+    seen: set[str] = set()
+
+    def take(rid: str | None) -> None:
+        if not rid or rid in seen:
+            return
+        seen.add(rid)
+        part = doc.part.related_parts.get(rid)
+        usable = _usable_image(getattr(part, "blob", b"") if part is not None else b"")
+        if usable:
+            found.append((0, usable))
+
+    for blip in doc.element.body.iter(qn("a:blip")):
+        take(blip.get(qn("r:embed")) or blip.get(qn("r:link")))
+    for rel in doc.part.rels.values():
         try:
             if "image" not in str(getattr(rel, "reltype", "")):
                 continue
-            raw = rel.target_part.blob
+            rid = getattr(rel, "rId", None)
         except Exception:
             continue
-        usable = _usable_image(raw)
-        if usable:
-            found.append((0, usable))
+        take(rid)
     return found
 
 
@@ -250,19 +263,26 @@ def append_asset_alts(row: KbDocument, alts: list[str]) -> None:
 
 
 def align_ready_figure_names(db: Session, row: KbDocument, data: bytes) -> None:
-    """整理稿的图1按正文里出现的顺序叫。对不上就保持抽出时的名字。"""
+    """整理稿的图号按正文出现顺序。对不上就保持抽出时的名字。"""
 
     if Path(row.file_name or "").suffix.lower() != ".docx":
         return
     assets = list_doc_assets(db, row.id)
-    rel_blobs, body_blobs = _docx_image_bytes(data)
-    if not assets or len(rel_blobs) != len(assets) or len(body_blobs) != len(assets):
+    _rel_blobs, body_blobs = _docx_image_bytes(data)
+    if not assets or len(body_blobs) != len(assets):
         return
-    order = _same_images(rel_blobs, body_blobs)
+    saved: list[bytes] = []
+    for item in assets:
+        try:
+            saved.append(abs_path(row.library_id, item.rel_path).read_bytes())
+        except (ValueError, OSError):
+            return
+    order = _same_images(saved, body_blobs)
     if order is None:
         return
-    for reading_index, rel_index in enumerate(order, start=1):
-        assets[rel_index].alt_text = f"图{reading_index}"
+    for reading_index, asset_index in enumerate(order, start=1):
+        assets[asset_index].alt_text = f"图{reading_index}"
+        assets[asset_index].sort_order = reading_index
 
 
 def attach_ready_figure_text(db: Session, row: KbDocument, text: str) -> None:
