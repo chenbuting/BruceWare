@@ -260,6 +260,8 @@ export type KbLibrary = {
   chunk_overlap: number;
   max_chunks: number;
   vector_enabled: boolean;
+  link_enabled: boolean;
+  link_hops: number;
   created_at: string;
 };
 

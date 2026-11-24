@@ -33,6 +33,8 @@ def parse_policy(row: KbLibrary) -> dict:
         "chunk_overlap": 60,
         "max_chunks": 40,
         "vector_enabled": True,
+        "link_enabled": False,
+        "link_hops": 3,
     }
     raw = (row.policy_json or "").strip()
     if not raw:
@@ -62,6 +64,8 @@ def parse_policy(row: KbLibrary) -> dict:
         "chunk_overlap": _chunk_overlap(data.get("chunk_overlap"), _chunk_size(data.get("chunk_size"))),
         "max_chunks": _bounded(data.get("max_chunks"), 40, 5, 200),
         "vector_enabled": _flag(data, "vector_enabled", True),
+        "link_enabled": _flag(data, "link_enabled", False),
+        "link_hops": _bounded(data.get("link_hops"), 3, 1, 8),
     }
 
 
@@ -128,8 +132,10 @@ def dump_policy(
     clean_collapse: bool = True,
     max_chunks: int = 40,
     vector_enabled: bool = True,
+    link_enabled: bool = False,
+    link_hops: int = 3,
 ) -> str:
-    """写成 policy_json。Wiki 关着时不跟着提问更新。识图默认关。"""
+    """写成 policy_json。Wiki 关着时不跟着提问更新。识图默认关。关联补查默认关。"""
 
     mode = evidence_mode if evidence_mode in MODES else "strict"
     enabled = bool(wiki_enabled)
@@ -150,6 +156,8 @@ def dump_policy(
             "chunk_overlap": _chunk_overlap(chunk_overlap, size),
             "max_chunks": _bounded(max_chunks, 40, 5, 200),
             "vector_enabled": bool(vector_enabled),
+            "link_enabled": bool(link_enabled),
+            "link_hops": _bounded(link_hops, 3, 1, 8),
         },
         ensure_ascii=False,
     )

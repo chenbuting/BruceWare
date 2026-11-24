@@ -555,6 +555,8 @@ export function updateKbLibraryPolicy(
     maxChunks?: number;
     vectorEnabled?: boolean;
   } = {},
+  linkEnabled = false,
+  linkHops = 3,
 ) {
   return request<KbLibrary>(`/api/v1/kb/libraries/${id}/policy`, {
     method: "PUT",
@@ -573,6 +575,8 @@ export function updateKbLibraryPolicy(
       chunk_overlap: flow.chunkOverlap ?? 60,
       max_chunks: flow.maxChunks ?? 40,
       vector_enabled: flow.vectorEnabled ?? true,
+      link_enabled: linkEnabled,
+      link_hops: linkHops,
     }),
   });
 }
@@ -776,12 +780,14 @@ function askKbBody(
   history: KbAskHistoryItem[],
   sessionId: number | null,
   askKind: "answer" | "checklist",
+  linkEnabled: "" | "on" | "off" = "",
 ) {
   return JSON.stringify({
     question,
     folder_id: onlyFolder ? folderId : null,
     only_folder: onlyFolder && folderId != null,
     evidence_mode: evidenceMode || null,
+    link_enabled: linkEnabled === "" ? null : linkEnabled === "on",
     ask_kind: askKind,
     history,
     session_id: sessionId,
@@ -798,11 +804,12 @@ export function askKbLibrary(
   sessionId: number | null = null,
   askKind: "answer" | "checklist" = "answer",
   signal?: AbortSignal,
+  linkEnabled: "" | "on" | "off" = "",
 ) {
   return request<KbAskResult>(`/api/v1/kb/libraries/${libraryId}/ask`, {
     method: "POST",
     signal,
-    body: askKbBody(question, folderId, onlyFolder, evidenceMode, history, sessionId, askKind),
+    body: askKbBody(question, folderId, onlyFolder, evidenceMode, history, sessionId, askKind, linkEnabled),
   });
 }
 
@@ -821,12 +828,13 @@ export async function askKbLibraryStream(
   askKind: KbAskKind = "answer",
   onEvent?: (event: KbAskStreamEvent) => void,
   signal?: AbortSignal,
+  linkEnabled: "" | "on" | "off" = "",
 ) {
   const res = await fetch(`/api/v1/kb/libraries/${libraryId}/ask?stream=1`, {
     method: "POST",
     signal,
     headers: { "Content-Type": "application/json" },
-    body: askKbBody(question, folderId, onlyFolder, evidenceMode, history, sessionId, askKind),
+    body: askKbBody(question, folderId, onlyFolder, evidenceMode, history, sessionId, askKind, linkEnabled),
   });
   if (!res.ok) {
     let message = "请求失败";

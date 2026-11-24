@@ -239,6 +239,12 @@ function askKindHint(kind: KbAskKind) {
   return "资料多、文件很长时 AI 看不全，所以只对证本轮抽到的。回答：问有没有、是多少、是什么，或让它说明整理；只根据本轮见到的说。";
 }
 
+function linkHint(choice: "" | "on" | "off", libraryOn: boolean, hops: number) {
+  const on = choice === "" ? libraryOn : choice === "on";
+  if (!on) return "这次不跨文件再查，只搜一轮。";
+  return `这次会按原文里的人名、编号再查，最多 ${hops} 跳，够了就停。`;
+}
+
 function evidenceHint(mode: "" | KbEvidenceMode, libraryMode: KbEvidenceMode = "strict") {
   if (!mode) {
     return `出处规则跟库走，当前是${evidenceLabel(libraryMode)}。`;
@@ -307,6 +313,7 @@ export function KbPage() {
   const [askDeleteSession, setAskDeleteSession] = useState<KbSession | null>(null);
   const [asking, setAsking] = useState(false);
   const [askMode, setAskMode] = useState<"" | KbEvidenceMode>("");
+  const [askLink, setAskLink] = useState<"" | "on" | "off">("");
   const [askKind, setAskKind] = useState<KbAskKind>("answer");
   const [wikiEnabled, setWikiEnabled] = useState(false);
   const [wikiLearn, setWikiLearn] = useState(false);
@@ -314,6 +321,8 @@ export function KbPage() {
   const [visionEngine, setVisionEngine] = useState<KbVisionEngine>("vision");
   const [libMode, setLibMode] = useState<KbEvidenceMode>("strict");
   const [libRule, setLibRule] = useState("");
+  const [linkEnabled, setLinkEnabled] = useState(false);
+  const [linkHops, setLinkHops] = useState("3");
   const [wikiList, setWikiList] = useState<KbWikiList | null>(null);
   const [wikiQ, setWikiQ] = useState("");
   const [wikiStale, setWikiStale] = useState("");
@@ -628,6 +637,7 @@ export function KbPage() {
         });
       },
       ctrl.signal,
+      askLink,
     )
       .then(async (data) => {
         if (ctrl.signal.aborted || !jobsRef.current.has(route.key)) return;
@@ -828,6 +838,8 @@ export function KbPage() {
       setVisionEngine(library.vision_engine === "ocr" ? "ocr" : "vision");
       setLibMode(library.evidence_mode || "strict");
       setLibRule(library.rule || "");
+      setLinkEnabled(!!library.link_enabled);
+      setLinkHops(String(library.link_hops || 3));
     }
     setWikiPage(1);
     if (libraryId != null) {
@@ -1128,6 +1140,13 @@ export function KbPage() {
                 <option value="loose">宽松概述</option>
               </select>
               )}
+              {askKind === "materials" ? null : (
+              <select className={inputClass} value={askLink} onChange={(e) => setAskLink(e.target.value as "" | "on" | "off")}>
+                <option value="">关联补查：按库规则（当前：{library.link_enabled ? "开" : "关"}）</option>
+                <option value="on">关联补查：这次开</option>
+                <option value="off">关联补查：这次关</option>
+              </select>
+              )}
               {asking ? (
                 <button type="button" className={btnClass} onClick={onStopAsk}>
                   终止
@@ -1144,6 +1163,9 @@ export function KbPage() {
             <p className="mt-1 text-[12px] leading-5 text-[var(--muted)]">{askKindHint(askKind)}</p>
             {askKind === "materials" ? null : (
               <p className="mt-0.5 text-[12px] leading-5 text-[var(--muted)]">{evidenceHint(askMode, library.evidence_mode || "strict")}</p>
+            )}
+            {askKind === "materials" ? null : (
+              <p className="mt-0.5 text-[12px] leading-5 text-[var(--muted)]">{linkHint(askLink, !!library.link_enabled, library.link_hops || 3)}</p>
             )}
           </div>
           </div>
@@ -1414,6 +1436,26 @@ export function KbPage() {
               <br />
               看图：用对话模型看图，能说出这是什么证件。OCR：本机抄字，更快，红章可能认不全。
             </p>
+            <label className="mb-2 flex items-center gap-2 text-[13px]">
+              <input type="checkbox" checked={linkEnabled} onChange={(e) => setLinkEnabled(e.target.checked)} />
+              开启关联补查
+            </label>
+            {linkEnabled ? (
+              <div className="mb-2 flex flex-wrap items-center gap-2 text-[13px]">
+                <span className="text-[var(--muted)]">最多跳数</span>
+                <input
+                  className={`${inputClass} w-16`}
+                  inputMode="numeric"
+                  value={linkHops}
+                  onChange={(e) => setLinkHops(e.target.value.replace(/[^\d]/g, "").slice(0, 1))}
+                />
+              </div>
+            ) : null}
+            <p className="mb-3 text-[12px] leading-5 text-[var(--muted)]">
+              默认关。开了以后，一次没搜全时，会用原文里新出现的人名、编号再查。够了就停。
+              <br />
+              最多跳数默认 3，可填 1 到 8。这是上限，不会每次都查满。提问框里可以临时改成开或关，不用每次来这里保存。
+            </p>
             <div className="mb-2 flex flex-wrap items-center gap-2 text-[13px]">
               <span className="text-[var(--muted)]">回答风格</span>
               <select className={inputClass} value={libMode} onChange={(e) => setLibMode(e.target.value as KbEvidenceMode)}>
@@ -1441,7 +1483,29 @@ export function KbPage() {
               onClick={() =>
                 run(async () => {
                   if (!library) return;
-                  const row = await updateKbLibraryPolicy(library.id, wikiEnabled, libMode, libRule, wikiLearn, visionEnabled, visionEngine);
+                  const hops = Math.min(8, Math.max(1, Number(linkHops) || 3));
+                  const row = await updateKbLibraryPolicy(
+                    library.id,
+                    wikiEnabled,
+                    libMode,
+                    libRule,
+                    wikiLearn,
+                    visionEnabled,
+                    visionEngine,
+                    {
+                      textLimit: library.text_limit,
+                      sheetLimit: library.sheet_limit,
+                      sheetRows: library.sheet_rows,
+                      cleanCollapse: library.clean_collapse,
+                      chunkSize: library.chunk_size,
+                      chunkOverlap: library.chunk_overlap,
+                      maxChunks: library.max_chunks,
+                      vectorEnabled: library.vector_enabled,
+                    },
+                    linkEnabled,
+                    hops,
+                  );
+                  setLinkHops(String(row.link_hops || hops));
                   setLibraries((items) => items.map((item) => (item.id === row.id ? row : item)));
                   setHint("已保存库规则");
                 })

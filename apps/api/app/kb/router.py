@@ -52,7 +52,7 @@ from app.kb.sessions import (
     session_dict,
 )
 from app.kb.policy import dump_policy, parse_policy, resolve_mode
-from app.kb.search import folder_scope, snippet_of
+from app.kb.search import folder_scope, search_terms, snippet_of
 from app.kb.milvus_store import delete_library_vectors, take_milvus_note
 from app.kb.vector import (
     chunk_dict,
@@ -103,6 +103,8 @@ class PolicyIn(BaseModel):
     chunk_overlap: int = 60
     max_chunks: int = 40
     vector_enabled: bool = True
+    link_enabled: bool = False
+    link_hops: int = 3
 
 
 class WikiIn(BaseModel):
@@ -172,6 +174,7 @@ class AskIn(BaseModel):
     folder_id: int | None = None
     only_folder: bool = False
     evidence_mode: str | None = None
+    link_enabled: bool | None = None
     ask_kind: str = Field(default="answer", max_length=20)
     history: list[AskTurnIn] = Field(default_factory=list)
     session_id: int | None = None
@@ -205,6 +208,8 @@ def _library_dict(row: KbLibrary) -> dict:
         "chunk_overlap": policy["chunk_overlap"],
         "max_chunks": policy["max_chunks"],
         "vector_enabled": policy["vector_enabled"],
+        "link_enabled": policy["link_enabled"],
+        "link_hops": policy["link_hops"],
         "created_at": _iso(row.created_at),
     }
 
@@ -341,6 +346,8 @@ def update_library_policy(library_id: int, body: PolicyIn, db: Session = Depends
         body.clean_collapse,
         body.max_chunks,
         body.vector_enabled,
+        body.link_enabled,
+        body.link_hops,
     )
     db.commit()
     db.refresh(row)
@@ -1166,6 +1173,126 @@ def _client_stopped(request: Request) -> bool:
         return False
 
 
+def _compact_query(text: str) -> str:
+    return " ".join((text or "").lower().split())
+
+
+def _link_evidence(ranked_full: list) -> str:
+    """把这一轮已经拿到的原文收成一段，给下一跳判断用。"""
+
+    parts = []
+    total = 0
+    for row, _score, snippet in ranked_full:
+        piece = f"{row.title or row.file_name}\n{(snippet or '')[:800]}"
+        if total + len(piece) > 5000:
+            break
+        parts.append(piece)
+        total += len(piece)
+    return "\n\n".join(parts)
+
+
+def _query_has_bridge(question: str, evidence: str, query: str) -> bool:
+    """下一跳必须带上原文里新出现的人名、编号或名称，不能只重复问句。"""
+
+    ev = evidence.lower()
+    asked = question.lower()
+    for term in search_terms(query):
+        if term in ev and term not in asked:
+            return True
+    return False
+
+
+def _link_next_query(question: str, evidence: str) -> str:
+    """看现有原文够不够。不够就返回下一跳检索词。失败或够了就返回空。"""
+
+    if not evidence.strip():
+        return ""
+    try:
+        text = chat_complete(
+            [
+                {"role": "system", "content": "你只判断资料够不够回答，不回答问题，不编造事实。"},
+                {
+                    "role": "user",
+                    "content": (
+                        "看下面的资料够不够回答问题。"
+                        "够了就只写：够了。"
+                        "不够，而且资料里出现了问题里没有的人名、编号、公司名或证件名，才可以再查。"
+                        "只写一行：再查：检索词。"
+                        "检索词必须带上资料里的那个原词，可以加上问题要查的事项。不要编造号码和日期。不超过30字。\n\n"
+                        f"问题：{question}\n\n资料：\n{evidence}"
+                    ),
+                },
+            ],
+            timeout=18,
+        )
+    except Exception:
+        return ""
+    match = re.search(r"再查[：:]\s*(\S.*)", text or "")
+    if not match:
+        return ""
+    query = " ".join(match.group(1).split())[:40]
+    if not _query_has_bridge(question, evidence, query):
+        return ""
+    return query
+
+
+def _merge_ranked(base: list, extra: list) -> list | None:
+    """补查结果并进已有资料。新文件附在后面，同一份有新段落就接上。没有新字就返回空。"""
+
+    order = [row.id for row, _score, _snippet in base]
+    by_id = {row.id: (row, score, snippet) for row, score, snippet in base}
+    changed = False
+    for row, score, snippet in extra:
+        text = (snippet or "").strip()
+        if not text:
+            continue
+        old = by_id.get(row.id)
+        if old is None:
+            if len(order) >= 12:
+                continue
+            by_id[row.id] = (row, score, text)
+            order.append(row.id)
+            changed = True
+            continue
+        if text in (old[2] or ""):
+            continue
+        by_id[row.id] = (old[0], max(old[1], score), f"{old[2]}\n{text}")
+        changed = True
+    if not changed:
+        return None
+    return [by_id[item_id] for item_id in order]
+
+
+def _link_follow(question: str, search_q: str, rows: list, ranked_full: list, library_id: int, db, hops: int):
+    """开了关联补查才走。够回答、没有新原词、或结果没变就停。跳数只是上限。"""
+
+    merged = list(ranked_full)
+    linked: set[int] = set()
+    used_vector = False
+    seen = {_compact_query(search_q), _compact_query(question)}
+    for _step in range(max(0, hops)):
+        query = _link_next_query(question, _link_evidence(merged))
+        key = _compact_query(query)
+        if not key or key in seen:
+            break
+        seen.add(key)
+        doc_ids = {row.id for row in rows}
+        chunk_best = score_chunks(db, library_id, query, doc_ids)
+        used_vector = used_vector or bool(chunk_best)
+        found = pack_ask_snippets(
+            query, supplement_hits(query, rows, hybrid_rank(query, rows, chunk_best), chunk_best)
+        )
+        nxt = _merge_ranked(merged, found)
+        if nxt is None:
+            break
+        before = {row.id: snippet for row, _score, snippet in merged}
+        merged = nxt
+        for row, _score, snippet in merged:
+            if before.get(row.id) != snippet:
+                linked.add(row.id)
+    return merged, used_vector, linked
+
+
 def _prepare_ask(library_id: int, body: AskIn, db):
     """先检索、拼提示。early 有值就不用喊模型。"""
 
@@ -1200,8 +1327,15 @@ def _prepare_ask(library_id: int, body: AskIn, db):
     ranked_full = pack_ask_snippets(
         search_q, supplement_hits(search_q, rows, hybrid_rank(search_q, rows, chunk_best), chunk_best)
     )
-    ranked = [(row, score) for row, score, _snippet in ranked_full]
     used_vector = bool(chunk_best)
+    linked: set[int] = set()
+    link_on = policy["link_enabled"] if body.link_enabled is None else bool(body.link_enabled)
+    if link_on and ranked_full and llm_public().get("has_key"):
+        ranked_full, more_vector, linked = _link_follow(
+            question, search_q, rows, ranked_full, library_id, db, int(policy["link_hops"])
+        )
+        used_vector = used_vector or more_vector
+    ranked = [(row, score) for row, score, _snippet in ranked_full]
     citations = []
     blocks = []
     use_notes = policy["wiki_enabled"] and mode == "loose"
@@ -1216,7 +1350,9 @@ def _prepare_ask(library_id: int, body: AskIn, db):
                 "images": [],
             }
         )
-        block = f"【资料{index}】{row.title or row.file_name}\n{snippet or snippet_of(search_q, row)}"
+        title = row.title or row.file_name
+        hopped = "\n（这一段是按前面资料里出现的名称再查到的）" if row.id in linked else ""
+        block = f"【资料{index}】{title}{hopped}\n{snippet or snippet_of(search_q, row)}"
         grid = sheet_rows_for_ask(row.sheet_json or "", search_q)
         if grid:
             block += "\n" + grid
