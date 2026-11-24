@@ -7,7 +7,7 @@ from threading import Thread
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -27,6 +27,7 @@ from app.kb.assets import (
     attach_ready_figure_text,
     asset_dict,
     asset_edit_dict,
+    document_images_pdf,
     asset_notes_for_ask,
     assets_for_ask,
     pick_assets_cited_in_answer,
@@ -718,10 +719,192 @@ def _learn_wikis_job(question: str, doc_ids: list[int]) -> None:
 
 
 def _ask_kind(raw: str | None) -> str:
-    """提问方式：回答或核对清单。其它值当回答。"""
+    """提问方式：回答、核对清单、拿资料。其它值当回答。"""
 
-    return "checklist" if (raw or "").strip() == "checklist" else "answer"
+    value = (raw or "").strip()
+    if value in {"checklist", "materials"}:
+        return value
+    return "answer"
 
+
+_MATERIAL_SKIP = {
+    "给我",
+    "一下",
+    "帮我",
+    "请把",
+    "原件",
+    "资料",
+    "文件",
+    "这个",
+    "那个",
+    "相关",
+    "所有",
+    "全部",
+    "看看",
+    "出来",
+    "有没有",
+    "没有",
+    "有吗",
+    "是不是",
+}
+
+
+def _doc_name(row) -> str:
+    return f"{row.title or ''} {row.file_name or ''} {row.tags or ''}".lower()
+
+
+def _material_terms(question: str) -> tuple[list[str], list[str]]:
+    """只从这一句拿年份和词。25年按 2025 年理解。"""
+
+    text = question or ""
+    years = re.findall(r"(?:19|20)\d{2}", text)
+    for short in re.findall(r"(?<!\d)(\d{2})年", text):
+        number = int(short)
+        full = str(2000 + number) if number <= 39 else str(1900 + number)
+        if full not in years:
+            years.append(full)
+    terms: list[str] = []
+    for part in re.findall(r"[\u4e00-\u9fff]{2,}", text):
+        for piece in re.split(r"[的了把将要和与及]", part):
+            word = piece.strip()
+            changed = True
+            while changed and word:
+                changed = False
+                for stop in _MATERIAL_SKIP:
+                    if word.startswith(stop):
+                        word = word[len(stop) :]
+                        changed = True
+                    if word.endswith(stop):
+                        word = word[: -len(stop)]
+                        changed = True
+            if len(word) >= 2 and word not in _MATERIAL_SKIP and word not in terms:
+                terms.append(word)
+    terms.sort(key=len, reverse=True)
+    return years, terms[:8]
+
+
+def _followup_years(question: str, prev: str) -> list[str]:
+    """上一句在谈某一年时，这一句里的 25 按 2025 年理解。"""
+
+    if not prev or not _material_terms(prev)[0]:
+        return []
+    years: list[str] = []
+    for short in re.findall(r"(?<!\d)(\d{2})(?!\d)", question or ""):
+        number = int(short)
+        if number > 39:
+            continue
+        full = str(2000 + number)
+        if full not in years:
+            years.append(full)
+    return years
+
+
+def _focus_material(question: str, search_q: str) -> tuple[str, list[str]]:
+    """听懂这一句要的那一份。换了年份就不要再带上一句的年份。"""
+
+    prev = ""
+    if "\n" in (search_q or ""):
+        head = search_q.split("\n", 1)[0].strip()
+        if head and head != (question or "").strip():
+            prev = head
+    years, _terms = _material_terms(question)
+    if not years:
+        years = _followup_years(question, prev)
+    focused = ""
+    if llm_public().get("has_key"):
+        try:
+            text = chat_complete(
+                [
+                    {"role": "system", "content": "你只把这一句要的资料说清楚，不回答问题。"},
+                    {
+                        "role": "user",
+                        "content": (
+                            "上一句只用来听懂「还有、那个、也要」指哪一类资料。"
+                            "只写这一句要的那一份：年份写成四位数，资料用文件名里可能出现的叫法。"
+                            "这一句换了年份，就不要写上一句的年份。"
+                            "不要解释。不超过40字。\n\n"
+                            f"上一句：{prev or '无'}\n这一句：{question}"
+                        ),
+                    },
+                ],
+                timeout=18,
+            )
+            focused = " ".join((text or "").split())[:80]
+        except Exception:
+            focused = ""
+    heard, _heard_terms = _material_terms(focused)
+    if not years:
+        years = heard
+    query = focused or question
+    for year in years:
+        if year not in query:
+            query = f"{query}\n{year}"
+    return query, years
+
+
+def _materials_choose(question: str, search_q: str, rows: list, chunk_best: dict) -> tuple[list, bool, list[str]]:
+    """按语义和向量挑。这一句要了哪一年，就去掉另一年。"""
+
+    query, years = _focus_material(question, search_q)
+    ranked = hybrid_rank(query, rows, chunk_best, top_k=8)
+    used_vector = bool(chunk_best)
+    picked: list[tuple[object, float]] = []
+    for row, score, _pieces in ranked:
+        found = re.findall(r"(?:19|20)\d{2}", _doc_name(row))
+        if years and found and not any(year in found for year in years):
+            continue
+        picked.append((row, score))
+    if years:
+        exact = [(row, score) for row, score in picked if any(year in _doc_name(row) for year in years)]
+        if exact:
+            picked = exact
+    if not picked:
+        return [], used_vector, years
+    best = picked[0][1]
+    floor = max(0.28, best * 0.72)
+    kept = [row for row, score in picked if score >= floor]
+    return kept[:3], used_vector, years
+
+
+def _materials_early(db: Session, question: str, search_q: str, rows: list, chunk_best: dict) -> dict:
+    """拿资料：用语义和向量找文件，不看严格或宽松，也不写成回答。"""
+
+    picked, used_vector, years = _materials_choose(question, search_q, rows, chunk_best)
+    for row in picked:
+        _fill_assets(row, db)
+    if db.dirty:
+        db.commit()
+    how = "按语义和向量找的" if used_vector else "按关键词找的，向量没参与"
+    asked = f"只要 {'、'.join(years)} 年的。" if years else ""
+    if not picked:
+        return {
+            "answer": f"没有对上的资料。{asked}{how}。",
+            "citations": [],
+            "used_llm": False,
+            "evidence_mode": "",
+            "wiki_update_hint": "",
+            "used_vector": used_vector,
+            "ask_kind": "materials",
+        }
+    citations = []
+    lines = [f"找到 {len(picked)} 份。{asked}{how}，按文件分开交给你。"]
+    for index, row in enumerate(picked, start=1):
+        pictures = [asset_dict(item) for item in list_doc_assets(db, row.id)]
+        title = row.title or row.file_name
+        citations.append({"id": row.id, "title": title, "score": 1, "images": pictures})
+        if pictures:
+            lines.append(f"{index}. {title}：图 {len(pictures)} 张。")
+        else:
+            lines.append(f"{index}. {title}：没有抽出图，可以打开原件。")
+    return {
+        "answer": "\n".join(lines),
+        "citations": citations,
+        "used_llm": False,
+        "evidence_mode": "",
+        "wiki_update_hint": "",
+        "used_vector": used_vector,
+        "ask_kind": "materials",
+    }
 
 def _meaning_rule() -> str:
     """按事情类别判断，不靠问句和原文几个字是否相同。"""
@@ -994,10 +1177,6 @@ def _prepare_ask(library_id: int, body: AskIn, db):
     question = body.question.strip()
     if not question:
         return None, fail("请先写问题")
-    history = _ask_history(body.history)
-    search_q = _rewrite_search(_search_question(question, history))
-    policy = parse_policy(lib)
-    mode = resolve_mode(policy["evidence_mode"], body.evidence_mode)
     ask_kind = _ask_kind(body.ask_kind)
     folders = db.scalars(select(KbFolder).where(KbFolder.library_id == library_id)).all()
     scope = folder_scope(list(folders), body.folder_id) if body.only_folder else None
@@ -1006,12 +1185,18 @@ def _prepare_ask(library_id: int, body: AskIn, db):
     if scope is not None:
         rows = [row for row in rows if row.folder_id in scope]
     rows = [row for row in rows if not row.disabled]
+    history = _ask_history(body.history)
+    search_q = _rewrite_search(_search_question(question, history))
     for row in rows:
         _fill_search_text(row, db)
         _fill_assets(row, db)
         index_document(db, row)
     db.commit()
     chunk_best = score_chunks(db, library_id, search_q, {row.id for row in rows})
+    if ask_kind == "materials":
+        return {"early": _materials_early(db, question, search_q, rows, chunk_best), "question": question}, None
+    policy = parse_policy(lib)
+    mode = resolve_mode(policy["evidence_mode"], body.evidence_mode)
     ranked_full = pack_ask_snippets(
         search_q, supplement_hits(search_q, rows, hybrid_rank(search_q, rows, chunk_best), chunk_best)
     )
@@ -1398,6 +1583,11 @@ class FlowIn(BaseModel):
     chunk_overlap: int = 60
     max_chunks: int = 40
 
+
+@router.post("/kb/documents/{doc_id}/process")
+def process_document(doc_id: int, body: FlowIn, db: Session = Depends(get_db)):
+    """按预览里选的方式，只处理这一份资料。"""
+
     row = db.get(KbDocument, doc_id)
     if row is None:
         return fail("这份资料不存在", 404)
@@ -1626,6 +1816,25 @@ def download_document(doc_id: int, db: Session = Depends(get_db)):
         media = "text/plain; charset=utf-8"
     filename = quote(row.file_name or path.name)
     return FileResponse(path, media_type=media, filename=row.file_name, headers={"Content-Disposition": f"inline; filename*=UTF-8''{filename}"})
+
+
+@router.get("/kb/documents/{doc_id}/images.pdf")
+def download_images_pdf(doc_id: int, db: Session = Depends(get_db)):
+    """把这份资料抽出的图按顺序合成一个 PDF。"""
+
+    row = db.get(KbDocument, doc_id)
+    if row is None:
+        return fail("这份资料不存在", 404)
+    blob = document_images_pdf(db, row)
+    if not blob:
+        return fail("这份没有可合并的图")
+    stem = (row.file_name or "图片").rsplit(".", 1)[0]
+    filename = quote(f"{stem}-图.pdf")
+    return Response(
+        content=blob,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"inline; filename*=UTF-8''{filename}"},
+    )
 
 
 @router.get("/kb/assets/{asset_id}/file")

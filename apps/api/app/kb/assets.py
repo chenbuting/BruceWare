@@ -599,6 +599,38 @@ def asset_dict(row: KbAsset) -> dict:
     }
 
 
+def document_images_pdf(db: Session, row: KbDocument) -> bytes | None:
+    """把这份资料抽出的图按顺序合成一个 PDF。没有能打开的图就返回空。"""
+
+    from PIL import Image
+
+    pages: list = []
+    try:
+        for item in list_doc_assets(db, row.id):
+            image = None
+            try:
+                image = Image.open(abs_path(row.library_id, item.rel_path))
+                image.thumbnail((1600, 2200))
+                if image.mode != "RGB":
+                    rgb = image.convert("RGB")
+                    image.close()
+                    image = rgb
+                pages.append(image)
+                image = None
+            except (ValueError, OSError, Exception):
+                if image is not None:
+                    image.close()
+                continue
+        if not pages:
+            return None
+        buf = io.BytesIO()
+        pages[0].save(buf, format="PDF", save_all=True, append_images=pages[1:])
+        return buf.getvalue()
+    finally:
+        for image in pages:
+            image.close()
+
+
 def parse_asset_note(text: str) -> dict[str, str]:
     """把存着的一段拆成图意、关键词、图上的字。旧数据整段落到字。"""
 

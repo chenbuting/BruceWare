@@ -7,6 +7,7 @@ import type {
   FolderBrowse,
   InterviewSession,
   KbAskHistoryItem,
+  KbAskKind,
   KbAskResult,
   KbChunk,
   KbSession,
@@ -689,6 +690,10 @@ export function kbDocumentFileUrl(id: number) {
   return `/api/v1/kb/documents/${id}/file`;
 }
 
+export function kbDocumentImagesPdfUrl(id: number) {
+  return `/api/v1/kb/documents/${id}/images.pdf`;
+}
+
 export function kbAssetFileUrl(id: number) {
   return `/api/v1/kb/assets/${id}/file`;
 }
@@ -813,7 +818,7 @@ export async function askKbLibraryStream(
   evidenceMode: KbEvidenceMode | "",
   history: KbAskHistoryItem[] = [],
   sessionId: number | null = null,
-  askKind: "answer" | "checklist" = "answer",
+  askKind: KbAskKind = "answer",
   onEvent?: (event: KbAskStreamEvent) => void,
   signal?: AbortSignal,
 ) {

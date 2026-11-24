@@ -322,7 +322,7 @@ export type KbAskHit = {
   images?: KbAskImage[];
 };
 
-export type KbAskKind = "answer" | "checklist";
+export type KbAskKind = "answer" | "checklist" | "materials";
 
 export type KbAskResult = {
   answer: string;

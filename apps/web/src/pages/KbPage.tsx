@@ -25,6 +25,7 @@ import {
   generateKbWiki,
   kbAssetFileUrl,
   kbDocumentFileUrl,
+  kbDocumentImagesPdfUrl,
   recognizeKbAsset,
   renameKbFolder,
   renameKbSession,
@@ -107,6 +108,53 @@ function relatedAskImages(result: KbAskResult) {
 }
 
 /** 一问一答，聊天气泡：问题靠右，回答靠左。 */
+function MaterialFiles({
+  turn,
+  onOpenCitation,
+}: {
+  turn: AskTurn;
+  onOpenCitation: (id: number) => void;
+}) {
+  const [zoom, setZoom] = useState<{ items: { src: string; alt: string }[]; index: number } | null>(null);
+  return (
+    <div className="mt-3 space-y-4">
+      {turn.result.citations.map((hit) => {
+        const pictures = hit.images || [];
+        const items = pictures.map((img) => ({ src: img.url || kbAssetFileUrl(img.id), alt: img.alt || hit.title }));
+        return (
+          <div key={hit.id}>
+            <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px]">
+              <button type="button" className="underline" onClick={() => onOpenCitation(hit.id)}>
+                {hit.title}
+              </button>
+              <a className="text-[var(--muted)] underline" href={kbDocumentFileUrl(hit.id)} target="_blank" rel="noreferrer">
+                打开原件
+              </a>
+              {pictures.length ? (
+                <a className="text-[var(--muted)] underline" href={kbDocumentImagesPdfUrl(hit.id)} target="_blank" rel="noreferrer">
+                  合成 PDF
+                </a>
+              ) : null}
+            </div>
+            {pictures.length ? (
+              <div className="flex flex-wrap gap-2">
+                {pictures.map((img, index) => (
+                  <button key={img.id} type="button" title={`${img.alt || "图"}，点图放大`} onClick={() => setZoom({ items, index })}>
+                    <img src={img.url || kbAssetFileUrl(img.id)} alt={img.alt} className="max-h-28 w-auto cursor-zoom-in rounded border border-[var(--line)] object-contain" />
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="text-[12px] text-[var(--muted)]">这份没有抽出图。</p>
+            )}
+          </div>
+        );
+      })}
+      {zoom ? <ImageLightbox items={zoom.items} index={zoom.index} onClose={() => setZoom(null)} onIndex={(index) => setZoom({ ...zoom, index })} /> : null}
+    </div>
+  );
+}
+
 function AskTurnView({
   turn,
   onOpenCitation,
@@ -130,6 +178,9 @@ function AskTurnView({
           {turn.result.ask_kind === "checklist" ? (
             <p className="mb-1 text-[12px] text-[var(--muted)]">核对清单</p>
           ) : null}
+          {turn.result.ask_kind === "materials" ? (
+            <p className="mb-1 text-[12px] text-[var(--muted)]">拿资料</p>
+          ) : null}
           <KbAnswerContent
             text={turn.result.answer || (turn.streaming ? "在找资料…" : "")}
             onOpenAsset={(assetId) => {
@@ -138,7 +189,11 @@ function AskTurnView({
             }}
           />
           {turn.streaming ? <span className="mt-1 inline-block animate-pulse text-[var(--muted)]">▍</span> : null}
-          {!turn.streaming && images.length ? (
+          {!turn.streaming && turn.result.ask_kind === "materials" ? <MaterialFiles turn={turn} onOpenCitation={onOpenCitation} /> : null}
+          {!turn.streaming && turn.result.ask_kind === "materials" && searchLabel ? (
+            <p className="mt-2 text-[12px] text-[var(--muted)]">{searchLabel}</p>
+          ) : null}
+          {!turn.streaming && turn.result.ask_kind !== "materials" && images.length ? (
             <div className="mt-3 flex flex-wrap gap-2">
               {images.map((img, index) => (
                 <button key={img.id} type="button" className="block text-left" title="点图放大" onClick={() => setZoom(index)}>
@@ -152,7 +207,7 @@ function AskTurnView({
               {zoom != null ? <ImageLightbox items={zoomItems} index={zoom} onClose={() => setZoom(null)} onIndex={setZoom} /> : null}
             </div>
           ) : null}
-          {!turn.streaming && (turn.result.citations.length || searchLabel || turn.result.wiki_update_hint) ? (
+          {!turn.streaming && turn.result.ask_kind !== "materials" && (turn.result.citations.length || searchLabel || turn.result.wiki_update_hint) ? (
             <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-[var(--line)] pt-2 text-[12px] text-[var(--muted)]">
               {turn.result.citations.length ? (
                 <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -177,6 +232,9 @@ function AskTurnView({
 function askKindHint(kind: KbAskKind) {
   if (kind === "checklist") {
     return "资料多、文件很长时 AI 看不全，所以只对证本轮抽到的。核对清单：好几项一条条对照时用，只标本轮命中/未命中，不替你下合不合格的结论。";
+  }
+  if (kind === "materials") {
+    return "拿资料：按语义和向量找。财报这种别的叫法也能对上。问了年份就只给这一年。不看严格或宽松，也不写成回答。";
   }
   return "资料多、文件很长时 AI 看不全，所以只对证本轮抽到的。回答：问有没有、是多少、是什么，或让它说明整理；只根据本轮见到的说。";
 }
@@ -989,7 +1047,7 @@ export function KbPage() {
                   <p className="text-center">在找…</p>
                 ) : (
                   <>
-                    <p className="text-center">资料多、文件很长时，AI 做不到一次看完。这两种问法是帮你对证本轮抽到的资料，不当成已经读完全库。点出处回到预览。</p>
+                    <p className="text-center">资料多、文件很长时，AI 做不到一次看完。这三种问法是帮你对证本轮抽到的资料，不当成已经读完全库。点出处回到预览。</p>
                     <p className="mt-3">
                       <span className="text-[var(--text)]">什么时候用「回答」</span>
                       ：问有没有、是多少、是什么，或让它说明、整理。只根据本轮见到的说，没见到就承认本轮没见到。
@@ -997,6 +1055,10 @@ export function KbPage() {
                     <p className="mt-2">
                       <span className="text-[var(--text)]">什么时候用「核对清单」</span>
                       ：好几项一条条对照（有没有漏、逐条比）。只标本轮命中/未命中，不替你下合不合格的结论。
+                    </p>
+                    <p className="mt-2">
+                      <span className="text-[var(--text)]">什么时候用「拿资料」</span>
+                      ：要原件和图。按语义和向量找，别的叫法也能对上。问了年份就只给这一年。
                     </p>
                   </>
                 )}
@@ -1011,7 +1073,9 @@ export function KbPage() {
                 placeholder={
                   askKind === "checklist"
                     ? "对照好几项，例如：把这份资料的名称、份数、编号分别标命中或未命中。回车换行，Ctrl+Enter 提问"
-                    : "问有没有、是多少，例如：这份资料有没有，一共多少份。回车换行，Ctrl+Enter 提问"
+                    : askKind === "materials"
+                      ? "要原件或图，例如：把2024年的财务报告给我。回车换行，Ctrl+Enter 提问"
+                      : "问有没有、是多少，例如：这份资料有没有，一共多少份。回车换行，Ctrl+Enter 提问"
                 }
                 value={question}
                 onChange={(e) => setQuestion(e.target.value)}
@@ -1048,12 +1112,22 @@ export function KbPage() {
                 >
                   核对清单
                 </button>
+                <button
+                  type="button"
+                  title="用语义和向量找出文件，把这一份的图交出来"
+                  className={`border-l border-[var(--line)] px-2.5 py-1.5 text-[13px] ${askKind === "materials" ? "bg-[var(--bg)]" : "text-[var(--muted)]"}`}
+                  onClick={() => setAskKind("materials")}
+                >
+                  拿资料
+                </button>
               </div>
+              {askKind === "materials" ? null : (
               <select className={inputClass} value={askMode} onChange={(e) => setAskMode(e.target.value as "" | KbEvidenceMode)}>
                 <option value="">按库规则（当前：{evidenceLabel(library.evidence_mode || "strict")}）</option>
                 <option value="strict">严格出处</option>
                 <option value="loose">宽松概述</option>
               </select>
+              )}
               {asking ? (
                 <button type="button" className={btnClass} onClick={onStopAsk}>
                   终止
@@ -1068,7 +1142,9 @@ export function KbPage() {
               </button>
             </div>
             <p className="mt-1 text-[12px] leading-5 text-[var(--muted)]">{askKindHint(askKind)}</p>
-            <p className="mt-0.5 text-[12px] leading-5 text-[var(--muted)]">{evidenceHint(askMode, library.evidence_mode || "strict")}</p>
+            {askKind === "materials" ? null : (
+              <p className="mt-0.5 text-[12px] leading-5 text-[var(--muted)]">{evidenceHint(askMode, library.evidence_mode || "strict")}</p>
+            )}
           </div>
           </div>
         </div>
