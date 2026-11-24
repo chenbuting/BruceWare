@@ -158,12 +158,6 @@ export function FlowModulePanel({
 }) {
   return (
     <div className="text-[13px]">
-      <KindBar
-        fileName={fileName}
-        busy={busy}
-        onUseKind={() => applyKindPreset(fileName, flow, onFlow, onChunkSize, onChunkOverlap, onMaxChunks, false)}
-        onUsePlain={() => applyKindPreset(fileName, flow, onFlow, onChunkSize, onChunkOverlap, onMaxChunks, true)}
-      />
       {pane === "parse" ? (
         <>
           <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">只抽出正文。清洗、切片和向量不会跟着变。</p>
@@ -289,68 +283,6 @@ export function FlowModulePanel({
           <StepButton busy={busy} label="只处理向量" onApply={onApply} />
         </>
       ) : null}
-    </div>
-  );
-}
-
-/** 这一类文件的常用抽法和切法。通用则不按类型分，仍是标准抽出、按字数切。 */
-function fileKind(fileName: string) {
-  const suffix = fileName.split(".").pop()?.toLowerCase() || "";
-  if (suffix === "docx") return { title: "Word", tip: "常用：段落加表格，按段落切。", parse: "word_both", chunk: "paragraph" as const };
-  if (suffix === "pdf") return { title: "PDF", tip: "常用：全部文字，按字数切。", parse: "standard", chunk: "chars" as const };
-  if (suffix === "xlsx" || suffix === "xls") return { title: "Excel", tip: "常用：全部表，按段落切。", parse: "standard", chunk: "paragraph" as const };
-  if (suffix === "csv") return { title: "表格", tip: "常用：全部表，按段落切。", parse: "standard", chunk: "paragraph" as const };
-  if (["txt", "md", "log", "json", "yaml", "yml", "ini"].includes(suffix)) {
-    return { title: "文本", tip: "常用：自动识别编码，按段落切。", parse: "standard", chunk: "paragraph" as const };
-  }
-  return { title: "其他文件", tip: "常用：标准抽出，按字数切。", parse: "standard", chunk: "chars" as const };
-}
-
-function applyKindPreset(
-  fileName: string,
-  flow: KbDocFlow,
-  onFlow: (next: KbDocFlow) => void,
-  onChunkSize: (value: string) => void,
-  onChunkOverlap: (value: string) => void,
-  onMaxChunks: (value: string) => void,
-  plain: boolean,
-) {
-  const kind = fileKind(fileName);
-  onFlow({
-    ...flow,
-    parse: plain ? "standard" : kind.parse,
-    parse_hint: "",
-    chunk: plain ? "chars" : kind.chunk,
-  });
-  onChunkSize("400");
-  onChunkOverlap("60");
-  onMaxChunks("40");
-}
-
-function KindBar({
-  fileName,
-  busy,
-  onUseKind,
-  onUsePlain,
-}: {
-  fileName: string;
-  busy: boolean;
-  onUseKind: () => void;
-  onUsePlain: () => void;
-}) {
-  const kind = fileKind(fileName);
-  return (
-    <div className="mb-3 border border-[var(--line)] px-2 py-2">
-      <p className="mb-1">这是 {kind.title}</p>
-      <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">{kind.tip} 通用：不按类型分，标准抽出，按字数切。点了只改选项，不会马上处理文件。</p>
-      <div className="flex flex-wrap gap-2">
-        <button type="button" className={btnClass} disabled={busy} onClick={onUseKind}>
-          用这类常用做法
-        </button>
-        <button type="button" className={btnClass} disabled={busy} onClick={onUsePlain}>
-          用通用做法
-        </button>
-      </div>
     </div>
   );
 }
