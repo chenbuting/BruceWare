@@ -315,6 +315,7 @@ export function KbPage() {
   const [askMode, setAskMode] = useState<"" | KbEvidenceMode>("");
   const [askLink, setAskLink] = useState<"" | "on" | "off">("");
   const [askKind, setAskKind] = useState<KbAskKind>("answer");
+  const [askChatsOpen, setAskChatsOpen] = useState(true);
   const [wikiEnabled, setWikiEnabled] = useState(false);
   const [wikiLearn, setWikiLearn] = useState(false);
   const [visionEnabled, setVisionEnabled] = useState(false);
@@ -983,13 +984,19 @@ export function KbPage() {
       {hint ? <p className="text-[13px] text-[var(--ok)]">{hint}</p> : null}
 
       {pageTab === "ask" && library ? (
-        <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden rounded-lg border border-[var(--line)] bg-[var(--paper)] md:grid-cols-[200px_minmax(0,1fr)]">
+        <div className={`grid min-h-0 flex-1 grid-cols-1 overflow-hidden rounded-lg border border-[var(--line)] bg-[var(--paper)] ${askChatsOpen ? "md:grid-cols-[200px_minmax(0,1fr)]" : ""}`}>
+          {askChatsOpen ? (
           <aside className="flex min-h-0 flex-col border-b border-[var(--line)] md:border-b-0 md:border-r">
             <div className="flex items-center justify-between gap-2 border-b border-[var(--line)] px-3 py-2">
               <span className="text-[12px] text-[var(--muted)]">对话</span>
-              <button type="button" className={btnClass} onClick={onNewAsk}>
-                新对话
-              </button>
+              <span className="flex items-center gap-2">
+                <button type="button" className={btnClass} title="收起对话列表，回答区会更宽" onClick={() => setAskChatsOpen(false)}>
+                  收起
+                </button>
+                <button type="button" className={btnClass} onClick={onNewAsk}>
+                  新对话
+                </button>
+              </span>
             </div>
             <div className="min-h-0 flex-1 overflow-auto p-2">
               {Object.values(drafts)
@@ -1044,7 +1051,18 @@ export function KbPage() {
               )}
             </div>
           </aside>
+          ) : null}
           <div className="flex min-h-0 min-w-0 flex-col">
+          {askChatsOpen ? null : (
+            <div className="flex items-center gap-2 border-b border-[var(--line)] px-3 py-2">
+              <button type="button" className={btnClass} title="展开对话列表" onClick={() => setAskChatsOpen(true)}>
+                对话
+              </button>
+              <button type="button" className={btnClass} onClick={onNewAsk}>
+                新对话
+              </button>
+            </div>
+          )}
           <div className="min-h-0 flex-1 overflow-auto px-4 py-3 text-[13px] leading-6">
             {askTurns.length ? (
               <div className="space-y-5">
@@ -1078,9 +1096,9 @@ export function KbPage() {
             )}
           </div>
           <div className="shrink-0 border-t border-[var(--line)] px-3 py-2">
-            <div className="flex flex-wrap items-end gap-2">
+            <div className="flex items-end gap-2">
               <textarea
-                className={`${inputClass} min-h-[4.5rem] min-w-[12rem] flex-1 resize-y`}
+                className={`${inputClass} min-h-[4.5rem] min-w-0 flex-1 resize-y`}
                 rows={3}
                 placeholder={
                   askKind === "checklist"
@@ -1098,7 +1116,71 @@ export function KbPage() {
                   }
                 }}
               />
-              <label className="flex items-center gap-1 text-[13px] text-[var(--muted)]">
+              {asking ? (
+                <button type="button" className={`${btnClass} shrink-0`} onClick={onStopAsk}>
+                  终止
+                </button>
+              ) : (
+                <button type="button" className={`${btnClass} shrink-0`} disabled={!question.trim()} onClick={onAsk}>
+                  提问
+                </button>
+              )}
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <div className="flex border border-[var(--line)]">
+                <button
+                  type="button"
+                  title={askKindHint("answer")}
+                  className={`px-2.5 py-1.5 text-[13px] ${askKind === "answer" ? "bg-[var(--bg)]" : "text-[var(--muted)]"}`}
+                  onClick={() => setAskKind("answer")}
+                >
+                  回答
+                </button>
+                <button
+                  type="button"
+                  title={askKindHint("checklist")}
+                  className={`border-l border-[var(--line)] px-2.5 py-1.5 text-[13px] ${askKind === "checklist" ? "bg-[var(--bg)]" : "text-[var(--muted)]"}`}
+                  onClick={() => setAskKind("checklist")}
+                >
+                  核对清单
+                </button>
+                <button
+                  type="button"
+                  title={askKindHint("materials")}
+                  className={`border-l border-[var(--line)] px-2.5 py-1.5 text-[13px] ${askKind === "materials" ? "bg-[var(--bg)]" : "text-[var(--muted)]"}`}
+                  onClick={() => setAskKind("materials")}
+                >
+                  拿资料
+                </button>
+              </div>
+              {askKind === "materials" ? null : (
+              <select
+                className={inputClass}
+                title={evidenceHint(askMode, library.evidence_mode || "strict")}
+                value={askMode}
+                onChange={(e) => setAskMode(e.target.value as "" | KbEvidenceMode)}
+              >
+                <option value="">按库规则（当前：{evidenceLabel(library.evidence_mode || "strict")}）</option>
+                <option value="strict">严格出处</option>
+                <option value="loose">宽松概述</option>
+              </select>
+              )}
+              {askKind === "materials" ? null : (
+              <select
+                className={inputClass}
+                title={linkHint(askLink, !!library.link_enabled, library.link_hops || 3)}
+                value={askLink}
+                onChange={(e) => setAskLink(e.target.value as "" | "on" | "off")}
+              >
+                <option value="">关联补查：按库规则（当前：{library.link_enabled ? "开" : "关"}）</option>
+                <option value="on">关联补查：这次开</option>
+                <option value="off">关联补查：这次关</option>
+              </select>
+              )}
+              <label
+                className="flex items-center gap-1 text-[13px] text-[var(--muted)]"
+                title={folderId == null ? "先在资料页点进一个文件夹，才能只搜这一处。" : "只搜当前文件夹和它里面的资料。"}
+              >
                 <input
                   type="checkbox"
                   checked={onlyFolder && folderId != null}
@@ -1107,66 +1189,7 @@ export function KbPage() {
                 />
                 只搜当前文件夹
               </label>
-              <div className="flex border border-[var(--line)]">
-                <button
-                  type="button"
-                  title="问有没有、是多少、是什么，或让它说明整理"
-                  className={`px-2.5 py-1.5 text-[13px] ${askKind === "answer" ? "bg-[var(--bg)]" : "text-[var(--muted)]"}`}
-                  onClick={() => setAskKind("answer")}
-                >
-                  回答
-                </button>
-                <button
-                  type="button"
-                  title="好几项一条条对照时用，只出命中表"
-                  className={`border-l border-[var(--line)] px-2.5 py-1.5 text-[13px] ${askKind === "checklist" ? "bg-[var(--bg)]" : "text-[var(--muted)]"}`}
-                  onClick={() => setAskKind("checklist")}
-                >
-                  核对清单
-                </button>
-                <button
-                  type="button"
-                  title="用语义和向量找出文件，把这一份的图交出来"
-                  className={`border-l border-[var(--line)] px-2.5 py-1.5 text-[13px] ${askKind === "materials" ? "bg-[var(--bg)]" : "text-[var(--muted)]"}`}
-                  onClick={() => setAskKind("materials")}
-                >
-                  拿资料
-                </button>
-              </div>
-              {askKind === "materials" ? null : (
-              <select className={inputClass} value={askMode} onChange={(e) => setAskMode(e.target.value as "" | KbEvidenceMode)}>
-                <option value="">按库规则（当前：{evidenceLabel(library.evidence_mode || "strict")}）</option>
-                <option value="strict">严格出处</option>
-                <option value="loose">宽松概述</option>
-              </select>
-              )}
-              {askKind === "materials" ? null : (
-              <select className={inputClass} value={askLink} onChange={(e) => setAskLink(e.target.value as "" | "on" | "off")}>
-                <option value="">关联补查：按库规则（当前：{library.link_enabled ? "开" : "关"}）</option>
-                <option value="on">关联补查：这次开</option>
-                <option value="off">关联补查：这次关</option>
-              </select>
-              )}
-              {asking ? (
-                <button type="button" className={btnClass} onClick={onStopAsk}>
-                  终止
-                </button>
-              ) : (
-                <button type="button" className={btnClass} disabled={!question.trim()} onClick={onAsk}>
-                  提问
-                </button>
-              )}
-              <button type="button" className={btnClass} onClick={onNewAsk}>
-                新对话
-              </button>
             </div>
-            <p className="mt-1 text-[12px] leading-5 text-[var(--muted)]">{askKindHint(askKind)}</p>
-            {askKind === "materials" ? null : (
-              <p className="mt-0.5 text-[12px] leading-5 text-[var(--muted)]">{evidenceHint(askMode, library.evidence_mode || "strict")}</p>
-            )}
-            {askKind === "materials" ? null : (
-              <p className="mt-0.5 text-[12px] leading-5 text-[var(--muted)]">{linkHint(askLink, !!library.link_enabled, library.link_hops || 3)}</p>
-            )}
           </div>
           </div>
         </div>
