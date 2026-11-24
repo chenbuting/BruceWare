@@ -657,12 +657,17 @@ export function fetchKbDocuments(libraryId: number, folderId: number | null, q =
   return request<{ items: KbDocument[] }>(`/api/v1/kb/libraries/${libraryId}/documents${query ? `?${query}` : ""}`);
 }
 
-export function uploadKbDocument(libraryId: number, file: File, folderId: number | null, tags = "", force = false) {
+export function fetchKbReadySkill() {
+  return request<{ name: string; text: string }>("/api/v1/kb/ready-skill");
+}
+
+export function uploadKbDocument(libraryId: number, file: File, folderId: number | null, tags = "", force = false, ready = false) {
   const body = new FormData();
   body.append("file", file);
   if (folderId != null) body.append("folder_id", String(folderId));
   if (tags) body.append("tags", tags);
   if (force) body.append("force", "true");
+  if (ready) body.append("ready", "true");
   return request<KbDocument>(`/api/v1/kb/libraries/${libraryId}/documents`, { method: "POST", body });
 }
 

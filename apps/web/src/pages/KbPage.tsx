@@ -18,6 +18,7 @@ import {
   fetchKbDocuments,
   fetchKbFolders,
   fetchKbLibraries,
+  fetchKbReadySkill,
   fetchKbSession,
   fetchKbSessions,
   fetchKbWikis,
@@ -232,6 +233,10 @@ export function KbPage() {
   const [askDeleteFolder, setAskDeleteFolder] = useState<KbFolder | null>(null);
   const [askDeleteDoc, setAskDeleteDoc] = useState<KbDocument | null>(null);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [pendingReady, setPendingReady] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [skillText, setSkillText] = useState("");
+  const uploadReady = useRef(false);
   const [uploadTags, setUploadTags] = useState("");
   const [manageLib, setManageLib] = useState(false);
   const [question, setQuestion] = useState("");
@@ -789,22 +794,53 @@ export function KbPage() {
     });
   }
 
-  async function doUpload(file: File, force: boolean) {
+  function openImport() {
+    setImportOpen(true);
+    if (skillText) return;
+    fetchKbReadySkill()
+      .then((data) => setSkillText(data.text || ""))
+      .catch((err: Error) => setError(err.message));
+  }
+
+  function copySkill() {
+    if (!skillText) return;
+    navigator.clipboard.writeText(skillText).then(() => setHint("规则已复制，可以贴给别的 AI。")).catch(() => setError("复制失败"));
+  }
+
+  function downloadSkill() {
+    if (!skillText) return;
+    const url = URL.createObjectURL(new Blob([skillText], { type: "text/markdown;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "知识库整理稿规则.md";
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function pickUpload(ready: boolean) {
+    uploadReady.current = ready;
+    setImportOpen(false);
+    uploadRef.current?.click();
+  }
+
+  async function doUpload(file: File, force: boolean, ready: boolean) {
     if (libraryId == null) return;
-    await uploadKbDocument(libraryId, file, folderId, uploadTags, force);
+    const row = await uploadKbDocument(libraryId, file, folderId, uploadTags, force, ready);
     setUploadTags("");
     await loadDocs(libraryId, folderId);
-    setHint("已上传");
+    setHint(row.vector_hint || (ready ? "已按整理稿导入。" : "已上传"));
   }
 
   function onUpload(file: File) {
+    const ready = uploadReady.current;
     run(async () => {
       try {
-        await doUpload(file, false);
+        await doUpload(file, false, ready);
       } catch (err) {
         const message = err instanceof Error ? err.message : "上传失败";
         if (message.includes("已有相同文件")) {
           setPendingFile(file);
+          setPendingReady(ready);
           setError(message);
           return;
         }
@@ -1079,8 +1115,8 @@ export function KbPage() {
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-[12px] text-[var(--muted)]">点资料名预览</span>
               <input className={`${inputClass} w-28`} placeholder="上传标签" value={uploadTags} onChange={(e) => setUploadTags(e.target.value)} />
-              <button type="button" className={btnClass} disabled={busy || !library} onClick={() => uploadRef.current?.click()}>
-                上传
+              <button type="button" className={btnClass} disabled={busy || !library} onClick={openImport}>
+                导入
               </button>
               <input
                 ref={uploadRef}
@@ -1173,11 +1209,11 @@ export function KbPage() {
             {!hereFolders.length && !docs.length ? (
               <div className="flex h-full min-h-[12rem] flex-col items-center justify-center gap-3 px-6 text-center">
                 <p className="text-[13px] leading-6 text-[var(--muted)]">
-                  {searching ? "没有符合的资料。" : "这里还是空的。左边可以建文件夹，右上角可以上传。"}
+                  {searching ? "没有符合的资料。" : "这里还是空的。左边可以建文件夹，右上角点导入。"}
                 </p>
                 {!searching ? (
-                  <button type="button" className={btnClass} disabled={busy || !library} onClick={() => uploadRef.current?.click()}>
-                    上传资料
+                  <button type="button" className={btnClass} disabled={busy || !library} onClick={openImport}>
+                    导入
                   </button>
                 ) : null}
               </div>
@@ -1594,18 +1630,52 @@ export function KbPage() {
         />
       ) : null}
 
+      {importOpen ? (
+        <Modal title="选择导入方式" wide onClose={() => setImportOpen(false)}>
+          <div className="grid gap-3 text-[13px] leading-6 md:grid-cols-2">
+            <div className="border border-[var(--line)] p-3">
+              <p className="mb-1 font-medium">普通导入</p>
+              <p className="mb-3 text-[var(--muted)]">文件原样放进来，按现在的默认抽法处理。适合本来就是清楚正文的 Word、PDF、表格和文本。图只记成图1、图2，图上的字不会自动认。</p>
+              <button type="button" className={btnClass} disabled={busy} onClick={() => pickUpload(false)}>
+                选原文件
+              </button>
+            </div>
+            <div className="border border-[var(--line)] p-3">
+              <p className="mb-1 font-medium">整理稿导入</p>
+              <p className="mb-3 text-[var(--muted)]">先按规则把各种文件收成普通段落的 Word。导入后直接做完解析、清洗、切片和向量，大约两万字都会切开。文中以「图N」开头的段落会直接挂到对应的图上，不用再识图。规则可以复制或下载，贴给 Cursor、GPT、DeepSeek 使用。</p>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" className={btnClass} disabled={busy || !skillText} onClick={copySkill}>
+                  复制规则
+                </button>
+                <button type="button" className={btnClass} disabled={busy || !skillText} onClick={downloadSkill}>
+                  下载规则
+                </button>
+                <button type="button" className={btnClass} disabled={busy} onClick={() => pickUpload(true)}>
+                  选整理稿
+                </button>
+              </div>
+            </div>
+          </div>
+        </Modal>
+      ) : null}
+
       {pendingFile ? (
         <ConfirmModal
           title="仍要另存一份？"
           message={error || "库里已有相同文件。"}
           confirmLabel="另存"
           busy={busy}
-          onClose={() => setPendingFile(null)}
+          onClose={() => {
+            setPendingFile(null);
+            setPendingReady(false);
+          }}
           onConfirm={() => {
             const file = pendingFile;
+            const ready = pendingReady;
             setPendingFile(null);
+            setPendingReady(false);
             run(async () => {
-              await doUpload(file, true);
+              await doUpload(file, true, ready);
             });
           }}
         />

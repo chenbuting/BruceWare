@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.ai import chat_complete, chat_complete_stream, llm_public
+from app.core.config import get_settings
 from app.core.response import fail, ok
 from app.db.session import get_db, new_session
 from app.kb.extract import extract_search_text, extract_sheet_grid, is_sheet_name, sheet_rows_for_ask
@@ -21,7 +22,9 @@ from app.kb.pipeline import flow_view, remember_parsed, search_text_for_index
 from app.kb.assets import (
     OCR_SKIP,
     already_extracted,
+    align_ready_figure_names,
     append_asset_alts,
+    attach_ready_figure_text,
     asset_dict,
     asset_edit_dict,
     asset_notes_for_ask,
@@ -520,6 +523,16 @@ def list_documents(
     return ok({"items": items})
 
 
+@router.get("/kb/ready-skill")
+def ready_skill():
+    """把整理稿规则原文交给页面，用来复制和下载。"""
+
+    path = get_settings().repo_root / ".cursor" / "skills" / "kb-ready-doc" / "SKILL.md"
+    if not path.is_file():
+        return fail("整理稿规则还没放好", 404)
+    return ok({"name": "知识库整理稿规则.md", "text": path.read_text(encoding="utf-8")})
+
+
 @router.post("/kb/libraries/{library_id}/documents")
 async def upload_document(
     library_id: int,
@@ -527,6 +540,7 @@ async def upload_document(
     folder_id: int | None = Form(default=None),
     tags: str = Form(default=""),
     force: bool = Form(default=False),
+    ready: bool = Form(default=False),
     db: Session = Depends(get_db),
 ):
     lib = _get_library(db, library_id)
@@ -570,14 +584,47 @@ async def upload_document(
     alts = save_extracted_images(db, row, data)
     remember_parsed(row, extract_search_text(file_name, data, collapse=False))
     append_asset_alts(row, alts)
-    index_document(db, row)
+    ready_status = ""
+    if ready:
+        align_ready_figure_names(db, row, data)
+        ready_status, _quality = apply_document_all(db, row, _READY_FLOW)
+        if ready_status == "failed" or ready_status.startswith(("failed", "parse_failed", "clean_failed")):
+            remove_file(library_id, rel_path)
+            db.rollback()
+            return fail("整理稿没导入成。请确认已经排成普通段落。")
+        attach_ready_figure_text(db, row, saved_parsed(row))
+    else:
+        index_document(db, row)
     db.commit()
     db.refresh(row)
     data = _doc_dict(row, db)
     note = take_milvus_note()
-    if note:
+    if ready_status:
+        data["vector_hint"] = _READY_HINTS.get(ready_status, "已按整理稿导入。")
+    elif note:
         data["vector_hint"] = note
     return ok(data)
+
+
+# 整理稿仍用现在的默认抽法。切片放到 64 段，两万字正文加上标题也能切完。
+_READY_FLOW = {
+    "parse": "standard",
+    "parse_hint": "",
+    "parse_script": "",
+    "cleans": ["collapse"],
+    "rules": [],
+    "script": "",
+    "chunk": "chars",
+    "vector": True,
+    "chunk_size": 400,
+    "chunk_overlap": 60,
+    "max_chunks": 64,
+}
+_READY_HINTS = {
+    "done": "已按整理稿导入，解析、清洗、切片和向量都做完了。",
+    "done_keywords": "已按整理稿导入。这一份只按关键词，没有算向量。",
+    "no_key": "已按整理稿导入。还没填 AI Key，向量没算。",
+}
 
 
 def _fill_search_text(row: KbDocument, db: Session, force: bool = False) -> None:
@@ -1350,25 +1397,6 @@ class FlowIn(BaseModel):
     chunk_size: int = 400
     chunk_overlap: int = 60
     max_chunks: int = 40
-
-
-_FLOW_HINTS = {
-    "parsed": "只抽出了正文。清洗、切片和向量没动。",
-    "cleaned": "只清洗了这一份。切片和向量没动。",
-    "chunked": "只重新切片了。向量没算。",
-    "updated": "只算了这一份的向量。",
-    "skipped": "这一份改为只按关键词，没有算向量。",
-    "no_key": "还没填 AI Key，向量没算。",
-    "skipped_edited": "这份有手改过的切片，没有重切。",
-    "failed": "这一步没做成。",
-    "done": "已按设置做完解析、清洗、切片和向量。",
-    "done_keywords": "已按设置做完。这一份只按关键词，没有算向量。",
-}
-
-
-@router.post("/kb/documents/{doc_id}/process")
-def process_document(doc_id: int, body: FlowIn, db: Session = Depends(get_db)):
-    """按预览里选的方式，只处理这一份资料。"""
 
     row = db.get(KbDocument, doc_id)
     if row is None:

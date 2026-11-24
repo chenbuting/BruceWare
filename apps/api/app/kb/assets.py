@@ -249,6 +249,111 @@ def append_asset_alts(row: KbDocument, alts: list[str]) -> None:
     row.search_text = ((row.search_text or "") + " " + extra).strip()[:20000]
 
 
+def align_ready_figure_names(db: Session, row: KbDocument, data: bytes) -> None:
+    """整理稿的图1按正文里出现的顺序叫。对不上就保持抽出时的名字。"""
+
+    if Path(row.file_name or "").suffix.lower() != ".docx":
+        return
+    assets = list_doc_assets(db, row.id)
+    rel_blobs, body_blobs = _docx_image_bytes(data)
+    if not assets or len(rel_blobs) != len(assets) or len(body_blobs) != len(assets):
+        return
+    order = _same_images(rel_blobs, body_blobs)
+    if order is None:
+        return
+    for reading_index, rel_index in enumerate(order, start=1):
+        assets[rel_index].alt_text = f"图{reading_index}"
+
+
+def attach_ready_figure_text(db: Session, row: KbDocument, text: str) -> None:
+    """把整理稿里以「图N」开头的段落抄到同号的图上。不识图。"""
+
+    grouped = _ready_figure_lines(text)
+    if not grouped:
+        return
+    for item in list_doc_assets(db, row.id):
+        if (item.ocr_text or "").strip():
+            continue
+        number = next((num for num in _figure_nos(item.alt_text or "") if num in grouped), "")
+        if not number:
+            continue
+        pieces = [piece for piece in grouped[number] if piece] or ["无单独文字"]
+        caption = pieces[0][:200]
+        words = "\n".join(pieces)[:1500]
+        item.ocr_text = pack_asset_note(caption, "", words)
+
+
+def _ready_figure_lines(text: str) -> dict[str, list[str]]:
+    """只认单独成段、开头是图号的句子。"""
+
+    grouped: dict[str, list[str]] = {}
+    for line in (text or "").splitlines():
+        match = re.match(r"^图\s*(\d+)\s*(.*)$", line.strip())
+        if not match:
+            continue
+        words = match.group(2).strip()
+        grouped.setdefault(match.group(1), []).append(words)
+    return grouped
+
+
+def _docx_image_bytes(data: bytes) -> tuple[list[bytes], list[bytes]]:
+    """同一份 Word 的两份图：抽出顺序，以及正文里出现的顺序。"""
+
+    try:
+        from docx import Document
+        from docx.oxml.ns import qn
+    except ImportError:
+        return [], []
+    try:
+        doc = Document(io.BytesIO(data))
+    except Exception:
+        return [], []
+    rel_blobs: list[bytes] = []
+    for rel in doc.part.rels.values():
+        try:
+            if "image" not in str(getattr(rel, "reltype", "")):
+                continue
+            usable = _usable_image(rel.target_part.blob)
+        except Exception:
+            continue
+        if usable:
+            rel_blobs.append(usable)
+    body_blobs: list[bytes] = []
+    seen: set[str] = set()
+    for blip in doc.element.body.iter(qn("a:blip")):
+        rid = blip.get(qn("r:embed")) or blip.get(qn("r:link"))
+        if not rid or rid in seen:
+            continue
+        seen.add(rid)
+        part = doc.part.related_parts.get(rid)
+        if part is None:
+            continue
+        usable = _usable_image(getattr(part, "blob", b""))
+        if usable:
+            body_blobs.append(usable)
+    return rel_blobs, body_blobs
+
+
+def _same_images(rel_blobs: list[bytes], body_blobs: list[bytes]) -> list[int] | None:
+    """正文顺序里的每一张，对应抽出列表的第几张。有对不上的就放弃。"""
+
+    import hashlib
+
+    rel_hash = [hashlib.sha256(blob).hexdigest() for blob in rel_blobs]
+    used: set[int] = set()
+    order: list[int] = []
+    for blob in body_blobs:
+        digest = hashlib.sha256(blob).hexdigest()
+        found = next((index for index, item in enumerate(rel_hash) if index not in used and item == digest), None)
+        if found is None:
+            return None
+        used.add(found)
+        order.append(found)
+    if len(order) != len(rel_blobs):
+        return None
+    return order
+
+
 def _asset_caption(item: KbAsset, limit: int = 240) -> str:
     """给选图模型看的一小段：图名 + 识图文字。"""
 
