@@ -11,6 +11,7 @@ from app.kb.extract import ParseChoiceError, extract_search_text, extract_sheet_
 from app.kb.models import KbDocument
 from app.kb.milvus_store import delete_document_vectors
 from app.kb.pipeline import normalize_flow, remember_flow, remember_parsed, stored_flow
+from app.kb.ready_fill import drop_draft_guide
 from app.kb.store import abs_path
 from app.kb.vector import embed_current_chunks, has_edited_chunks, list_chunks, replace_chunk_texts
 
@@ -20,7 +21,7 @@ _HEAD_ROWS = 80
 _STEPS = {"parse", "clean", "chunk", "vector"}
 
 
-def apply_document_all(db: Session, row: KbDocument, raw: dict) -> tuple[str, list[dict]]:
+def apply_document_all(db: Session, row: KbDocument, raw: dict, on_step=None) -> tuple[str, list[dict]]:
     """按当前设置把解析、清洗、切片、向量一次做完。中途失败就停。"""
 
     current = stored_flow(row) or normalize_flow(None)
@@ -28,6 +29,8 @@ def apply_document_all(db: Session, row: KbDocument, raw: dict) -> tuple[str, li
     quality: list[dict] = []
     status = "failed"
     for step in ("parse", "clean", "chunk", "vector"):
+        if on_step is not None:
+            on_step(step)
         status, step_quality = apply_document_step(db, row, {**chosen, "step": step})
         if step_quality:
             quality = step_quality
@@ -87,6 +90,7 @@ def _parse(db: Session, row: KbDocument, flow: dict) -> str:
             raw_text = _run_script(raw_text, source)
         except CleanScriptError as exc:
             return f"parse_failed:{exc}"
+    raw_text = drop_draft_guide(raw_text)
     if not raw_text.strip():
         return "failed"
     remember_parsed(row, raw_text)

@@ -1,5 +1,6 @@
 """知识库接口：多库、文件夹、上传、预览、提问。"""
 
+import asyncio
 import json
 import re
 from datetime import datetime
@@ -19,6 +20,7 @@ from app.db.session import get_db, new_session
 from app.kb.extract import extract_search_text, extract_sheet_grid, is_sheet_name, sheet_rows_for_ask
 from app.kb.flow import apply_document_all, apply_document_step, saved_parsed
 from app.kb.pipeline import flow_view, remember_parsed, search_text_for_index
+from app.kb.progress import mark_progress, read_progress
 from app.kb.assets import (
     OCR_SKIP,
     already_extracted,
@@ -531,8 +533,15 @@ def list_documents(
     return ok({"items": items})
 
 
+@router.get("/kb/progress/{job}")
+def job_progress(job: str):
+    """出稿或导入进行中，页面来问走到哪一步了。"""
+
+    return ok(read_progress(job))
+
+
 @router.post("/kb/ready-draft")
-async def ready_draft(file: UploadFile = File(...)):
+async def ready_draft(file: UploadFile = File(...), job: str = Form(default="")):
     """按这份文件出一份可检查的整理稿。不入库，不切片，不算向量。"""
 
     from app.kb.ready_fill import draft_bytes
@@ -541,12 +550,20 @@ async def ready_draft(file: UploadFile = File(...)):
     if not data:
         return fail("文件是空的")
     name = safe_filename(file.filename or "未命名")
+
+    def work():
+        def tell(text: str, current: int, total: int) -> None:
+            mark_progress(job, text, current, total)
+
+        return draft_bytes(name, data, tell)
+
     try:
-        blob, summary = draft_bytes(name, data)
+        blob, summary = await asyncio.to_thread(work)
     except ValueError as exc:
         return fail(str(exc))
     stem = Path(name).stem or "整理稿"
     filename = quote(f"{stem}-图字.docx")
+    mark_progress(job, "稿已写好", 1, 1)
     return Response(
         content=blob,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -566,23 +583,49 @@ async def upload_document(
     tags: str = Form(default=""),
     force: bool = Form(default=False),
     ready: bool = Form(default=False),
-    db: Session = Depends(get_db),
+    job: str = Form(default=""),
 ):
+    data = await file.read()
+    file_name = safe_filename(file.filename or "未命名")
+
+    def work():
+        db = new_session()
+        try:
+            return _store_uploaded_document(db, library_id, data, file_name, folder_id, tags, force, ready, job)
+        finally:
+            db.close()
+
+    return await asyncio.to_thread(work)
+
+
+def _store_uploaded_document(
+    db: Session,
+    library_id: int,
+    data: bytes,
+    file_name: str,
+    folder_id: int | None,
+    tags: str,
+    force: bool,
+    ready: bool,
+    job: str,
+):
+    """保存文件并按普通导入或整理稿导入处理。进度只是旁路，不改变结果。"""
+
     lib = _get_library(db, library_id)
     if lib is None:
         return fail("这个库不存在", 404)
     if not _folder_in_library(db, library_id, folder_id):
         return fail("文件夹不在这个库里")
-    data = await file.read()
     if not data:
         return fail("文件是空的")
+    steps = 6 if ready else 2
+    mark_progress(job, "正在保存文件", 1, steps)
     digest = file_digest(data)
     existing = db.scalar(
         select(KbDocument).where(KbDocument.library_id == library_id, KbDocument.file_hash == digest)
     )
     if existing and not force:
         return fail(f"库里已有相同文件「{existing.title or existing.file_name}」，确认后可另存")
-    file_name = safe_filename(file.filename or "未命名")
     kind = kind_of(file_name)
     policy = parse_policy(lib)
     row = KbDocument(
@@ -611,14 +654,20 @@ async def upload_document(
     append_asset_alts(row, alts)
     ready_status = ""
     if ready:
+        def on_step(step: str) -> None:
+            label, current = _READY_PROGRESS[step]
+            mark_progress(job, label, current, steps)
+
         align_ready_figure_names(db, row, data)
-        ready_status, _quality = apply_document_all(db, row, _READY_FLOW)
+        ready_status, _quality = apply_document_all(db, row, _READY_FLOW, on_step=on_step)
         if ready_status == "failed" or ready_status.startswith(("failed", "parse_failed", "clean_failed")):
             remove_file(library_id, rel_path)
             db.rollback()
             return fail("整理稿没导入成。请确认已经排成普通段落。")
+        mark_progress(job, "正在挂上图里的字", 6, steps)
         attach_ready_figure_text(db, row, saved_parsed(row))
     else:
+        mark_progress(job, "正在放入库里", 1, steps)
         index_document(db, row)
     db.commit()
     db.refresh(row)
@@ -628,6 +677,7 @@ async def upload_document(
         data["vector_hint"] = _READY_HINTS.get(ready_status, "已按整理稿导入。")
     elif note:
         data["vector_hint"] = note
+    mark_progress(job, "已经放进库里", steps, steps)
     return ok(data)
 
 
@@ -644,6 +694,12 @@ _READY_FLOW = {
     "chunk_size": 400,
     "chunk_overlap": 60,
     "max_chunks": 64,
+}
+_READY_PROGRESS = {
+    "parse": ("正在解析", 2),
+    "clean": ("正在清洗", 3),
+    "chunk": ("正在切片", 4),
+    "vector": ("正在算向量", 5),
 }
 _READY_HINTS = {
     "done": "已按整理稿导入，解析、清洗、切片和向量都做完了。",

@@ -19,6 +19,7 @@ import {
   fetchKbFolders,
   fetchKbLibraries,
   downloadKbReadyDraft,
+  fetchKbProgress,
   fetchKbSession,
   fetchKbSessions,
   fetchKbWikis,
@@ -281,6 +282,7 @@ export function KbPage() {
   const [tag, setTag] = useState("");
   const [error, setError] = useState("");
   const [hint, setHint] = useState("");
+  const [meter, setMeter] = useState<{ text: string; current: number; total: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<KbDocument | null>(null);
   const [previewText, setPreviewText] = useState("");
@@ -883,9 +885,36 @@ export function KbPage() {
     uploadRef.current?.click();
   }
 
+  function trackJob<T>(work: (job: string) => Promise<T>) {
+    const job = newKbJob();
+    setMeter({ text: "正在开始", current: 0, total: 0 });
+    const started = Date.now();
+    let stopped = false;
+    let pending = false;
+    const timer = window.setInterval(() => {
+      if (pending || stopped) return;
+      pending = true;
+      fetchKbProgress(job)
+        .then((row) => {
+          if (!stopped) setMeter(row);
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          pending = false;
+        });
+    }, 400);
+    return work(job).finally(async () => {
+      stopped = true;
+      window.clearInterval(timer);
+      const wait = 700 - (Date.now() - started);
+      if (wait > 0) await new Promise((resolve) => window.setTimeout(resolve, wait));
+      setMeter(null);
+    });
+  }
+
   async function doUpload(file: File, force: boolean, ready: boolean) {
     if (libraryId == null) return;
-    const row = await uploadKbDocument(libraryId, file, folderId, uploadTags, force, ready);
+    const row = await trackJob((job) => uploadKbDocument(libraryId, file, folderId, uploadTags, force, ready, job));
     setUploadTags("");
     await loadDocs(libraryId, folderId);
     setHint(row.vector_hint || (ready ? "已按整理稿导入。" : "已上传"));
@@ -895,8 +924,8 @@ export function KbPage() {
     if (uploadDraft.current) {
       uploadDraft.current = false;
       run(async () => {
-        const note = await downloadKbReadyDraft(file);
-        setHint(`稿已下载。${note} 请打开检查、补充和改错，再用「导入改好的稿」。`);
+        const note = await trackJob((job) => downloadKbReadyDraft(file, job));
+        setHint(`稿已下载。${note} 开头的改稿说明写了怎么补正文、表格和图上的字。改完再用「导入改好的稿」。`);
       });
       return;
     }
@@ -978,6 +1007,7 @@ export function KbPage() {
       </div>
 
       {error ? <p className="text-[13px] text-[var(--err)]">{error}</p> : null}
+      {meter ? <ProgressMeter text={meter.text} current={meter.current} total={meter.total} /> : null}
       {hint ? <p className="text-[13px] text-[var(--ok)]">{hint}</p> : null}
 
       {pageTab === "ask" && library ? (
@@ -1802,7 +1832,7 @@ export function KbPage() {
             </div>
             <div className="border border-[var(--line)] p-3">
               <p className="mb-1 font-medium">整理稿导入</p>
-              <p className="mb-3 text-[var(--muted)]">先按这个文件出一份 Word 稿。你检查、补充、改错之后，再导入。导入后才解析、清洗、切片和算向量。以「图N」开头的段落会挂到对应的图上。</p>
+              <p className="mb-3 text-[var(--muted)]">先把 Word 收成普通段落。表格留着给你看，下面另写句子给切片用。文本框写成句子，标题带到每段开头。每张图下面留空图号，字由你自己补。检查、改完再导入，才会切片和算向量。</p>
               <div className="flex flex-wrap gap-2">
                 <button type="button" className={btnClass} disabled={busy} onClick={pickDraft}>
                   先出一份稿
@@ -1837,6 +1867,31 @@ export function KbPage() {
           }}
         />
       ) : null}
+    </div>
+  );
+}
+
+function newKbJob() {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  let out = "";
+  for (const item of bytes) out += alphabet[item % alphabet.length];
+  return out;
+}
+
+/** 出稿和导入时停在页面上方的进度条。 */
+function ProgressMeter({ text, current, total }: { text: string; current: number; total: number }) {
+  const ratio = total > 0 ? current / total : 0;
+  const pct = total > 0 ? Math.max(8, Math.min(100, Math.round(ratio * 100))) : 12;
+  return (
+    <div className="max-w-lg">
+      <div className="mb-1 flex items-center justify-between gap-3 text-[13px] text-[var(--ok)]">
+        <span>{text}</span>
+        {total > 0 ? <span>{Math.min(100, Math.round(ratio * 100))}%</span> : null}
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-[var(--line)]">
+        <div className="h-full rounded-full bg-[var(--ok)] transition-all" style={{ width: `${pct}%` }} />
+      </div>
     </div>
   );
 }
