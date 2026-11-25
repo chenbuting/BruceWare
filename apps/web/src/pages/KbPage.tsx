@@ -306,8 +306,11 @@ export function KbPage() {
   const [plainSkill, setPlainSkill] = useState("");
   const [carefulSkill, setCarefulSkill] = useState("");
   const uploadReady = useRef(false);
-  const uploadKind = useRef<"plain" | "layout" | "copy" | "original" | "draft">("plain");
-  const readyOriginal = useRef<File | null>(null);
+  const uploadKind = useRef<"plain" | "layout" | "copy">("plain");
+  const readyOriginalRef = useRef<HTMLInputElement>(null);
+  const readyDraftRef = useRef<HTMLInputElement>(null);
+  const [readyOriginalFile, setReadyOriginalFile] = useState<File | null>(null);
+  const [readyDraftFile, setReadyDraftFile] = useState<File | null>(null);
   const [uploadTags, setUploadTags] = useState("");
   const [manageLib, setManageLib] = useState(false);
   const [question, setQuestion] = useState("");
@@ -874,7 +877,6 @@ export function KbPage() {
 
   function openImport() {
     uploadKind.current = "plain";
-    readyOriginal.current = null;
     setImportOpen(true);
     if (plainSkill && carefulSkill) return;
     Promise.all([fetchKbReadySkill("plain"), fetchKbReadySkill("careful")])
@@ -913,12 +915,32 @@ export function KbPage() {
     uploadRef.current?.click();
   }
 
-  function pickReadyImport() {
-    uploadKind.current = "original";
-    readyOriginal.current = null;
+  function startReadyImport() {
+    const original = readyOriginalFile;
+    const draft = readyDraftFile;
+    if (!original || !draft) return;
+    if (!draft.name.toLowerCase().endsWith(".docx")) {
+      setError("改好的稿要是 Word");
+      return;
+    }
+    setReadyOriginalFile(null);
+    setReadyDraftFile(null);
     setImportOpen(false);
-    setHint("先选原件。选完再选改好的稿。");
-    uploadRef.current?.click();
+    run(async () => {
+      try {
+        await doUpload(original, false, true, draft);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "上传失败";
+        if (message.includes("已有相同文件")) {
+          setPendingFile(original);
+          setPendingDraft(draft);
+          setPendingReady(true);
+          setError(message);
+          return;
+        }
+        throw err;
+      }
+    });
   }
 
   function trackJob<T>(work: (job: string) => Promise<T>) {
@@ -965,41 +987,9 @@ export function KbPage() {
         const note = await trackJob((job) => downloadKbReadyDraft(file, job, copy));
         setHint(
           copy
-            ? `稿已下载。${note} 图上的字是本机抄的。导入时先选原件，再选这份稿。`
-            : `稿已下载。${note} 图下是空的，字由你补。导入时先选原件，再选这份稿。`,
+            ? `稿已下载。${note} 图上的字是本机抄的。回到导入框，原件和这份稿各选一次。`
+            : `稿已下载。${note} 图下是空的，字由你补。回到导入框，原件和这份稿各选一次。`,
         );
-      });
-      return;
-    }
-    if (kind === "original") {
-      readyOriginal.current = file;
-      uploadKind.current = "draft";
-      setHint(`已选原件「${file.name}」。再选改好的稿。`);
-      uploadRef.current?.click();
-      return;
-    }
-    if (kind === "draft") {
-      const original = readyOriginal.current;
-      readyOriginal.current = null;
-      uploadKind.current = "plain";
-      if (!original) {
-        setError("还没选原件");
-        return;
-      }
-      run(async () => {
-        try {
-          await doUpload(original, false, true, file);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : "上传失败";
-          if (message.includes("已有相同文件")) {
-            setPendingFile(original);
-            setPendingDraft(file);
-            setPendingReady(true);
-            setError(message);
-            return;
-          }
-          throw err;
-        }
       });
       return;
     }
@@ -1907,7 +1897,7 @@ export function KbPage() {
             </div>
             <div className="border border-[var(--line)] p-3 md:col-span-2">
               <p className="mb-1 font-medium">整理稿导入</p>
-              <p className="mb-3 text-[var(--muted)]">先得到一份 Word。只摆格式是图下留空，你自己补字。本机抄字是电脑先把图上的字抄上，你改错。普通看图像平时聊天，看一眼就写下看到的内容。仔细看图会逐格写全，更慢。检查后导入：先选原件，再选改好的稿。打开原件仍是原来的版式，整理稿只用来切片和提问。</p>
+              <p className="mb-3 text-[var(--muted)]">先得到一份 Word。只摆格式是图下留空，你自己补字。本机抄字是电脑先把图上的字抄上，你改错。普通看图像平时聊天，看一眼就写下看到的内容。仔细看图会逐格写全，更慢。检查后在下面分别选原件和改好的稿。打开原件仍是原来的版式，整理稿只用来切片和提问。</p>
               <div className="flex flex-wrap gap-2">
                 <button type="button" className={btnClass} disabled={busy} onClick={() => pickLayout(false)}>
                   只摆格式
@@ -1927,9 +1917,46 @@ export function KbPage() {
                 <button type="button" className={btnClass} disabled={busy || !carefulSkill} onClick={() => downloadSkill(carefulSkill, "知识库整理稿规则.md")}>
                   下载仔细看图
                 </button>
-                <button type="button" className={btnClass} disabled={busy} onClick={pickReadyImport}>
-                  导入改好的稿
-                </button>
+              </div>
+              <div className="mt-3 grid gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button type="button" className={btnClass} disabled={busy} onClick={() => readyOriginalRef.current?.click()}>
+                    选原件
+                  </button>
+                  <span className="text-[var(--muted)]">{readyOriginalFile ? readyOriginalFile.name : "还没选"}</span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button type="button" className={btnClass} disabled={busy} onClick={() => readyDraftRef.current?.click()}>
+                    选改好的稿
+                  </button>
+                  <span className="text-[var(--muted)]">{readyDraftFile ? readyDraftFile.name : "还没选，要是 Word"}</span>
+                </div>
+                <div>
+                  <button type="button" className={btnClass} disabled={busy || !readyOriginalFile || !readyDraftFile} onClick={startReadyImport}>
+                    导入这两份
+                  </button>
+                </div>
+                <input
+                  ref={readyOriginalRef}
+                  type="file"
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0] ?? null;
+                    event.target.value = "";
+                    if (file) setReadyOriginalFile(file);
+                  }}
+                />
+                <input
+                  ref={readyDraftRef}
+                  type="file"
+                  accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0] ?? null;
+                    event.target.value = "";
+                    if (file) setReadyDraftFile(file);
+                  }}
+                />
               </div>
             </div>
           </div>
