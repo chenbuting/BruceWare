@@ -536,14 +536,35 @@ def list_documents(
     return ok({"items": items})
 
 
+_PLAIN_MARK_START = "<!-- plain-look:start -->"
+_PLAIN_MARK_END = "<!-- plain-look:end -->"
+
+
+def _split_ready_skill(raw: str) -> tuple[str, str]:
+    """拆出普通看图短规则，仔细看图用剩下的全文。"""
+
+    start = raw.find(_PLAIN_MARK_START)
+    end = raw.find(_PLAIN_MARK_END)
+    if start < 0 or end < start:
+        return "", raw.strip() + "\n"
+    plain = raw[start + len(_PLAIN_MARK_START) : end].strip()
+    careful = (raw[:start] + raw[end + len(_PLAIN_MARK_END) :]).strip()
+    return plain, careful + "\n"
+
+
 @router.get("/kb/ready-skill")
-def ready_skill():
-    """整理稿规则原文，给页面复制和下载。"""
+def ready_skill(kind: str = Query(default="careful")):
+    """整理稿规则原文，给页面复制和下载。kind=plain 只给普通看图。"""
 
     path = get_settings().repo_root / ".cursor" / "skills" / "kb-ready-doc" / "SKILL.md"
     if not path.is_file():
         return fail("整理稿规则还没放好", 404)
-    return ok({"name": "知识库整理稿规则.md", "text": path.read_text(encoding="utf-8")})
+    plain, careful = _split_ready_skill(path.read_text(encoding="utf-8"))
+    if kind == "plain":
+        if not plain:
+            return fail("普通看图规则还没放好", 404)
+        return ok({"name": "普通看图规则.md", "text": plain + "\n"})
+    return ok({"name": "知识库整理稿规则.md", "text": careful})
 
 
 @router.get("/kb/progress/{job}")

@@ -686,9 +686,9 @@ export async function downloadKbReadyDraft(file: File, job = "", copy = false): 
   return note;
 }
 
-/** 整理稿规则原文，可复制或下载后交给别的对话。 */
-export function fetchKbReadySkill() {
-  return request<{ name: string; text: string }>("/api/v1/kb/ready-skill");
+/** 整理稿规则原文。plain 是普通看图，careful 是仔细看图。 */
+export function fetchKbReadySkill(kind: "plain" | "careful" = "careful") {
+  return request<{ name: string; text: string }>(`/api/v1/kb/ready-skill?kind=${kind}`);
 }
 
 /** 出稿或导入走到哪一步了。 */

@@ -303,7 +303,8 @@ export function KbPage() {
   const [pendingReady, setPendingReady] = useState(false);
   const [pendingDraft, setPendingDraft] = useState<File | null>(null);
   const [importOpen, setImportOpen] = useState(false);
-  const [skillText, setSkillText] = useState("");
+  const [plainSkill, setPlainSkill] = useState("");
+  const [carefulSkill, setCarefulSkill] = useState("");
   const uploadReady = useRef(false);
   const uploadKind = useRef<"plain" | "layout" | "copy" | "original" | "draft">("plain");
   const readyOriginal = useRef<File | null>(null);
@@ -875,23 +876,26 @@ export function KbPage() {
     uploadKind.current = "plain";
     readyOriginal.current = null;
     setImportOpen(true);
-    if (skillText) return;
-    fetchKbReadySkill()
-      .then((data) => setSkillText(data.text || ""))
+    if (plainSkill && carefulSkill) return;
+    Promise.all([fetchKbReadySkill("plain"), fetchKbReadySkill("careful")])
+      .then(([plain, careful]) => {
+        setPlainSkill(plain.text || "");
+        setCarefulSkill(careful.text || "");
+      })
       .catch((err: Error) => setError(err.message));
   }
 
-  function copySkill() {
-    if (!skillText) return;
-    navigator.clipboard.writeText(skillText).then(() => setHint("规则已复制，可以贴给别的 AI。")).catch(() => setError("复制失败"));
+  function copySkill(text: string) {
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(() => setHint("规则已复制，可以贴给别的 AI。")).catch(() => setError("复制失败"));
   }
 
-  function downloadSkill() {
-    if (!skillText) return;
-    const url = URL.createObjectURL(new Blob([skillText], { type: "text/markdown;charset=utf-8" }));
+  function downloadSkill(text: string, name: string) {
+    if (!text) return;
+    const url = URL.createObjectURL(new Blob([text], { type: "text/markdown;charset=utf-8" }));
     const link = document.createElement("a");
     link.href = url;
-    link.download = "知识库整理稿规则.md";
+    link.download = name;
     link.click();
     URL.revokeObjectURL(url);
   }
@@ -1903,7 +1907,7 @@ export function KbPage() {
             </div>
             <div className="border border-[var(--line)] p-3 md:col-span-2">
               <p className="mb-1 font-medium">整理稿导入</p>
-              <p className="mb-3 text-[var(--muted)]">先得到一份 Word。只摆格式是图下留空，你自己补字。本机抄字是电脑先把图上的字抄上，你改错。对话看图是把规则交给对话一张一张看。检查后导入：先选原件，再选改好的稿。打开原件仍是原来的版式，整理稿只用来切片和提问。</p>
+              <p className="mb-3 text-[var(--muted)]">先得到一份 Word。只摆格式是图下留空，你自己补字。本机抄字是电脑先把图上的字抄上，你改错。普通看图像平时聊天，看一眼就写下看到的内容。仔细看图会逐格写全，更慢。检查后导入：先选原件，再选改好的稿。打开原件仍是原来的版式，整理稿只用来切片和提问。</p>
               <div className="flex flex-wrap gap-2">
                 <button type="button" className={btnClass} disabled={busy} onClick={() => pickLayout(false)}>
                   只摆格式
@@ -1911,11 +1915,17 @@ export function KbPage() {
                 <button type="button" className={btnClass} disabled={busy} onClick={() => pickLayout(true)}>
                   本机抄字
                 </button>
-                <button type="button" className={btnClass} disabled={busy || !skillText} onClick={copySkill}>
-                  复制规则
+                <button type="button" className={btnClass} disabled={busy || !plainSkill} onClick={() => copySkill(plainSkill)}>
+                  复制普通看图
                 </button>
-                <button type="button" className={btnClass} disabled={busy || !skillText} onClick={downloadSkill}>
-                  下载规则
+                <button type="button" className={btnClass} disabled={busy || !plainSkill} onClick={() => downloadSkill(plainSkill, "普通看图规则.md")}>
+                  下载普通看图
+                </button>
+                <button type="button" className={btnClass} disabled={busy || !carefulSkill} onClick={() => copySkill(carefulSkill)}>
+                  复制仔细看图
+                </button>
+                <button type="button" className={btnClass} disabled={busy || !carefulSkill} onClick={() => downloadSkill(carefulSkill, "知识库整理稿规则.md")}>
+                  下载仔细看图
                 </button>
                 <button type="button" className={btnClass} disabled={busy} onClick={pickReadyImport}>
                   导入改好的稿
