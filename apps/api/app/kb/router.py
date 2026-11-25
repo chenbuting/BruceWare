@@ -1730,7 +1730,8 @@ def list_document_assets(doc_id: int, db: Session = Depends(get_db)):
     row = db.get(KbDocument, doc_id)
     if row is None:
         return fail("这份资料不存在", 404)
-    _fill_assets(row, db, force=True)
+    # 已经抽过的不再重读原件。
+    _fill_assets(row, db)
     db.commit()
     return ok({"items": [asset_edit_dict(item) for item in list_doc_assets(db, row.id)]})
 
