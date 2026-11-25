@@ -30,7 +30,7 @@ _GUIDE = (
 )
 
 
-def draft_bytes(file_name: str, data: bytes, on_progress=None) -> tuple[bytes, str]:
+def draft_bytes(file_name: str, data: bytes, on_progress=None, copy: bool = False) -> tuple[bytes, str]:
     """根据上传内容出一份稿。原文件不改，也不写入知识库。"""
 
     suffix = Path(file_name or "").suffix.lower()
@@ -38,15 +38,19 @@ def draft_bytes(file_name: str, data: bytes, on_progress=None) -> tuple[bytes, s
         raise ValueError("先出稿只接受 Word、PDF 或图片")
     if not data:
         raise ValueError("文件是空的")
+    if copy:
+        from app.kb.ocr import ensure_ocr
+
+        ensure_ocr()
     _tell(on_progress, "正在读取文件", 0, 1)
     with tempfile.TemporaryDirectory() as folder:
         source = Path(folder) / f"source{suffix}"
         source.write_bytes(data)
-        dest, summary = fill_figure_file(source, on_progress)
+        dest, summary = fill_figure_file(source, on_progress, copy)
         return dest.read_bytes(), summary
 
 
-def fill_figure_file(path: Path, on_progress=None) -> tuple[Path, str]:
+def fill_figure_file(path: Path, on_progress=None, copy: bool = False) -> tuple[Path, str]:
     """把版式摆好写到旁边的新文件。原文件不动。返回新路径和一句结果。"""
 
     source = Path(path)
@@ -54,23 +58,24 @@ def fill_figure_file(path: Path, on_progress=None) -> tuple[Path, str]:
         raise ValueError("文件找不到")
     suffix = source.suffix.lower()
     if suffix == ".docx":
-        return _fill_docx(source, on_progress)
+        return _fill_docx(source, on_progress, copy)
     if suffix == ".pdf":
-        return _fill_pdf(source, on_progress)
+        return _fill_pdf(source, on_progress, copy)
     if suffix in {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}:
-        return _fill_image(source, on_progress)
+        return _fill_image(source, on_progress, copy)
     raise ValueError("只处理 Word、PDF 或图片")
 
 
-def _fill_docx(source: Path, on_progress=None) -> tuple[Path, str]:
+def _fill_docx(source: Path, on_progress=None, copy: bool = False) -> tuple[Path, str]:
     """把 Word 收成普通段落。表格、文本框、标题都写进句子，方便按 400 字切片。"""
 
     src = Document(str(source))
     if _already_figured(src):
         raise ValueError("这份里已经有图号，没有重复写。请换一份还没写过图号的文件。")
     out = Document()
-    _write_guide(out)
+    _write_guide(out, copy)
     state = _WordDraft(src)
+    state.copy = copy
     state.figure_total = _count_blips(src)
     state.on_progress = on_progress
     _tell(on_progress, "正在整理版式", 0, max(state.figure_total, 1))
@@ -87,7 +92,7 @@ def _fill_docx(source: Path, on_progress=None) -> tuple[Path, str]:
     return dest, _word_summary(state)
 
 
-def _fill_pdf(source: Path, on_progress=None) -> tuple[Path, str]:
+def _fill_pdf(source: Path, on_progress=None, copy: bool = False) -> tuple[Path, str]:
     try:
         from pypdf import PdfReader
     except ImportError as exc:
@@ -111,7 +116,7 @@ def _fill_pdf(source: Path, on_progress=None) -> tuple[Path, str]:
     if not pictures:
         _tell(on_progress, "正在整理文字", 1, 2)
         doc = Document()
-        _write_guide(doc)
+        _write_guide(doc, copy)
         wrote = False
         for page in pages:
             for line in (page.extract_text() or "").splitlines():
@@ -131,30 +136,32 @@ def _fill_pdf(source: Path, on_progress=None) -> tuple[Path, str]:
         return dest, note
     total = len(pictures)
     doc = Document()
-    _write_guide(doc)
+    _write_guide(doc, copy)
     for index, raw in enumerate(pictures, start=1):
-        _tell(on_progress, f"正在放第 {index} 张图", index - 1, total)
+        _tell(on_progress, _figure_step(copy, index), index - 1, total)
         doc.add_picture(io.BytesIO(_png_bytes(raw)), width=Inches(6.0))
-        doc.add_paragraph(f"图{index}")
+        for text in _figure_lines(index, raw, copy):
+            doc.add_paragraph(text)
     _tell(on_progress, "正在写成稿", total, total)
     dest = _dest_path(source)
     doc.save(str(dest))
-    return dest, _summary(total, more)
+    return dest, _summary(total, more, copy)
 
 
-def _fill_image(source: Path, on_progress=None) -> tuple[Path, str]:
+def _fill_image(source: Path, on_progress=None, copy: bool = False) -> tuple[Path, str]:
     raw = source.read_bytes()
     if not _usable_image(raw):
         raise ValueError("这张图太小，或者打不开")
-    _tell(on_progress, "正在放第 1 张图", 0, 1)
+    _tell(on_progress, _figure_step(copy, 1), 0, 1)
     doc = Document()
-    _write_guide(doc)
+    _write_guide(doc, copy)
     doc.add_picture(io.BytesIO(_png_bytes(raw)), width=Inches(6.0))
-    doc.add_paragraph("图1")
+    for text in _figure_lines(1, raw, copy):
+        doc.add_paragraph(text)
     _tell(on_progress, "正在写成稿", 1, 1)
     dest = _dest_path(source)
     doc.save(str(dest))
-    return dest, _summary(1, False)
+    return dest, _summary(1, False, copy)
 
 
 class _WordDraft:
@@ -170,6 +177,7 @@ class _WordDraft:
         self.seen_rid: set[str] = set()
         self.figure_total = 0
         self.on_progress = None
+        self.copy = False
 
 
 _MC_FALLBACK = "{http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback"
@@ -400,8 +408,11 @@ def _emit_image(out: Document, state: _WordDraft, rid: str | None) -> None:
         return
     state.figures += 1
     total = state.figure_total or state.figures
-    _tell(state.on_progress, f"正在放第 {state.figures} 张图", state.figures, total)
-    _add_figure_slot(out, state, state.figures)
+    _tell(state.on_progress, _figure_step(state.copy, state.figures), state.figures, total)
+    for text in _figure_lines(state.figures, raw, state.copy):
+        out.add_paragraph(text)
+        state.chars += len(text) + 1
+        state.last = text
 
 
 def _picture_stream(raw: bytes):
@@ -433,17 +444,52 @@ def _tidy(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
 
 
-def _add_figure_slot(out: Document, state: _WordDraft, number: int) -> None:
-    """图下留一行空图号，字由人自己填。"""
+def _figure_step(copy: bool, number: int) -> str:
+    if copy:
+        return f"正在抄第 {number} 张图"
+    return f"正在放第 {number} 张图"
 
-    text = f"图{number}"
-    out.add_paragraph(text)
-    state.chars += len(text) + 1
-    state.last = text
+
+def _figure_lines(number: int, raw: bytes, copy: bool) -> list[str]:
+    """只摆格式时留空图号。本机抄字时把认到的字写在图号后面。"""
+
+    if not copy:
+        return [f"图{number}"]
+    try:
+        from app.kb.ocr import read_ocr_lines
+
+        lines = read_ocr_lines(_shrink(raw))
+    except Exception:
+        lines = []
+    text = " ".join(line.strip() for line in lines if line.strip())
+    if not text:
+        return [f"图{number} 未能读出文字"]
+    prefix = f"图{number} "
+    room = _PARA_LIMIT - len(prefix)
+    chunks: list[str] = []
+    while text:
+        piece = text[:room].strip()
+        text = text[room:].strip()
+        if piece:
+            chunks.append(prefix + piece)
+    return chunks or [f"图{number} 未能读出文字"]
+
+
+def _shrink(raw: bytes) -> bytes:
+    """抄字前把大图缩小。"""
+
+    image = Image.open(io.BytesIO(raw)).convert("RGB")
+    image.thumbnail((1600, 2200))
+    buf = io.BytesIO()
+    image.save(buf, format="JPEG", quality=80)
+    return buf.getvalue()
 
 
 def _word_summary(state: _WordDraft) -> str:
-    text = f"已收成普通段落。图 {state.figures} 张，图上的字留空，请自己补。"
+    if state.copy:
+        text = f"已收成普通段落。图 {state.figures} 张，图上的字已由本机抄上，请核对。"
+    else:
+        text = f"已收成普通段落。图 {state.figures} 张，图上的字留空，请自己补。"
     if state.boxes:
         text += f"文本框 {state.boxes} 处已写入正文。"
     if state.chars > 20000:
@@ -471,10 +517,14 @@ def _count_blips(src: Document) -> int:
     return len(seen)
 
 
-def _write_guide(out: Document) -> None:
+def _write_guide(out: Document, copy: bool = False) -> None:
     """改稿说明放在正文最前。导入时按标记整段丢掉。"""
 
     for line in _GUIDE:
+        if copy and line.startswith("图上的字要你自己写"):
+            line = "图上的字：本机已经抄在「图1」「图2」后面。抄错就改这一行，或另起一段，开头仍写同一个图号。例如：图2 营业收入 123万元"
+        if copy and line.startswith("看不清的字写成□"):
+            line = "看不清的字写成□，不要猜。整张没抄出来的，保留「图N 未能读出文字」。"
         out.add_paragraph(f"{_GUIDE_MARK}{line}")
 
 
@@ -505,8 +555,11 @@ def _dest_path(source: Path) -> Path:
     return dest
 
 
-def _summary(total: int, more: bool) -> str:
-    text = f"共 {total} 张，图上的字留空，请自己补。"
+def _summary(total: int, more: bool, copy: bool = False) -> str:
+    if copy:
+        text = f"共 {total} 张，图上的字已由本机抄上，请核对。"
+    else:
+        text = f"共 {total} 张，图上的字留空，请自己补。"
     if more:
         text += "PDF 只处理了前 40 页，后面请另存一份再出稿。"
     return text

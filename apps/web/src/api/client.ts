@@ -663,10 +663,11 @@ export function fetchKbDocuments(libraryId: number, folderId: number | null, q =
 }
 
 /** 按原文件出一份可检查的整理稿，不入库。 */
-export async function downloadKbReadyDraft(file: File, job = ""): Promise<string> {
+export async function downloadKbReadyDraft(file: File, job = "", copy = false): Promise<string> {
   const body = new FormData();
   body.append("file", file);
   if (job) body.append("job", job);
+  if (copy) body.append("copy", "true");
   const res = await fetch("/api/v1/kb/ready-draft", { method: "POST", body });
   const kind = res.headers.get("content-type") || "";
   if (!res.ok || kind.includes("application/json")) {
@@ -685,12 +686,26 @@ export async function downloadKbReadyDraft(file: File, job = ""): Promise<string
   return note;
 }
 
+/** 整理稿规则原文，可复制或下载后交给别的对话。 */
+export function fetchKbReadySkill() {
+  return request<{ name: string; text: string }>("/api/v1/kb/ready-skill");
+}
+
 /** 出稿或导入走到哪一步了。 */
 export function fetchKbProgress(job: string) {
   return request<{ text: string; current: number; total: number }>(`/api/v1/kb/progress/${job}`);
 }
 
-export function uploadKbDocument(libraryId: number, file: File, folderId: number | null, tags = "", force = false, ready = false, job = "") {
+export function uploadKbDocument(
+  libraryId: number,
+  file: File,
+  folderId: number | null,
+  tags = "",
+  force = false,
+  ready = false,
+  job = "",
+  draft: File | null = null,
+) {
   const body = new FormData();
   body.append("file", file);
   if (folderId != null) body.append("folder_id", String(folderId));
@@ -698,6 +713,7 @@ export function uploadKbDocument(libraryId: number, file: File, folderId: number
   if (force) body.append("force", "true");
   if (ready) body.append("ready", "true");
   if (job) body.append("job", job);
+  if (draft) body.append("draft", draft);
   return request<KbDocument>(`/api/v1/kb/libraries/${libraryId}/documents`, { method: "POST", body });
 }
 

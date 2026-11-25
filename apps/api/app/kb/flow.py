@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from app.kb.assets import list_doc_assets, ocr_for_search
+from app.kb.assets import list_doc_assets, ocr_for_search, ready_draft_rel
 from app.kb.chunk import split_chunks, split_paragraphs, split_whole
 from app.kb.clean import CleanScriptError, _run_script, clean_document
 from app.kb.extract import ParseChoiceError, extract_search_text, extract_sheet_grid, is_sheet_name
@@ -169,6 +169,24 @@ def _read_raw(row: KbDocument, flow: dict) -> tuple[str, int, int, bytes | None]
 
     text_limit, sheet_limit, sheet_rows = _limits(flow["parse"])
     limit = sheet_limit if is_sheet_name(row.file_name) else text_limit
+    draft_rel = ready_draft_rel(row)
+    if draft_rel:
+        try:
+            draft = abs_path(row.library_id, draft_rel).read_bytes()
+        except (ValueError, OSError):
+            draft = b""
+        if draft:
+            raw_text = extract_search_text(
+                "整理稿.docx",
+                draft,
+                collapse=False,
+                text_limit=text_limit,
+                sheet_limit=sheet_limit,
+                sheet_rows=sheet_rows,
+                mode=str(flow.get("parse") or "standard"),
+                hint=str(flow.get("parse_hint") or ""),
+            )
+            return raw_text, limit, sheet_rows, draft
     try:
         data = abs_path(row.library_id, row.rel_path).read_bytes()
     except (ValueError, OSError):

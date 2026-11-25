@@ -87,6 +87,18 @@ def _set_extra(row: KbDocument, key: str, value) -> None:
     row.extra = json.dumps(data, ensure_ascii=False)
 
 
+def ready_draft_rel(row: KbDocument) -> str:
+    """整理稿导入时另存的稿子。旧资料没有这份。"""
+
+    return str(_extra(row).get("ready_draft") or "")
+
+
+def remember_ready_draft(row: KbDocument, rel_path: str) -> None:
+    """记下整理稿路径。打开原件仍用原来的文件。"""
+
+    _set_extra(row, "ready_draft", rel_path)
+
+
 def already_extracted(row: KbDocument) -> bool:
     """这份资料是不是已经抽过图。提问前用来跳过读盘。"""
 

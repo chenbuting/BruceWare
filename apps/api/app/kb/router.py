@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.ai import chat_complete, chat_complete_stream, llm_public
+from app.core.config import get_settings
 from app.core.response import fail, ok
 from app.db.session import get_db, new_session
 from app.kb.extract import extract_search_text, extract_sheet_grid, is_sheet_name, sheet_rows_for_ask
@@ -37,6 +38,8 @@ from app.kb.assets import (
     list_doc_assets,
     pack_asset_note,
     rebuild_search_text,
+    remember_ready_draft,
+    ready_draft_rel,
     save_extracted_images,
 )
 from app.kb.ocr import ensure_ocr
@@ -533,6 +536,16 @@ def list_documents(
     return ok({"items": items})
 
 
+@router.get("/kb/ready-skill")
+def ready_skill():
+    """整理稿规则原文，给页面复制和下载。"""
+
+    path = get_settings().repo_root / ".cursor" / "skills" / "kb-ready-doc" / "SKILL.md"
+    if not path.is_file():
+        return fail("整理稿规则还没放好", 404)
+    return ok({"name": "知识库整理稿规则.md", "text": path.read_text(encoding="utf-8")})
+
+
 @router.get("/kb/progress/{job}")
 def job_progress(job: str):
     """出稿或导入进行中，页面来问走到哪一步了。"""
@@ -541,7 +554,7 @@ def job_progress(job: str):
 
 
 @router.post("/kb/ready-draft")
-async def ready_draft(file: UploadFile = File(...), job: str = Form(default="")):
+async def ready_draft(file: UploadFile = File(...), job: str = Form(default=""), copy: bool = Form(default=False)):
     """按这份文件出一份可检查的整理稿。不入库，不切片，不算向量。"""
 
     from app.kb.ready_fill import draft_bytes
@@ -555,7 +568,7 @@ async def ready_draft(file: UploadFile = File(...), job: str = Form(default=""))
         def tell(text: str, current: int, total: int) -> None:
             mark_progress(job, text, current, total)
 
-        return draft_bytes(name, data, tell)
+        return draft_bytes(name, data, tell, copy=copy)
 
     try:
         blob, summary = await asyncio.to_thread(work)
@@ -584,14 +597,22 @@ async def upload_document(
     force: bool = Form(default=False),
     ready: bool = Form(default=False),
     job: str = Form(default=""),
+    draft: UploadFile | None = File(default=None),
 ):
     data = await file.read()
+    draft_data = await draft.read() if draft is not None else b""
     file_name = safe_filename(file.filename or "未命名")
+    if ready and not draft_data:
+        return fail("请再选改好的稿")
+    if ready and not safe_filename(draft.filename or "").lower().endswith(".docx"):
+        return fail("改好的稿要是 Word")
 
     def work():
         db = new_session()
         try:
-            return _store_uploaded_document(db, library_id, data, file_name, folder_id, tags, force, ready, job)
+            return _store_uploaded_document(
+                db, library_id, data, file_name, folder_id, tags, force, ready, job, draft_data
+            )
         finally:
             db.close()
 
@@ -608,6 +629,7 @@ def _store_uploaded_document(
     force: bool,
     ready: bool,
     job: str,
+    draft_data: bytes = b"",
 ):
     """保存文件并按普通导入或整理稿导入处理。进度只是旁路，不改变结果。"""
 
@@ -659,13 +681,23 @@ def _store_uploaded_document(
             mark_progress(job, label, current, steps)
 
         align_ready_figure_names(db, row, data)
+        draft_rel = ""
+        if draft_data:
+            draft_rel = f"{row.id}_ready.docx"
+            write_bytes(library_id, draft_rel, draft_data)
+            remember_ready_draft(row, draft_rel)
         ready_status, _quality = apply_document_all(db, row, _READY_FLOW, on_step=on_step)
         if ready_status == "failed" or ready_status.startswith(("failed", "parse_failed", "clean_failed")):
             remove_file(library_id, rel_path)
+            remove_file(library_id, draft_rel)
             db.rollback()
             return fail("整理稿没导入成。请确认已经排成普通段落。")
+        parsed = saved_parsed(row)
+        if parsed.strip():
+            row.search_text = parsed.strip()[:20000]
+            append_asset_alts(row, alts)
         mark_progress(job, "正在挂上图里的字", 6, steps)
-        attach_ready_figure_text(db, row, saved_parsed(row))
+        attach_ready_figure_text(db, row, parsed)
     else:
         mark_progress(job, "正在放入库里", 1, steps)
         index_document(db, row)
@@ -1997,11 +2029,13 @@ def delete_document(doc_id: int, db: Session = Depends(get_db)):
         return fail("这份资料不存在", 404)
     library_id = row.library_id
     rel_path = row.rel_path
+    draft_rel = ready_draft_rel(row)
     clear_assets(db, row)
     clear_chunks(db, row.id)
     db.delete(row)
     db.commit()
     remove_file(library_id, rel_path)
+    remove_file(library_id, draft_rel)
     return ok(True)
 
 

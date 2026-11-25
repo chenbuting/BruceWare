@@ -18,6 +18,7 @@ import {
   fetchKbDocuments,
   fetchKbFolders,
   fetchKbLibraries,
+  fetchKbReadySkill,
   downloadKbReadyDraft,
   fetchKbProgress,
   fetchKbSession,
@@ -300,9 +301,12 @@ export function KbPage() {
   const [askDeleteDoc, setAskDeleteDoc] = useState<KbDocument | null>(null);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [pendingReady, setPendingReady] = useState(false);
+  const [pendingDraft, setPendingDraft] = useState<File | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [skillText, setSkillText] = useState("");
   const uploadReady = useRef(false);
-  const uploadDraft = useRef(false);
+  const uploadKind = useRef<"plain" | "layout" | "copy" | "original" | "draft">("plain");
+  const readyOriginal = useRef<File | null>(null);
   const [uploadTags, setUploadTags] = useState("");
   const [manageLib, setManageLib] = useState(false);
   const [question, setQuestion] = useState("");
@@ -868,20 +872,48 @@ export function KbPage() {
   }
 
   function openImport() {
+    uploadKind.current = "plain";
+    readyOriginal.current = null;
     setImportOpen(true);
+    if (skillText) return;
+    fetchKbReadySkill()
+      .then((data) => setSkillText(data.text || ""))
+      .catch((err: Error) => setError(err.message));
+  }
+
+  function copySkill() {
+    if (!skillText) return;
+    navigator.clipboard.writeText(skillText).then(() => setHint("规则已复制，可以贴给别的 AI。")).catch(() => setError("复制失败"));
+  }
+
+  function downloadSkill() {
+    if (!skillText) return;
+    const url = URL.createObjectURL(new Blob([skillText], { type: "text/markdown;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "知识库整理稿规则.md";
+    link.click();
+    URL.revokeObjectURL(url);
   }
 
   function pickUpload(ready: boolean) {
-    uploadDraft.current = false;
+    uploadKind.current = "plain";
     uploadReady.current = ready;
     setImportOpen(false);
     uploadRef.current?.click();
   }
 
-  function pickDraft() {
-    uploadDraft.current = true;
-    uploadReady.current = false;
+  function pickLayout(copy: boolean) {
+    uploadKind.current = copy ? "copy" : "layout";
     setImportOpen(false);
+    uploadRef.current?.click();
+  }
+
+  function pickReadyImport() {
+    uploadKind.current = "original";
+    readyOriginal.current = null;
+    setImportOpen(false);
+    setHint("先选原件。选完再选改好的稿。");
     uploadRef.current?.click();
   }
 
@@ -912,20 +944,58 @@ export function KbPage() {
     });
   }
 
-  async function doUpload(file: File, force: boolean, ready: boolean) {
+  async function doUpload(file: File, force: boolean, ready: boolean, draft: File | null = null) {
     if (libraryId == null) return;
-    const row = await trackJob((job) => uploadKbDocument(libraryId, file, folderId, uploadTags, force, ready, job));
+    const row = await trackJob((job) => uploadKbDocument(libraryId, file, folderId, uploadTags, force, ready, job, draft));
     setUploadTags("");
     await loadDocs(libraryId, folderId);
-    setHint(row.vector_hint || (ready ? "已按整理稿导入。" : "已上传"));
+    setHint(row.vector_hint || (ready ? "已按整理稿导入。打开原件仍是原来的文件。" : "已上传"));
   }
 
   function onUpload(file: File) {
-    if (uploadDraft.current) {
-      uploadDraft.current = false;
+    const kind = uploadKind.current;
+    if (kind === "layout" || kind === "copy") {
+      uploadKind.current = "plain";
+      const copy = kind === "copy";
       run(async () => {
-        const note = await trackJob((job) => downloadKbReadyDraft(file, job));
-        setHint(`稿已下载。${note} 开头的改稿说明写了怎么补正文、表格和图上的字。改完再用「导入改好的稿」。`);
+        const note = await trackJob((job) => downloadKbReadyDraft(file, job, copy));
+        setHint(
+          copy
+            ? `稿已下载。${note} 图上的字是本机抄的。导入时先选原件，再选这份稿。`
+            : `稿已下载。${note} 图下是空的，字由你补。导入时先选原件，再选这份稿。`,
+        );
+      });
+      return;
+    }
+    if (kind === "original") {
+      readyOriginal.current = file;
+      uploadKind.current = "draft";
+      setHint(`已选原件「${file.name}」。再选改好的稿。`);
+      uploadRef.current?.click();
+      return;
+    }
+    if (kind === "draft") {
+      const original = readyOriginal.current;
+      readyOriginal.current = null;
+      uploadKind.current = "plain";
+      if (!original) {
+        setError("还没选原件");
+        return;
+      }
+      run(async () => {
+        try {
+          await doUpload(original, false, true, file);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "上传失败";
+          if (message.includes("已有相同文件")) {
+            setPendingFile(original);
+            setPendingDraft(file);
+            setPendingReady(true);
+            setError(message);
+            return;
+          }
+          throw err;
+        }
       });
       return;
     }
@@ -937,6 +1007,7 @@ export function KbPage() {
         const message = err instanceof Error ? err.message : "上传失败";
         if (message.includes("已有相同文件")) {
           setPendingFile(file);
+          setPendingDraft(null);
           setPendingReady(ready);
           setError(message);
           return;
@@ -1830,14 +1901,23 @@ export function KbPage() {
                 选原文件
               </button>
             </div>
-            <div className="border border-[var(--line)] p-3">
+            <div className="border border-[var(--line)] p-3 md:col-span-2">
               <p className="mb-1 font-medium">整理稿导入</p>
-              <p className="mb-3 text-[var(--muted)]">先把 Word 收成普通段落。表格留着给你看，下面另写句子给切片用。文本框写成句子，标题带到每段开头。每张图下面留空图号，字由你自己补。检查、改完再导入，才会切片和算向量。</p>
+              <p className="mb-3 text-[var(--muted)]">先得到一份 Word。只摆格式是图下留空，你自己补字。本机抄字是电脑先把图上的字抄上，你改错。对话看图是把规则交给对话一张一张看。检查后导入：先选原件，再选改好的稿。打开原件仍是原来的版式，整理稿只用来切片和提问。</p>
               <div className="flex flex-wrap gap-2">
-                <button type="button" className={btnClass} disabled={busy} onClick={pickDraft}>
-                  先出一份稿
+                <button type="button" className={btnClass} disabled={busy} onClick={() => pickLayout(false)}>
+                  只摆格式
                 </button>
-                <button type="button" className={btnClass} disabled={busy} onClick={() => pickUpload(true)}>
+                <button type="button" className={btnClass} disabled={busy} onClick={() => pickLayout(true)}>
+                  本机抄字
+                </button>
+                <button type="button" className={btnClass} disabled={busy || !skillText} onClick={copySkill}>
+                  复制规则
+                </button>
+                <button type="button" className={btnClass} disabled={busy || !skillText} onClick={downloadSkill}>
+                  下载规则
+                </button>
+                <button type="button" className={btnClass} disabled={busy} onClick={pickReadyImport}>
                   导入改好的稿
                 </button>
               </div>
@@ -1854,15 +1934,18 @@ export function KbPage() {
           busy={busy}
           onClose={() => {
             setPendingFile(null);
+            setPendingDraft(null);
             setPendingReady(false);
           }}
           onConfirm={() => {
             const file = pendingFile;
             const ready = pendingReady;
+            const draft = pendingDraft;
             setPendingFile(null);
+            setPendingDraft(null);
             setPendingReady(false);
             run(async () => {
-              await doUpload(file, true, ready);
+              await doUpload(file, true, ready, draft);
             });
           }}
         />
