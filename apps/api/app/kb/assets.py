@@ -299,13 +299,13 @@ def save_extracted_images(db: Session, row: KbDocument, data: bytes) -> list[str
     return alts
 
 
-def append_asset_alts(row: KbDocument, alts: list[str]) -> None:
+def append_asset_alts(row: KbDocument, alts: list[str], limit: int = 20000) -> None:
     """图名写进检索正文，没识图也能按「第几页图」搜到。"""
 
     extra = " ".join(item for item in alts if item and item not in (row.search_text or ""))
     if not extra:
         return
-    row.search_text = ((row.search_text or "") + " " + extra).strip()[:20000]
+    row.search_text = ((row.search_text or "") + " " + extra).strip()[:limit]
 
 
 def align_ready_figure_names(db: Session, row: KbDocument, data: bytes) -> None:

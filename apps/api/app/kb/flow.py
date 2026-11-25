@@ -18,6 +18,8 @@ from app.kb.vector import embed_current_chunks, has_edited_chunks, list_chunks, 
 _HEAD_TEXT = 4000
 _HEAD_SHEET = 8000
 _HEAD_ROWS = 80
+# 整理稿正文整份留下。普通导入仍用原来的 2 万字。
+READY_TEXT_LIMIT = 100000
 _STEPS = {"parse", "clean", "chunk", "vector"}
 
 
@@ -112,7 +114,7 @@ def _parse(db: Session, row: KbDocument, flow: dict) -> str:
 
 def _clean(db: Session, row: KbDocument, flow: dict) -> tuple[str, list[dict]]:
     saved = _saved_parsed(row)
-    limit = _limits(flow["parse"])[1 if is_sheet_name(row.file_name) else 0]
+    limit = _body_limit(row, flow["parse"])
     if saved.strip():
         raw_text = saved
     else:
@@ -140,7 +142,7 @@ def _chunk(db: Session, row: KbDocument, flow: dict) -> str:
     text = (row.search_text or "").strip()
     if not text:
         return "failed:还没有可切的正文"
-    limit = _limits(flow["parse"])[1 if is_sheet_name(row.file_name) else 0]
+    limit = _body_limit(row, flow["parse"])
     source = f"{row.title or ''} {row.tags or ''} {text}".strip()
     parts = _cut(source, flow, limit)
     if not parts:
@@ -168,7 +170,7 @@ def _read_raw(row: KbDocument, flow: dict) -> tuple[str, int, int, bytes | None]
     """抽出还没清洗的字。读不了文件时，用上次解析留下的字。"""
 
     text_limit, sheet_limit, sheet_rows = _limits(flow["parse"])
-    limit = sheet_limit if is_sheet_name(row.file_name) else text_limit
+    limit = _body_limit(row, flow["parse"])
     draft_rel = ready_draft_rel(row)
     if draft_rel:
         try:
@@ -180,7 +182,7 @@ def _read_raw(row: KbDocument, flow: dict) -> tuple[str, int, int, bytes | None]
                 "整理稿.docx",
                 draft,
                 collapse=False,
-                text_limit=text_limit,
+                text_limit=READY_TEXT_LIMIT,
                 sheet_limit=sheet_limit,
                 sheet_rows=sheet_rows,
                 mode=str(flow.get("parse") or "standard"),
@@ -224,6 +226,17 @@ def _limits(parse: str) -> tuple[int, int, int]:
     if parse == "head":
         return _HEAD_TEXT, _HEAD_SHEET, _HEAD_ROWS
     return 20000, 40000, 500
+
+
+def _body_limit(row: KbDocument, parse: str) -> int:
+    """带整理稿的正文最多 10 万字。其它资料仍按原来的上限。"""
+
+    text_limit, sheet_limit, _rows = _limits(parse)
+    if is_sheet_name(row.file_name):
+        return sheet_limit
+    if ready_draft_rel(row):
+        return READY_TEXT_LIMIT
+    return text_limit
 
 
 def _notes(db: Session, row: KbDocument) -> list[str]:

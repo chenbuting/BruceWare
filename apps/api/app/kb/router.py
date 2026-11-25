@@ -19,7 +19,7 @@ from app.core.config import get_settings
 from app.core.response import fail, ok
 from app.db.session import get_db, new_session
 from app.kb.extract import extract_search_text, extract_sheet_grid, is_sheet_name, sheet_rows_for_ask
-from app.kb.flow import apply_document_all, apply_document_step, saved_parsed
+from app.kb.flow import READY_TEXT_LIMIT, apply_document_all, apply_document_step, saved_parsed
 from app.kb.pipeline import flow_view, remember_parsed, search_text_for_index
 from app.kb.progress import mark_progress, read_progress
 from app.kb.assets import (
@@ -41,6 +41,7 @@ from app.kb.assets import (
     remember_ready_draft,
     ready_draft_rel,
     save_extracted_images,
+    ocr_for_search,
 )
 from app.kb.ocr import ensure_ocr
 from app.kb.vision import pending_vision_count, recognize_assets, recognize_one_asset
@@ -716,8 +717,7 @@ def _store_uploaded_document(
             return fail("整理稿没导入成。请确认已经排成普通段落。")
         parsed = saved_parsed(row)
         if parsed.strip():
-            row.search_text = parsed.strip()[:20000]
-            append_asset_alts(row, alts)
+            append_asset_alts(row, alts, READY_TEXT_LIMIT)
         mark_progress(job, "正在挂上图里的字", 6, steps)
         attach_ready_figure_text(db, row, parsed)
     else:
@@ -735,7 +735,7 @@ def _store_uploaded_document(
     return ok(data)
 
 
-# 整理稿仍用现在的默认抽法。切片放到 64 段，两万字正文加上标题也能切完。
+# 整理稿整份正文都留下，最多 10 万字。切片最多 200 段。
 _READY_FLOW = {
     "parse": "standard",
     "parse_hint": "",
@@ -747,7 +747,7 @@ _READY_FLOW = {
     "vector": True,
     "chunk_size": 400,
     "chunk_overlap": 60,
-    "max_chunks": 64,
+    "max_chunks": 200,
 }
 _READY_PROGRESS = {
     "parse": ("正在解析", 2),
@@ -1000,6 +1000,190 @@ def _materials_choose(question: str, search_q: str, rows: list, chunk_best: dict
     return kept[:3], used_vector, years
 
 
+def _material_one_page(question: str) -> bool:
+    """点名只要封面、某一页、其中一张时，不把整组都交出去。"""
+
+    text = question or ""
+    if re.search(r"其中一[张页个]|某一[张页]", text):
+        return True
+    if re.search(r"只[要给看]", text) and re.search(r"封面|一[张页]|第\s*\d+\s*页", text):
+        return True
+    return bool(re.search(r"第\s*\d+\s*页", text))
+
+
+def _question_marks(question: str) -> list[str]:
+    """问句里的型号、编号。有这些时，只拿它们去对图。"""
+
+    text = question or ""
+    found: list[str] = []
+    for match in re.finditer(r"[A-Za-z]{1,8}[-－—]?[A-Za-z0-9]{2,}(?:[-－—/×xX.+][A-Za-z0-9]+)*", text):
+        key = _compact_needle(match.group(0))
+        if key and key not in found:
+            found.append(key)
+    for match in re.finditer(r"字第\s*0*(\d{3,})\s*号", text):
+        key = str(int(match.group(1)))
+        if key not in found:
+            found.append(key)
+    for match in re.finditer(r"(?<!\d)(\d{6,})(?!\d)", text):
+        if match.group(1) not in found:
+            found.append(match.group(1))
+    return found
+
+
+def _question_span(question: str, blob: str) -> int:
+    """问句里有多长一段原词真的出现在这组图上。不靠词表。"""
+
+    compact = _compact_needle(question)
+    if len(compact) < 2 or not blob:
+        return 0
+    if compact in blob:
+        return len(compact)
+    limit = min(len(compact), 40)
+    for size in range(limit, 1, -1):
+        for start in range(0, len(compact) - size + 1):
+            if compact[start : start + size] in blob:
+                return size
+    return 0
+
+
+def _material_needles(question: str) -> list[str]:
+    """有型号或编号就只用它。没有就先空着，改用问句里对得上的原词。"""
+
+    return _question_marks(question)
+
+
+def _page_text(item) -> str:
+    return f"{item.alt_text or ''}\n{ocr_for_search(item.ocr_text or '')}"
+
+
+def _page_ids(text: str) -> set[str]:
+    """一页上能认出的编号、型号。用来判断还是不是同一份。"""
+
+    found: set[str] = set()
+    for match in re.finditer(
+        r"(?:报告编号|检验编号|合同编号|合同号|证书号|编号|型号规格|型号)\s*[:：是]?\s*([A-Za-z0-9（）()字第\-－—×xX.+/]{4,48})",
+        text,
+    ):
+        token = re.sub(r"\s+", "", match.group(1)).lower().strip("，,。.;；")
+        if len(token) >= 4:
+            found.add(token)
+    for match in re.finditer(r"[A-Za-z]{2,}[-－—][A-Za-z0-9]{2,}(?:[-－—/×xX.+][A-Za-z0-9]+)*", text):
+        found.add(re.sub(r"[\s\-－—]", "", match.group(0)).lower())
+    for match in re.finditer(r"字第\s*0*(\d{3,})\s*号", text):
+        found.add(str(int(match.group(1))))
+    for match in re.finditer(r"(?<!\d)(\d{6,})(?!\d)", text):
+        found.add(match.group(1))
+    return found
+
+
+def _material_groups(assets: list) -> list[list]:
+    """连续的图，同一编号或同一份的页归成一组。分不出界限时就是一整组。"""
+
+    groups: list[list] = []
+    current: list = []
+    current_ids: set[str] = set()
+    prev_last = False
+    for item in assets:
+        text = _page_text(item)
+        ids = _page_ids(text)
+        cover = "封面" in text
+        another = bool(re.search(r"另一份|新的一份|下一份", text))
+        same = bool(re.search(r"编号不变|编号还是|编号没变|型号和编号没变|还是同一个", text))
+        start_new = False
+        if current and another:
+            start_new = True
+        elif current and cover and ids and current_ids and not (ids & current_ids):
+            start_new = True
+        elif current and ids and current_ids and not (ids & current_ids) and not same:
+            start_new = True
+        elif current and prev_last and (cover or bool(re.search(r"第\s*1\s*页", text))):
+            start_new = True
+        if start_new:
+            groups.append(current)
+            current = []
+            current_ids = set()
+        current.append(item)
+        if ids:
+            current_ids |= ids
+        prev_last = "最后一页" in text
+    if current:
+        groups.append(current)
+    return groups
+
+
+def _group_hits(question: str, groups: list[list]) -> list[list]:
+    """有型号、编号就按它找。没有就看问句里哪一段原词在图上出现得最长。"""
+
+    needles = [_compact_needle(item) for item in _material_needles(question)]
+    blobs = [(_compact_needle("\n".join(_page_text(item) for item in group)), group) for group in groups]
+    if needles:
+        return [group for blob, group in blobs if any(needle in blob for needle in needles)]
+    ranked = [(group, _question_span(question, blob)) for blob, group in blobs]
+    best = max((score for _group, score in ranked), default=0)
+    if best < 2:
+        return []
+    return [group for group, score in ranked if score == best]
+
+
+def _compact_needle(text: str) -> str:
+    return re.sub(r"[\s\-－—_]", "", text or "").lower()
+
+
+def _one_from_groups(question: str, groups: list[list]):
+    """只要一张时，在对上的组里挑封面、第几页，或最对得上的那一页。"""
+
+    pages = [item for group in groups for item in group]
+    if not pages:
+        return None
+    page_no = re.search(r"第\s*(\d+)\s*页", question or "")
+    if page_no:
+        token = page_no.group(1)
+        found = [item for item in pages if re.search(rf"第\s*{token}\s*页", _page_text(item))]
+        if found:
+            return found[0]
+    if "封面" in (question or ""):
+        covers = [item for item in pages if "封面" in _page_text(item)]
+        if covers:
+            return covers[0]
+    needles = [_compact_needle(item) for item in _material_needles(question)]
+    best = pages[0]
+    best_score = -1
+    for item in pages:
+        blob = _compact_needle(_page_text(item))
+        if needles:
+            score = sum(1 for needle in needles if needle and needle in blob)
+        else:
+            score = _question_span(question, blob)
+        if score > best_score:
+            best = item
+            best_score = score
+    return best
+
+
+def _material_images(question: str, assets: list) -> tuple[list, str]:
+    """要一份就给整组。点名一张就给那一页。分不出组就整份交出去。"""
+
+    if not assets:
+        return [], "没有抽出图，可以打开原件。"
+    groups = _material_groups(assets)
+    split = len(groups) > 1
+    if not split:
+        return assets, f"图上分不出一份一份，图 {len(assets)} 张。"
+    hit = _group_hits(question, groups)
+    if not hit:
+        return [], "图上的字对不上你要的那一份，可以打开原件。"
+    if _material_one_page(question):
+        chosen = _one_from_groups(question, hit)
+        if chosen is None:
+            return [], "图上的字对不上你要的那一张，可以打开原件。"
+        return [chosen], "按你点的那一页，给你 1 张。"
+    chosen: list = []
+    for group in hit:
+        chosen.extend(group)
+    group_note = f"对上 {len(hit)} 组，共 {len(chosen)} 张。" if len(hit) > 1 else f"这一组 {len(chosen)} 张。"
+    return chosen, group_note
+
+
 def _materials_early(db: Session, question: str, search_q: str, rows: list, chunk_best: dict) -> dict:
     """拿资料：用语义和向量找文件，不看严格或宽松，也不写成回答。"""
 
@@ -1023,13 +1207,12 @@ def _materials_early(db: Session, question: str, search_q: str, rows: list, chun
     citations = []
     lines = [f"找到 {len(picked)} 份。{asked}{how}，按文件分开交给你。"]
     for index, row in enumerate(picked, start=1):
-        pictures = [asset_dict(item) for item in list_doc_assets(db, row.id)]
+        assets = list_doc_assets(db, row.id)
+        chosen, note = _material_images(question, assets)
+        pictures = [asset_dict(item) for item in chosen]
         title = row.title or row.file_name
         citations.append({"id": row.id, "title": title, "score": 1, "images": pictures})
-        if pictures:
-            lines.append(f"{index}. {title}：图 {len(pictures)} 张。")
-        else:
-            lines.append(f"{index}. {title}：没有抽出图，可以打开原件。")
+        lines.append(f"{index}. {title}：{note}")
     return {
         "answer": "\n".join(lines),
         "citations": citations,
