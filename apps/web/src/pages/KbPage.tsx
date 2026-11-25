@@ -15,6 +15,7 @@ import {
   fetchKbDocumentAssets,
   fetchKbDocumentChunks,
   fetchKbDocumentText,
+  fetchKbReadyText,
   fetchKbDocuments,
   fetchKbFolders,
   fetchKbLibraries,
@@ -27,6 +28,7 @@ import {
   generateKbWiki,
   kbAssetFileUrl,
   kbDocumentFileUrl,
+  kbDocumentReadyFileUrl,
   kbDocumentImagesPdfUrl,
   recognizeKbAsset,
   renameKbFolder,
@@ -1383,6 +1385,7 @@ export function KbPage() {
                   <button type="button" className="flex min-w-0 items-center gap-2 text-left" onClick={() => setPreview(item)}>
                     <Icon className={`h-4 w-4 shrink-0 ${color}`} />
                     <span className={`truncate ${item.disabled ? "text-[var(--muted)] line-through" : ""}`}>{item.title}</span>
+                    {item.has_ready_draft ? <span className="shrink-0 text-[11px] text-[var(--muted)]">含整理稿</span> : null}
                     {item.disabled ? <span className="shrink-0 text-[11px] text-[var(--muted)]">已停用</span> : null}
                     {vectorBadge(item.vector_state)}
                     {item.tags ? <span className="truncate text-[var(--muted)]">{item.tags}</span> : null}
@@ -2503,6 +2506,8 @@ function PreviewPane({
   onError: (message: string) => void;
 }) {
   const url = kbDocumentFileUrl(item.id);
+  const readyUrl = kbDocumentReadyFileUrl(item.id);
+  const [readyText, setReadyText] = useState("");
   const [draft, setDraft] = useState(item.wiki_summary || "");
   const [saving, setSaving] = useState(false);
   const [showExtras, setShowExtras] = useState(false);
@@ -2560,6 +2565,21 @@ function PreviewPane({
     const timer = window.setTimeout(() => setShowExtras(true), 0);
     return () => window.clearTimeout(timer);
   }, [item.id]);
+  useEffect(() => {
+    if (!item.has_ready_draft) {
+      setReadyText("");
+      return;
+    }
+    let stop = false;
+    fetchKbReadyText(item.id)
+      .then((row) => {
+        if (!stop) setReadyText(row.text || "");
+      })
+      .catch((err: Error) => onError(err.message));
+    return () => {
+      stop = true;
+    };
+  }, [item.id, item.has_ready_draft]);
 
   function applyFlow() {
     if (!isFlowPane(pane)) return;
@@ -2744,10 +2764,31 @@ function PreviewPane({
         {item.preview === "text" ? (
           <pre className="whitespace-pre-wrap bg-[var(--bg)] px-2 py-2 leading-6">{text || "正在读取…"}</pre>
         ) : null}
-        {!item.preview ? <p className="text-[var(--muted)]">这种文件一期先不预览内容，可以下载查看。</p> : null}
-        <a className="mt-3 inline-block text-[var(--muted)] underline" href={url} target="_blank" rel="noreferrer">
-          打开 / 下载
-        </a>
+        {!item.preview && !item.has_ready_draft ? <p className="text-[var(--muted)]">这种文件一期先不预览内容，可以下载查看。</p> : null}
+        {item.has_ready_draft ? (
+          <div className="mt-3">
+            <div className="flex flex-wrap gap-3">
+              <a className="text-[var(--muted)] underline" href={url} target="_blank" rel="noreferrer">
+                打开原件
+              </a>
+              <a className="text-[var(--muted)] underline" href={readyUrl} target="_blank" rel="noreferrer">
+                打开整理稿
+              </a>
+              <button type="button" className="text-[var(--muted)] underline" onClick={() => setPane("images")}>
+                看图片
+              </button>
+              <button type="button" className="text-[var(--muted)] underline" onClick={() => setPane("chunks")}>
+                看切片
+              </button>
+            </div>
+            <p className="mt-3 text-[12px] leading-5 text-[var(--muted)]">下面是整理稿里的正文，切片用的是这些字。图片仍是从原件抽出的。</p>
+            <pre className="mt-2 whitespace-pre-wrap bg-[var(--bg)] px-2 py-2 leading-6">{readyText || "正在读取整理稿…"}</pre>
+          </div>
+        ) : (
+          <a className="mt-3 inline-block text-[var(--muted)] underline" href={url} target="_blank" rel="noreferrer">
+            打开 / 下载
+          </a>
+        )}
       </div>
 
       <div className={pane === "images" ? "" : "hidden"}>

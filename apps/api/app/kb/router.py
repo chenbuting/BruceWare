@@ -253,6 +253,7 @@ def _doc_dict(row: KbDocument, db: Session | None = None) -> dict:
         "wiki_stale": note.stale,
         "vector_state": state,
         "disabled": bool(row.disabled),
+        "has_ready_draft": bool(ready_draft_rel(row)),
         "flow": flow_view(row),
         "created_at": _iso(row.created_at),
         "updated_at": _iso(row.updated_at),
@@ -2080,6 +2081,43 @@ def download_document(doc_id: int, db: Session = Depends(get_db)):
         media = "text/plain; charset=utf-8"
     filename = quote(row.file_name or path.name)
     return FileResponse(path, media_type=media, filename=row.file_name, headers={"Content-Disposition": f"inline; filename*=UTF-8''{filename}"})
+
+
+@router.get("/kb/documents/{doc_id}/ready-file")
+def download_ready_draft(doc_id: int, db: Session = Depends(get_db)):
+    """打开整理稿。没有这份的旧资料走不进来。"""
+
+    row = db.get(KbDocument, doc_id)
+    if row is None:
+        return fail("这份资料不存在", 404)
+    rel = ready_draft_rel(row)
+    if not rel:
+        return fail("这份没有整理稿", 404)
+    try:
+        path = abs_path(row.library_id, rel)
+    except ValueError:
+        return fail("文件路径无效", 404)
+    if not path.is_file():
+        return fail("整理稿找不到了", 404)
+    filename = quote("整理稿.docx")
+    return FileResponse(
+        path,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename="整理稿.docx",
+        headers={"Content-Disposition": f"inline; filename*=UTF-8''{filename}"},
+    )
+
+
+@router.get("/kb/documents/{doc_id}/ready-text")
+def read_ready_text(doc_id: int, db: Session = Depends(get_db)):
+    """整理稿正文。切片用的就是这段字。"""
+
+    row = db.get(KbDocument, doc_id)
+    if row is None:
+        return fail("这份资料不存在", 404)
+    if not ready_draft_rel(row):
+        return fail("这份没有整理稿", 404)
+    return ok({"text": saved_parsed(row).strip()})
 
 
 @router.get("/kb/documents/{doc_id}/images.pdf")

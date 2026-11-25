@@ -735,6 +735,15 @@ export function kbDocumentFileUrl(id: number) {
   return `/api/v1/kb/documents/${id}/file`;
 }
 
+export function kbDocumentReadyFileUrl(id: number) {
+  return `/api/v1/kb/documents/${id}/ready-file`;
+}
+
+/** 整理稿正文。只有带整理稿的资料才有。 */
+export function fetchKbReadyText(id: number) {
+  return request<{ text: string }>(`/api/v1/kb/documents/${id}/ready-text`);
+}
+
 export function kbDocumentImagesPdfUrl(id: number) {
   return `/api/v1/kb/documents/${id}/images.pdf`;
 }

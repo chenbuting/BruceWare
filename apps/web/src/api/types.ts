@@ -399,6 +399,7 @@ export type KbDocument = {
   wiki_stale: boolean;
   vector_state?: "none" | "ready" | "stale";
   disabled?: boolean;
+  has_ready_draft?: boolean;
   vector_ok?: boolean;
   vector_hint?: string;
   flow?: KbDocFlow;
