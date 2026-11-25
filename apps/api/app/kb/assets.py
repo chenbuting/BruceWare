@@ -140,29 +140,47 @@ def _from_pdf(data: bytes) -> list[tuple[int, bytes]]:
 def _from_docx(data: bytes) -> list[tuple[int, bytes]]:
     """按正文里先出现的图来抽。正文没提到的图补在最后。"""
 
+    found: list[tuple[int, bytes]] = []
+    for _anchor, raw in docx_figure_sources(data):
+        usable = _usable_image(raw)
+        if usable:
+            found.append((0, usable))
+    return found
+
+
+def docx_figure_sources(data: bytes) -> list[tuple[object, bytes]]:
+    """按抽图的同一顺序给出原图。前一项是所在段落，空表示补在文末。"""
+
     try:
         from docx import Document
-        from docx.oxml.ns import qn
     except ImportError:
         return []
     try:
         doc = Document(io.BytesIO(data))
     except Exception:
         return []
-    found: list[tuple[int, bytes]] = []
+    return figures_in_document(doc)
+
+
+def figures_in_document(doc) -> list[tuple[object, bytes]]:
+    """从已经打开的 Word 里按同样顺序取图，段落属于这份文档。"""
+
+    from docx.oxml.ns import qn
+
+    found: list[tuple[object, bytes]] = []
     seen: set[str] = set()
 
-    def take(rid: str | None) -> None:
+    def take(rid: str | None, anchor) -> None:
         if not rid or rid in seen:
             return
         seen.add(rid)
         part = doc.part.related_parts.get(rid)
-        usable = _usable_image(getattr(part, "blob", b"") if part is not None else b"")
-        if usable:
-            found.append((0, usable))
+        raw = getattr(part, "blob", b"") if part is not None else b""
+        if _usable_image(raw):
+            found.append((anchor, raw))
 
     for blip in doc.element.body.iter(qn("a:blip")):
-        take(blip.get(qn("r:embed")) or blip.get(qn("r:link")))
+        take(blip.get(qn("r:embed")) or blip.get(qn("r:link")), _figure_anchor(blip))
     for rel in doc.part.rels.values():
         try:
             if "image" not in str(getattr(rel, "reltype", "")):
@@ -170,8 +188,24 @@ def _from_docx(data: bytes) -> list[tuple[int, bytes]]:
             rid = getattr(rel, "rId", None)
         except Exception:
             continue
-        take(rid)
+        take(rid, None)
     return found
+
+
+def _figure_anchor(node):
+    """图所在的正文段落。在文本框里的图不往框里写字。"""
+
+    from docx.oxml.ns import qn
+
+    anchor = None
+    current = node
+    while current is not None:
+        if current.tag == qn("w:txbxContent"):
+            return None
+        if current.tag == qn("w:p") and anchor is None:
+            anchor = current
+        current = current.getparent()
+    return anchor
 
 
 def extract_images(file_name: str, data: bytes) -> list[tuple[int, bytes]]:

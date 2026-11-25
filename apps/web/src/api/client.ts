@@ -662,8 +662,26 @@ export function fetchKbDocuments(libraryId: number, folderId: number | null, q =
   return request<{ items: KbDocument[] }>(`/api/v1/kb/libraries/${libraryId}/documents${query ? `?${query}` : ""}`);
 }
 
-export function fetchKbReadySkill() {
-  return request<{ name: string; text: string }>("/api/v1/kb/ready-skill");
+/** 按原文件出一份可检查的整理稿，不入库。 */
+export async function downloadKbReadyDraft(file: File): Promise<string> {
+  const body = new FormData();
+  body.append("file", file);
+  const res = await fetch("/api/v1/kb/ready-draft", { method: "POST", body });
+  const kind = res.headers.get("content-type") || "";
+  if (!res.ok || kind.includes("application/json")) {
+    const data = await res.json().catch(() => null);
+    throw new Error((data && data.message) || "出稿失败");
+  }
+  const blob = await res.blob();
+  const note = decodeURIComponent(res.headers.get("X-Kb-Note") || "");
+  const name = decodeURIComponent(res.headers.get("X-Kb-Name") || "") || `${file.name.replace(/\.[^.]+$/, "")}-图字.docx`;
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = name;
+  link.click();
+  URL.revokeObjectURL(url);
+  return note;
 }
 
 export function uploadKbDocument(libraryId: number, file: File, folderId: number | null, tags = "", force = false, ready = false) {

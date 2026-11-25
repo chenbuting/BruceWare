@@ -3,6 +3,7 @@
 import json
 import re
 from datetime import datetime
+from pathlib import Path
 from threading import Thread
 from urllib.parse import quote
 
@@ -13,7 +14,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.ai import chat_complete, chat_complete_stream, llm_public
-from app.core.config import get_settings
 from app.core.response import fail, ok
 from app.db.session import get_db, new_session
 from app.kb.extract import extract_search_text, extract_sheet_grid, is_sheet_name, sheet_rows_for_ask
@@ -531,14 +531,31 @@ def list_documents(
     return ok({"items": items})
 
 
-@router.get("/kb/ready-skill")
-def ready_skill():
-    """把整理稿规则原文交给页面，用来复制和下载。"""
+@router.post("/kb/ready-draft")
+async def ready_draft(file: UploadFile = File(...)):
+    """按这份文件出一份可检查的整理稿。不入库，不切片，不算向量。"""
 
-    path = get_settings().repo_root / ".cursor" / "skills" / "kb-ready-doc" / "SKILL.md"
-    if not path.is_file():
-        return fail("整理稿规则还没放好", 404)
-    return ok({"name": "知识库整理稿规则.md", "text": path.read_text(encoding="utf-8")})
+    from app.kb.ready_fill import draft_bytes
+
+    data = await file.read()
+    if not data:
+        return fail("文件是空的")
+    name = safe_filename(file.filename or "未命名")
+    try:
+        blob, summary = draft_bytes(name, data)
+    except ValueError as exc:
+        return fail(str(exc))
+    stem = Path(name).stem or "整理稿"
+    filename = quote(f"{stem}-图字.docx")
+    return Response(
+        content=blob,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{filename}",
+            "X-Kb-Name": filename,
+            "X-Kb-Note": quote(summary),
+        },
+    )
 
 
 @router.post("/kb/libraries/{library_id}/documents")

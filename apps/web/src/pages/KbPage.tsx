@@ -18,7 +18,7 @@ import {
   fetchKbDocuments,
   fetchKbFolders,
   fetchKbLibraries,
-  fetchKbReadySkill,
+  downloadKbReadyDraft,
   fetchKbSession,
   fetchKbSessions,
   fetchKbWikis,
@@ -299,8 +299,8 @@ export function KbPage() {
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [pendingReady, setPendingReady] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
-  const [skillText, setSkillText] = useState("");
   const uploadReady = useRef(false);
+  const uploadDraft = useRef(false);
   const [uploadTags, setUploadTags] = useState("");
   const [manageLib, setManageLib] = useState(false);
   const [question, setQuestion] = useState("");
@@ -867,29 +867,18 @@ export function KbPage() {
 
   function openImport() {
     setImportOpen(true);
-    if (skillText) return;
-    fetchKbReadySkill()
-      .then((data) => setSkillText(data.text || ""))
-      .catch((err: Error) => setError(err.message));
-  }
-
-  function copySkill() {
-    if (!skillText) return;
-    navigator.clipboard.writeText(skillText).then(() => setHint("规则已复制，可以贴给别的 AI。")).catch(() => setError("复制失败"));
-  }
-
-  function downloadSkill() {
-    if (!skillText) return;
-    const url = URL.createObjectURL(new Blob([skillText], { type: "text/markdown;charset=utf-8" }));
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "知识库整理稿规则.md";
-    link.click();
-    URL.revokeObjectURL(url);
   }
 
   function pickUpload(ready: boolean) {
+    uploadDraft.current = false;
     uploadReady.current = ready;
+    setImportOpen(false);
+    uploadRef.current?.click();
+  }
+
+  function pickDraft() {
+    uploadDraft.current = true;
+    uploadReady.current = false;
     setImportOpen(false);
     uploadRef.current?.click();
   }
@@ -903,6 +892,14 @@ export function KbPage() {
   }
 
   function onUpload(file: File) {
+    if (uploadDraft.current) {
+      uploadDraft.current = false;
+      run(async () => {
+        const note = await downloadKbReadyDraft(file);
+        setHint(`稿已下载。${note} 请打开检查、补充和改错，再用「导入改好的稿」。`);
+      });
+      return;
+    }
     const ready = uploadReady.current;
     run(async () => {
       try {
@@ -1805,16 +1802,13 @@ export function KbPage() {
             </div>
             <div className="border border-[var(--line)] p-3">
               <p className="mb-1 font-medium">整理稿导入</p>
-              <p className="mb-3 text-[var(--muted)]">先按规则把各种文件收成普通段落的 Word。导入后直接做完解析、清洗、切片和向量，大约两万字都会切开。文中以「图N」开头的段落会直接挂到对应的图上，不用再识图。规则可以复制或下载，贴给 Cursor、GPT、DeepSeek 使用。</p>
+              <p className="mb-3 text-[var(--muted)]">先按这个文件出一份 Word 稿。你检查、补充、改错之后，再导入。导入后才解析、清洗、切片和算向量。以「图N」开头的段落会挂到对应的图上。</p>
               <div className="flex flex-wrap gap-2">
-                <button type="button" className={btnClass} disabled={busy || !skillText} onClick={copySkill}>
-                  复制规则
-                </button>
-                <button type="button" className={btnClass} disabled={busy || !skillText} onClick={downloadSkill}>
-                  下载规则
+                <button type="button" className={btnClass} disabled={busy} onClick={pickDraft}>
+                  先出一份稿
                 </button>
                 <button type="button" className={btnClass} disabled={busy} onClick={() => pickUpload(true)}>
-                  选整理稿
+                  导入改好的稿
                 </button>
               </div>
             </div>

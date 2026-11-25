@@ -58,11 +58,11 @@ def _lines_of(result, kind: str) -> list[str]:
     return found
 
 
-def read_ocr_text(data: bytes) -> str:
-    """认一张图上的字。"""
+def read_ocr_lines(data: bytes) -> list[str]:
+    """按行认一张图上的字。不截断。"""
 
     if not data:
-        return ""
+        return []
     image = Image.open(io.BytesIO(data)).convert("RGB")
     engine, kind = _engine()
     try:
@@ -71,5 +71,10 @@ def read_ocr_text(data: bytes) -> str:
         payload = np.array(image)
     except ImportError:
         payload = image
-    result = engine(payload)
-    return " ".join(_lines_of(result, kind)).strip()[:400]
+    return _lines_of(engine(payload), kind)
+
+
+def read_ocr_text(data: bytes) -> str:
+    """认一张图上的字。"""
+
+    return " ".join(read_ocr_lines(data)).strip()[:400]
