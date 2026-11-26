@@ -2073,6 +2073,7 @@ function AssetWords({
   const [groupFrom, setGroupFrom] = useState("");
   const [groupTo, setGroupTo] = useState("");
   const [groupName, setGroupName] = useState("");
+  const [picking, setPicking] = useState(false);
   const [savingGroups, setSavingGroups] = useState(false);
   const [drafts, setDrafts] = useState<Record<number, { caption: string; keywords: string; words: string }>>({});
   const [savingId, setSavingId] = useState<number | null>(null);
@@ -2094,6 +2095,10 @@ function AssetWords({
     setOpenId(null);
     setShowAll(false);
     setZoom(null);
+    setPicking(false);
+    setGroupFrom("");
+    setGroupTo("");
+    setGroupName("");
     setLoading(true);
     fetchKbDocumentAssets(docId)
       .then((data) => {
@@ -2224,6 +2229,38 @@ function AssetWords({
       .finally(() => setSavingGroups(false));
   }
 
+  function figureNo(item: KbDocAsset) {
+    const match = (item.alt || "").match(/图\s*(\d+)/);
+    if (match) return Number(match[1]);
+    const index = items.findIndex((row) => row.id === item.id);
+    return index >= 0 ? index + 1 : 0;
+  }
+
+  function beginPick() {
+    setGroupFrom("");
+    setGroupTo("");
+    setPicking((on) => !on);
+    setShowAll(true);
+  }
+
+  function onThumb(item: KbDocAsset, zoomIndex: number) {
+    if (!picking) {
+      setZoom(zoomIndex);
+      return;
+    }
+    const number = figureNo(item);
+    if (!number) return;
+    if (!groupFrom || groupTo) {
+      setGroupFrom(String(number));
+      setGroupTo("");
+      return;
+    }
+    const from = Number(groupFrom);
+    setGroupFrom(String(Math.min(from, number)));
+    setGroupTo(String(Math.max(from, number)));
+    setPicking(false);
+  }
+
   function addGroup() {
     const start = Number(groupFrom);
     const end = Number(groupTo);
@@ -2236,6 +2273,7 @@ function AssetWords({
       setGroupFrom("");
       setGroupTo("");
       setGroupName("");
+      setPicking(false);
     });
   }
 
@@ -2291,17 +2329,16 @@ function AssetWords({
       <div className="mb-3 rounded-md border border-[var(--line)] px-2 py-2">
         <p className="text-[13px] font-medium">拿资料分组</p>
         <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">
-          圈连续的一段。问的时候，图上有更具体的内容就按图给；图上没有，就按组名的意思给。
+          {picking ? (groupFrom ? "再点结尾的那张图。" : "先点开头的那张图。") : "点「圈一组」，再在图上点两下。没圈的时候，点图仍然放大。"}
         </p>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-[12px] text-[var(--muted)]">从第</span>
-          <input className={`${inputClass} w-16`} inputMode="numeric" value={groupFrom} onChange={(e) => setGroupFrom(e.target.value)} />
-          <span className="text-[12px] text-[var(--muted)]">张到第</span>
-          <input className={`${inputClass} w-16`} inputMode="numeric" value={groupTo} onChange={(e) => setGroupTo(e.target.value)} />
-          <span className="text-[12px] text-[var(--muted)]">张</span>
+          <button type="button" className={btnClass} disabled={savingGroups} onClick={beginPick}>
+            {picking ? "取消圈选" : "圈一组"}
+          </button>
+          {groupFrom && groupTo ? <span className="text-[12px]">图{groupFrom}–图{groupTo}</span> : null}
           <input className={`${inputClass} w-40`} maxLength={40} value={groupName} placeholder="组名，可以不填" onChange={(e) => setGroupName(e.target.value)} />
-          <button type="button" className={btnClass} disabled={savingGroups} onClick={addGroup}>
-            {savingGroups ? "在存…" : "圈成一组"}
+          <button type="button" className={btnClass} disabled={savingGroups || !groupFrom || !groupTo} onClick={addGroup}>
+            {savingGroups ? "在存…" : "确定这一组"}
           </button>
         </div>
         {groups.length ? (
@@ -2325,15 +2362,19 @@ function AssetWords({
           const draft = drafts[item.id] || noteOf(item);
           const open = openId === item.id;
           const zoomIndex = items.findIndex((row) => row.id === item.id);
+          const number = figureNo(item);
+          const fromNo = Number(groupFrom);
+          const toNo = Number(groupTo);
+          const inPick = Number.isInteger(fromNo) && Number.isInteger(toNo) && fromNo >= 1 && toNo >= fromNo && number >= fromNo && number <= toNo;
           return (
-            <div key={item.id} className={`rounded-md border px-2 py-2 ${open ? "border-[var(--text)]" : "border-[var(--line)]"}`}>
-              <button type="button" className="block w-full" title="点图放大" onClick={() => setZoom(zoomIndex)}>
+            <div key={item.id} className={`rounded-md border px-2 py-2 ${inPick ? "border-[var(--text)] bg-[rgb(31_30_27_/_0.06)]" : open ? "border-[var(--text)]" : "border-[var(--line)]"}`}>
+              <button type="button" className="block w-full" title={picking ? "点这张，定这一组" : "点图放大"} onClick={() => onThumb(item, zoomIndex)}>
                 <img
                   src={item.url || kbAssetFileUrl(item.id)}
                   alt={item.alt}
                   loading="lazy"
                   decoding="async"
-                  className="mx-auto h-28 w-full cursor-zoom-in object-contain"
+                  className={`mx-auto h-28 w-full object-contain ${picking ? "cursor-pointer" : "cursor-zoom-in"}`}
                 />
               </button>
               <p className="mt-1 truncate text-[12px] text-[var(--muted)]">{item.alt || "图"}</p>
