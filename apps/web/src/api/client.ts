@@ -13,6 +13,7 @@ import type {
   KbSession,
   KbSessionDetail,
   KbDocAsset,
+  KbImageGroup,
   KbDocument,
   KbEvidenceMode,
   KbVisionEngine,
@@ -753,7 +754,14 @@ export function kbAssetFileUrl(id: number) {
 }
 
 export function fetchKbDocumentAssets(id: number) {
-  return request<{ items: KbDocAsset[] }>(`/api/v1/kb/documents/${id}/assets`);
+  return request<{ items: KbDocAsset[]; groups?: KbImageGroup[] }>(`/api/v1/kb/documents/${id}/assets`);
+}
+
+export function saveKbImageGroups(id: number, groups: KbImageGroup[]) {
+  return request<{ groups: KbImageGroup[] }>(`/api/v1/kb/documents/${id}/image-groups`, {
+    method: "PUT",
+    body: JSON.stringify({ groups }),
+  });
 }
 
 export function saveKbAssetOcr(id: number, note: { caption?: string; keywords?: string; ocr_text?: string }) {

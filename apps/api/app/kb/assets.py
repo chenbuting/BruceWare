@@ -99,6 +99,42 @@ def remember_ready_draft(row: KbDocument, rel_path: str) -> None:
     _set_extra(row, "ready_draft", rel_path)
 
 
+def asset_figure_no(item) -> int:
+    """图号。没有图号时用抽出顺序。"""
+
+    found = _FIG_NO.findall(getattr(item, "alt_text", "") or "")
+    if found:
+        return int(found[-1])
+    return int(getattr(item, "sort_order", 0) or 0)
+
+
+def image_groups(row: KbDocument) -> list[dict]:
+    """拿资料用的人工分组。旧资料没有。"""
+
+    raw = _extra(row).get("image_groups") or []
+    if not isinstance(raw, list):
+        return []
+    groups: list[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        try:
+            start = int(item.get("start") or 0)
+            end = int(item.get("end") or 0)
+        except (TypeError, ValueError):
+            continue
+        if start < 1 or end < start:
+            continue
+        groups.append({"name": str(item.get("name") or "").strip()[:40], "start": start, "end": end})
+    return groups
+
+
+def save_image_groups(row: KbDocument, groups: list[dict]) -> None:
+    """整份替换人工分组。只给拿资料用。"""
+
+    _set_extra(row, "image_groups", groups)
+
+
 def already_extracted(row: KbDocument) -> bool:
     """这份资料是不是已经抽过图。提问前用来跳过读盘。"""
 

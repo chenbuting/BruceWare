@@ -305,6 +305,12 @@ export type KbChunk = {
   vector_hint?: string;
 };
 
+export type KbImageGroup = {
+  name: string;
+  start: number;
+  end: number;
+};
+
 export type KbDocAsset = {
   id: number;
   alt: string;

@@ -37,6 +37,7 @@ import {
   reindexKbDocument,
   saveKbAssetOcr,
   saveKbAssetsBatch,
+  saveKbImageGroups,
   saveKbChunk,
   saveKbStage,
   saveKbWiki,
@@ -45,7 +46,7 @@ import {
   updateKbLibraryPolicy,
   uploadKbDocument,
 } from "@/api/client";
-import type { KbAskKind, KbAskResult, KbChunk, KbCleanRule, KbDocAsset, KbDocFlow, KbDocument, KbEvidenceMode, KbFolder, KbLibrary, KbQuality, KbSession, KbVisionEngine, KbWikiList } from "@/api/types";
+import type { KbAskKind, KbAskResult, KbChunk, KbCleanRule, KbDocAsset, KbDocFlow, KbDocument, KbEvidenceMode, KbFolder, KbImageGroup, KbLibrary, KbQuality, KbSession, KbVisionEngine, KbWikiList } from "@/api/types";
 import { answerHasAsset, KbAnswerContent } from "@/components/KbAnswerContent";
 import { ImageLightbox } from "@/components/ImageLightbox";
 import { ConfirmModal, Modal } from "@/components/Modal";
@@ -2068,6 +2069,11 @@ function AssetWords({
   onDocChange: () => void;
 }) {
   const [items, setItems] = useState<KbDocAsset[]>([]);
+  const [groups, setGroups] = useState<KbImageGroup[]>([]);
+  const [groupFrom, setGroupFrom] = useState("");
+  const [groupTo, setGroupTo] = useState("");
+  const [groupName, setGroupName] = useState("");
+  const [savingGroups, setSavingGroups] = useState(false);
   const [drafts, setDrafts] = useState<Record<number, { caption: string; keywords: string; words: string }>>({});
   const [savingId, setSavingId] = useState<number | null>(null);
   const [seeingId, setSeeingId] = useState<number | null>(null);
@@ -2093,6 +2099,7 @@ function AssetWords({
       .then((data) => {
         if (!alive) return;
         setItems(data.items);
+        setGroups(data.groups || []);
         setDrafts(Object.fromEntries(data.items.map((item) => [item.id, noteOf(item)])));
       })
       .catch((err: Error) => onError(err.message))
@@ -2202,6 +2209,36 @@ function AssetWords({
     setOpenId(next.id);
   }
 
+  function writeGroups(next: KbImageGroup[]) {
+    setSavingGroups(true);
+    return saveKbImageGroups(docId, next)
+      .then((data) => {
+        setGroups(data.groups || []);
+        onHint("分组已保存，只在拿资料时用", true);
+        return true;
+      })
+      .catch((err: Error) => {
+        onError(err.message);
+        return false;
+      })
+      .finally(() => setSavingGroups(false));
+  }
+
+  function addGroup() {
+    const start = Number(groupFrom);
+    const end = Number(groupTo);
+    if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < start) {
+      onError("请写成从第几张到第几张");
+      return;
+    }
+    void writeGroups([...groups, { name: groupName.trim(), start, end }]).then((saved) => {
+      if (!saved) return;
+      setGroupFrom("");
+      setGroupTo("");
+      setGroupName("");
+    });
+  }
+
   function seeOne(item: KbDocAsset) {
     setSeeingId(item.id);
     recognizeKbAsset(item.id)
@@ -2251,6 +2288,38 @@ function AssetWords({
       <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">
         点「改说明」连着改，上一张/下一张会自动存字。改完点资料标题旁的「重算向量」。
       </p>
+      <div className="mb-3 rounded-md border border-[var(--line)] px-2 py-2">
+        <p className="text-[13px] font-medium">拿资料分组</p>
+        <p className="mb-2 text-[12px] leading-5 text-[var(--muted)]">
+          圈连续的一段。问的时候，图上有更具体的内容就按图给；图上没有，就按组名的意思给。
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[12px] text-[var(--muted)]">从第</span>
+          <input className={`${inputClass} w-16`} inputMode="numeric" value={groupFrom} onChange={(e) => setGroupFrom(e.target.value)} />
+          <span className="text-[12px] text-[var(--muted)]">张到第</span>
+          <input className={`${inputClass} w-16`} inputMode="numeric" value={groupTo} onChange={(e) => setGroupTo(e.target.value)} />
+          <span className="text-[12px] text-[var(--muted)]">张</span>
+          <input className={`${inputClass} w-40`} maxLength={40} value={groupName} placeholder="组名，可以不填" onChange={(e) => setGroupName(e.target.value)} />
+          <button type="button" className={btnClass} disabled={savingGroups} onClick={addGroup}>
+            {savingGroups ? "在存…" : "圈成一组"}
+          </button>
+        </div>
+        {groups.length ? (
+          <ul className="mt-2 space-y-1 text-[12px]">
+            {groups.map((group, index) => (
+              <li key={`${group.start}-${group.end}-${index}`} className="flex items-center gap-2">
+                <span>
+                  图{group.start}–图{group.end}
+                  {group.name ? ` ${group.name}` : ""}
+                </span>
+                <button type="button" className="text-[var(--muted)] underline" disabled={savingGroups} onClick={() => writeGroups(groups.filter((_, at) => at !== index))}>
+                  删除
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
         {visible.map((item) => {
           const draft = drafts[item.id] || noteOf(item);

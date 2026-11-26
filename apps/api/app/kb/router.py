@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.ai import chat_complete, chat_complete_stream, llm_public
+from app.core.ai import can_embed, chat_complete, chat_complete_stream, embed_texts, llm_public
 from app.core.config import get_settings
 from app.core.response import fail, ok
 from app.db.session import get_db, new_session
@@ -30,6 +30,9 @@ from app.kb.assets import (
     attach_ready_figure_text,
     asset_dict,
     asset_edit_dict,
+    asset_figure_no,
+    image_groups,
+    save_image_groups,
     document_images_pdf,
     asset_notes_for_ask,
     assets_for_ask,
@@ -66,6 +69,7 @@ from app.kb.vector import (
     list_chunks,
     document_vector_state,
     ensure_chunks,
+    cosine,
     hybrid_rank,
     index_document,
     pack_ask_snippets,
@@ -136,6 +140,20 @@ class AssetBatchIn(BaseModel):
     """一次提交多张图的说明，只存字。"""
 
     items: list[AssetBatchItem] = Field(default_factory=list, max_length=200)
+
+
+class ImageGroupIn(BaseModel):
+    """拿资料里人工圈定的连续一段图。"""
+
+    name: str = Field(default="", max_length=40)
+    start: int
+    end: int
+
+
+class ImageGroupsIn(BaseModel):
+    """整份替换。只在拿资料时使用。"""
+
+    groups: list[ImageGroupIn] = Field(default_factory=list, max_length=40)
 
 
 class ChunkPatch(BaseModel):
@@ -1076,18 +1094,53 @@ def _page_ids(text: str) -> set[str]:
     return found
 
 
-def _material_groups(assets: list) -> list[list]:
-    """连续的图，同一编号或同一份的页归成一组。分不出界限时就是一整组。"""
+def _page_closed(text: str) -> bool:
+    """这一页是一份的结尾。最后一页，或第 N 页共 N 页。"""
 
+    if "最后一页" in (text or ""):
+        return True
+    match = re.search(r"第\s*(\d+)\s*页\s*共\s*(\d+)\s*页", text or "")
+    return bool(match and match.group(1) == match.group(2))
+
+
+def _stamp_ids(page_sets: list[set[str]]) -> set[str]:
+    """和多个互不一起出现的编号绑在一起的，当成公章或抬头。"""
+
+    counts: dict[str, int] = {}
+    for ids in page_sets:
+        for token in ids:
+            counts[token] = counts.get(token, 0) + 1
+    stable = {token for token, count in counts.items() if count >= 2}
+    stamps: set[str] = set()
+    for token in counts:
+        companions = [item for item in stable if item != token and any(token in ids and item in ids for ids in page_sets)]
+        if len(companions) < 2:
+            continue
+        for index, left in enumerate(companions):
+            for right in companions[index + 1 :]:
+                together = any(token in ids and left in ids and right in ids for ids in page_sets)
+                if not together:
+                    stamps.add(token)
+                    break
+            if token in stamps:
+                break
+    return stamps
+
+
+def _material_groups(assets: list) -> list[list]:
+    """连续的图，同一份的页归成一组。没有编号的页跟着当前这份。分不出界限时就是一整组。"""
+
+    texts = [_page_text(item) for item in assets]
+    raw_sets = [_page_ids(text) for text in texts]
+    stamps = _stamp_ids(raw_sets)
     groups: list[list] = []
     current: list = []
     current_ids: set[str] = set()
     prev_last = False
-    for item in assets:
-        text = _page_text(item)
-        ids = _page_ids(text)
+    for item, text, raw in zip(assets, texts, raw_sets):
+        ids = raw - stamps
         cover = "封面" in text
-        another = bool(re.search(r"另一份|新的一份|下一份", text))
+        another = bool(re.search(r"另一份|新的一份|下一份|又是一份", text))
         same = bool(re.search(r"编号不变|编号还是|编号没变|型号和编号没变|还是同一个", text))
         start_new = False
         if current and another:
@@ -1105,24 +1158,74 @@ def _material_groups(assets: list) -> list[list]:
         current.append(item)
         if ids:
             current_ids |= ids
-        prev_last = "最后一页" in text
+        prev_last = _page_closed(text)
     if current:
         groups.append(current)
     return groups
 
 
-def _group_hits(question: str, groups: list[list]) -> list[list]:
-    """有型号、编号就按它找。没有就看问句里哪一段原词在图上出现得最长。"""
+def _apply_manual_groups(assets: list, manual: list[dict]) -> list[tuple[list, str]]:
+    """圈过的连续图号自成一组。没圈到的仍自动分组。"""
 
-    needles = [_compact_needle(item) for item in _material_needles(question)]
-    blobs = [(_compact_needle("\n".join(_page_text(item) for item in group)), group) for group in groups]
-    if needles:
-        return [group for blob, group in blobs if any(needle in blob for needle in needles)]
-    ranked = [(group, _question_span(question, blob)) for blob, group in blobs]
-    best = max((score for _group, score in ranked), default=0)
-    if best < 2:
-        return []
-    return [group for group, score in ranked if score == best]
+    covered: set[int] = set()
+    packed: list[tuple[list, str]] = []
+    for group in manual:
+        start = int(group.get("start") or 0)
+        end = int(group.get("end") or 0)
+        chosen = [item for item in assets if start <= asset_figure_no(item) <= end]
+        if not chosen:
+            continue
+        covered.update(asset_figure_no(item) for item in chosen)
+        packed.append((chosen, str(group.get("name") or "").strip()))
+    rest = [item for item in assets if asset_figure_no(item) not in covered]
+    for group in _material_groups(rest):
+        packed.append((group, ""))
+    return packed
+
+
+def _name_similarity(question: str, names: list[str]) -> tuple[dict[str, float], bool]:
+    """组名按意思对。没有向量或对不上时，调用方改用字面。"""
+
+    unique = list(dict.fromkeys(name.strip() for name in names if name and name.strip()))
+    if not unique or not can_embed():
+        return {}, False
+    try:
+        vectors = embed_texts([question, *unique])
+    except (ValueError, IndexError):
+        return {}, False
+    if len(vectors) != len(unique) + 1:
+        return {}, False
+    query = vectors[0]
+    return {name: cosine(query, vec) for name, vec in zip(unique, vectors[1:])}, True
+
+
+def _pick_tight_groups(question: str, groups: list[tuple[list, str]]) -> tuple[list[list], str]:
+    """页上有更具体的内容就跟页走。页上没有，组名意思更近就跟组名走。"""
+
+    if not groups:
+        return [], "none"
+    sims, used_vector = _name_similarity(question, [name for _assets, name in groups])
+    scored = []
+    for assets, name in groups:
+        blob = _compact_needle("\n".join(_page_text(item) for item in assets))
+        clean_name = (name or "").strip()
+        page_span = _question_span(question, blob)
+        name_span = _question_span(question, clean_name) if clean_name else 0
+        sim = sims.get(clean_name, 0.0) if clean_name else 0.0
+        scored.append((assets, clean_name, page_span, name_span, sim))
+    best_page = max(item[2] for item in scored)
+    best_name_span = max(item[3] for item in scored)
+    best_sim = max(item[4] for item in scored)
+    if best_page >= 2 and best_page > max(best_name_span, 2):
+        return [item[0] for item in scored if item[2] == best_page], "page"
+    if best_sim >= 0.28:
+        return [item[0] for item in scored if item[1] and item[4] == best_sim], "name"
+    if best_name_span >= 2 and best_name_span >= best_page:
+        how = "name" if used_vector else "name_plain"
+        return [item[0] for item in scored if item[1] and item[3] == best_name_span], how
+    if best_page >= 2:
+        return [item[0] for item in scored if item[2] == best_page], "page"
+    return [], "none"
 
 
 def _compact_needle(text: str) -> str:
@@ -1160,16 +1263,19 @@ def _one_from_groups(question: str, groups: list[list]):
     return best
 
 
-def _material_images(question: str, assets: list) -> tuple[list, str]:
-    """要一份就给整组。点名一张就给那一页。分不出组就整份交出去。"""
+def _material_images(question: str, assets: list, manual: list[dict] | None = None) -> tuple[list, str]:
+    """要一份就给整组。点名一张就给那一页。圈过的组优先。分不出组就整份交出去。"""
 
     if not assets:
         return [], "没有抽出图，可以打开原件。"
-    groups = _material_groups(assets)
-    split = len(groups) > 1
-    if not split:
+    saved = manual or []
+    if saved:
+        packed = _apply_manual_groups(assets, saved)
+    else:
+        packed = [(group, "") for group in _material_groups(assets)]
+    if len(packed) <= 1 and not any(name for _group, name in packed):
         return assets, f"图上分不出一份一份，图 {len(assets)} 张。"
-    hit = _group_hits(question, groups)
+    hit, how = _pick_tight_groups(question, packed)
     if not hit:
         return [], "图上的字对不上你要的那一份，可以打开原件。"
     if _material_one_page(question):
@@ -1180,8 +1286,15 @@ def _material_images(question: str, assets: list) -> tuple[list, str]:
     chosen: list = []
     for group in hit:
         chosen.extend(group)
-    group_note = f"对上 {len(hit)} 组，共 {len(chosen)} 张。" if len(hit) > 1 else f"这一组 {len(chosen)} 张。"
-    return chosen, group_note
+    if how == "name":
+        lead = "按组名的意思对上，"
+    elif how == "name_plain":
+        lead = "按组名的字面对上，向量没参与。"
+    else:
+        lead = ""
+    if len(hit) > 1:
+        return chosen, f"{lead}对上 {len(hit)} 组，共 {len(chosen)} 张。"
+    return chosen, f"{lead}这一组 {len(chosen)} 张。"
 
 
 def _materials_early(db: Session, question: str, search_q: str, rows: list, chunk_best: dict) -> dict:
@@ -1208,7 +1321,7 @@ def _materials_early(db: Session, question: str, search_q: str, rows: list, chun
     lines = [f"找到 {len(picked)} 份。{asked}{how}，按文件分开交给你。"]
     for index, row in enumerate(picked, start=1):
         assets = list_doc_assets(db, row.id)
-        chosen, note = _material_images(question, assets)
+        chosen, note = _material_images(question, assets, image_groups(row))
         pictures = [asset_dict(item) for item in chosen]
         title = row.title or row.file_name
         citations.append({"id": row.id, "title": title, "score": 1, "images": pictures})
@@ -1916,7 +2029,38 @@ def list_document_assets(doc_id: int, db: Session = Depends(get_db)):
     # 已经抽过的不再重读原件。
     _fill_assets(row, db)
     db.commit()
-    return ok({"items": [asset_edit_dict(item) for item in list_doc_assets(db, row.id)]})
+    return ok({
+        "items": [asset_edit_dict(item) for item in list_doc_assets(db, row.id)],
+        "groups": image_groups(row),
+    })
+
+
+@router.put("/kb/documents/{doc_id}/image-groups")
+def save_document_image_groups(doc_id: int, body: ImageGroupsIn, db: Session = Depends(get_db)):
+    """保存拿资料用的人工分组。不改回答和核对清单。"""
+
+    row = db.get(KbDocument, doc_id)
+    if row is None:
+        return fail("这份资料不存在", 404)
+    assets = list_doc_assets(db, row.id)
+    cleaned: list[dict] = []
+    ranges: list[tuple[int, int]] = []
+    for item in body.groups:
+        start = int(item.start)
+        end = int(item.end)
+        if start < 1 or end < start:
+            return fail("请写成从第几张到第几张")
+        if not any(start <= asset_figure_no(asset) <= end for asset in assets):
+            return fail("这段里没有图")
+        ranges.append((start, end))
+        cleaned.append({"name": item.name.strip(), "start": start, "end": end})
+    ranges.sort()
+    for prev, nxt in zip(ranges, ranges[1:]):
+        if nxt[0] <= prev[1]:
+            return fail("这几段图有重叠")
+    save_image_groups(row, cleaned)
+    db.commit()
+    return ok({"groups": image_groups(row)})
 
 
 @router.post("/kb/documents/{doc_id}/vision")
