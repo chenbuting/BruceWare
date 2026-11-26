@@ -558,6 +558,7 @@ export function updateKbLibraryPolicy(
   } = {},
   linkEnabled = false,
   linkHops = 3,
+  auditMode: "off" | "rules" = "rules",
 ) {
   return request<KbLibrary>(`/api/v1/kb/libraries/${id}/policy`, {
     method: "PUT",
@@ -578,6 +579,7 @@ export function updateKbLibraryPolicy(
       vector_enabled: flow.vectorEnabled ?? true,
       link_enabled: linkEnabled,
       link_hops: linkHops,
+      audit_mode: auditMode,
     }),
   });
 }

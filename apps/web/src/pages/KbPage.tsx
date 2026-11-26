@@ -306,6 +306,85 @@ function MaterialFiles({
   );
 }
 
+/** 回答自检：一行状态，点开看每一条提醒。 */
+function AuditLine({
+  audit,
+  citations,
+  onOpenCitation,
+}: {
+  audit?: NonNullable<KbAskResult["audit"]>;
+  citations: KbAskResult["citations"];
+  onOpenCitation: (id: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  if (!audit || audit.enabled === false) return null;
+  const items = audit.items || [];
+  const hasError = audit.status === "error";
+  const hasWarn = items.some((item) => item.severity === "warn");
+  const label = hasError ? "自检 · 有问题" : hasWarn ? `自检 · ${items.length} 条提醒` : items.length ? `自检 · ${items.length} 条提示` : "自检 · 通过";
+  const tone = hasError ? "text-[var(--err)]" : hasWarn ? "text-amber-700" : items.length ? "text-[var(--muted)]" : "text-[var(--ok)]";
+  const dot = hasError ? "bg-[var(--err)]" : hasWarn ? "bg-amber-500" : items.length ? "bg-[var(--line)]" : "bg-[var(--ok)]";
+  return (
+    <div className="mt-2 text-[11px]">
+      <button
+        type="button"
+        className={`inline-flex items-center gap-1.5 ${tone}`}
+        aria-expanded={open}
+        title="绿色＝通过；灰色＝提示（仅供参考）；琥珀＝提醒（建议核对原文）；红色＝问题（引用或结构有错）"
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
+        {label}
+        <span className="text-[var(--muted)]">{open ? "收起" : items.length ? "查看" : "说明"}</span>
+      </button>
+      {open ? (
+        <div className="mt-1.5 border-t border-dashed border-[var(--line)] pt-1.5">
+          <p className="mb-1.5 text-[10.5px] leading-5 text-[var(--muted)]">
+            绿色＝通过；灰色＝提示（仅供参考）；琥珀＝提醒（建议核对原文）；红色＝问题（引用或结构有错）。
+            {typeof audit.elapsed_ms === "number" ? ` 耗时 ${audit.elapsed_ms} ms。` : ""}
+          </p>
+          {items.length ? (
+            <ul className="space-y-1">
+              {items.map((item, index) => (
+                <li key={`${item.code}-${index}`} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 leading-5">
+                  <span
+                    className={
+                      item.severity === "error"
+                        ? "shrink-0 text-[var(--err)]"
+                        : item.severity === "warn"
+                          ? "shrink-0 text-amber-700"
+                          : "shrink-0 text-[var(--muted)]"
+                    }
+                  >
+                    {item.severity === "error" ? "问题" : item.severity === "warn" ? "提醒" : "提示"}
+                  </span>
+                  <span className="min-w-0 flex-1 text-[var(--muted)]">{item.message}</span>
+                  {(item.refs || []).map((ref) => {
+                    const hit = ref.id ? { id: ref.id } : citations[ref.citation - 1];
+                    if (!hit) return null;
+                    return (
+                      <button
+                        key={`${ref.citation}-${ref.title}`}
+                        type="button"
+                        className="shrink-0 font-mono text-[10px] text-[var(--ok)] underline"
+                        onClick={() => onOpenCitation(hit.id)}
+                      >
+                        {ref.citation > 0 ? `资料${ref.citation}` : "打开资料"}
+                      </button>
+                    );
+                  })}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-[10.5px] text-[var(--muted)]">这次没有发现问题。</p>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function AskTurnView({
   turn,
   isLast,
@@ -387,6 +466,7 @@ function AskTurnView({
               {turn.result.wiki_update_hint ? <span>{turn.result.wiki_update_hint}</span> : null}
             </div>
           ) : null}
+          <AuditLine audit={turn.result.audit} citations={citations} onOpenCitation={onOpenCitation} />
         </div>
       </div>
     </div>
@@ -491,6 +571,7 @@ export function KbPage() {
   const [wikiLearn, setWikiLearn] = useState(false);
   const [visionEnabled, setVisionEnabled] = useState(false);
   const [visionEngine, setVisionEngine] = useState<KbVisionEngine>("vision");
+  const [auditMode, setAuditMode] = useState<"off" | "rules">("rules");
   const [libMode, setLibMode] = useState<KbEvidenceMode>("strict");
   const [libRule, setLibRule] = useState("");
   const [linkEnabled, setLinkEnabled] = useState(false);
@@ -506,7 +587,7 @@ export function KbPage() {
   const [readerSources, setReaderSources] = useState(false);
   const [readerBack, setReaderBack] = useState(false);
   const [optionsOpen, setOptionsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<"basic" | "answer" | "index" | "vision" | "wiki" | "summary">("basic");
+  const [settingsTab, setSettingsTab] = useState<"basic" | "answer" | "index" | "vision" | "wiki" | "audit" | "summary">("basic");
   const [railOpen, setRailOpen] = useState(false);
 
   const library = libraries.find((item) => item.id === libraryId) || null;
@@ -1081,6 +1162,7 @@ export function KbPage() {
       setWikiLearn(!!library.wiki_learn);
       setVisionEnabled(!!library.vision_enabled);
       setVisionEngine(library.vision_engine === "ocr" ? "ocr" : "vision");
+      setAuditMode(library.audit_mode === "off" ? "off" : "rules");
       setLibMode(library.evidence_mode || "strict");
       setLibRule(library.rule || "");
       setLinkEnabled(!!library.link_enabled);
@@ -1715,6 +1797,7 @@ export function KbPage() {
                           <button
                             type="button"
                             className="inline-flex h-6 items-center gap-1.5 rounded-full border border-[var(--line)] px-2.5 text-[11.5px] text-[var(--muted)]"
+                            title="回答口径与关联补查。补查关＝只检索一轮；开＝会用本轮原文里出现的人名、编号再检索一次（多跳）。"
                             onClick={(event) => {
                               event.stopPropagation();
                               setOptionsOpen((value) => !value);
@@ -2035,6 +2118,7 @@ export function KbPage() {
                   ["index", "检索与索引"],
                   ["vision", "识图"],
                   ["wiki", "Wiki"],
+                  ["audit", "回答自检"],
                   ["summary", "摘要管理"],
                 ] as const
               ).map(([key, label]) => (
@@ -2210,6 +2294,27 @@ export function KbPage() {
                 </div>
               ) : null}
 
+              {settingsTab === "audit" ? (
+                <div>
+                  <p className="mb-2 text-[12px] font-medium">回答自检</p>
+                  <div className="mb-2 flex flex-wrap items-center gap-2 text-[12.5px]">
+                    <span className="text-[var(--muted)]">模式</span>
+                    <select
+                      className={inputClass}
+                      value={auditMode}
+                      onChange={(e) => setAuditMode(e.target.value === "off" ? "off" : "rules")}
+                    >
+                      <option value="rules">只查规则（本机，免费）</option>
+                      <option value="off">关闭</option>
+                    </select>
+                  </div>
+                  <p className="text-[11px] leading-5 text-[var(--muted)]">
+                    每次回答完，自动对照本轮原文检查：日期、金额、编号有没有依据，引用对不对，冲突有没有标。
+                    只在本机做字符串匹配，不发外网、不改回答。有提醒会挂在回答下面，可以点回出处。
+                  </p>
+                </div>
+              ) : null}
+
               {settingsTab === "summary" ? (
                 <div>
                   <p className="mb-2 text-[12px] font-medium">摘要管理</p>
@@ -2332,6 +2437,7 @@ export function KbPage() {
                           },
                           linkEnabled,
                           hops,
+                          auditMode,
                         );
                         setLinkHops(String(row.link_hops || hops));
                         setLibraries((items) => items.map((item) => (item.id === row.id ? row : item)));

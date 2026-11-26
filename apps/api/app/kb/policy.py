@@ -8,6 +8,12 @@ from app.kb.models import KbLibrary
 
 MODES = {"strict", "loose"}
 VISION_ENGINES = {"vision", "ocr"}
+AUDIT_MODES = {"off", "rules"}
+
+
+def _audit_mode_of(raw) -> str:
+    value = str(raw or "rules").strip()
+    return value if value in AUDIT_MODES else "rules"
 
 
 def _vision_engine_of(raw) -> str:
@@ -35,6 +41,7 @@ def parse_policy(row: KbLibrary) -> dict:
         "vector_enabled": True,
         "link_enabled": False,
         "link_hops": 3,
+        "audit_mode": "rules",
     }
     raw = (row.policy_json or "").strip()
     if not raw:
@@ -66,6 +73,7 @@ def parse_policy(row: KbLibrary) -> dict:
         "vector_enabled": _flag(data, "vector_enabled", True),
         "link_enabled": _flag(data, "link_enabled", False),
         "link_hops": _bounded(data.get("link_hops"), 3, 1, 8),
+        "audit_mode": _audit_mode_of(data.get("audit_mode")),
     }
 
 
@@ -134,6 +142,7 @@ def dump_policy(
     vector_enabled: bool = True,
     link_enabled: bool = False,
     link_hops: int = 3,
+    audit_mode: str = "rules",
 ) -> str:
     """写成 policy_json。Wiki 关着时不跟着提问更新。识图默认关。关联补查默认关。"""
 
@@ -158,6 +167,7 @@ def dump_policy(
             "vector_enabled": bool(vector_enabled),
             "link_enabled": bool(link_enabled),
             "link_hops": _bounded(link_hops, 3, 1, 8),
+            "audit_mode": _audit_mode_of(audit_mode),
         },
         ensure_ascii=False,
     )

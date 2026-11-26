@@ -19,6 +19,7 @@ from app.core.config import get_settings
 from app.core.response import fail, ok
 from app.db.session import get_db, new_session
 from app.kb.extract import extract_search_text, extract_sheet_grid, is_sheet_name, sheet_rows_for_ask
+from app.kb.audit import audit_answer
 from app.kb.flow import READY_TEXT_LIMIT, apply_document_all, apply_document_step, saved_parsed
 from app.kb.pipeline import flow_view, remember_parsed, search_text_for_index
 from app.kb.progress import mark_progress, read_progress
@@ -115,6 +116,7 @@ class PolicyIn(BaseModel):
     vector_enabled: bool = True
     link_enabled: bool = False
     link_hops: int = 3
+    audit_mode: str = "rules"
 
 
 class WikiIn(BaseModel):
@@ -234,6 +236,7 @@ def _library_dict(row: KbLibrary) -> dict:
         "vector_enabled": policy["vector_enabled"],
         "link_enabled": policy["link_enabled"],
         "link_hops": policy["link_hops"],
+        "audit_mode": policy["audit_mode"],
         "created_at": _iso(row.created_at),
     }
 
@@ -373,6 +376,7 @@ def update_library_policy(library_id: int, body: PolicyIn, db: Session = Depends
         body.vector_enabled,
         body.link_enabled,
         body.link_hops,
+        body.audit_mode,
     )
     db.commit()
     db.refresh(row)
@@ -1743,9 +1747,19 @@ def _prepare_ask(library_id: int, body: AskIn, db):
         index_document(db, row)
     db.commit()
     chunk_best = score_chunks(db, library_id, search_q, {row.id for row in rows})
-    if ask_kind == "materials":
-        return {"early": _materials_early(db, question, search_q, rows, chunk_best), "question": question}, None
     policy = parse_policy(lib)
+    if ask_kind == "materials":
+        early = _materials_early(db, question, search_q, rows, chunk_best)
+        if policy["audit_mode"] != "off":
+            early["audit"] = audit_answer(
+                question,
+                str(early.get("answer") or ""),
+                early.get("citations") or [],
+                [],
+                mode="",
+                ask_kind="materials",
+            )
+        return {"early": early, "question": question}, None
     mode = resolve_mode(policy["evidence_mode"], body.evidence_mode)
     ranked_full = pack_ask_snippets(
         search_q, supplement_hits(search_q, rows, hybrid_rank(search_q, rows, chunk_best), chunk_best)
@@ -1839,6 +1853,7 @@ def _prepare_ask(library_id: int, body: AskIn, db):
         "mode": mode,
         "ask_kind": ask_kind,
         "used_vector": used_vector,
+        "audit_enabled": policy["audit_mode"] != "off",
         "should_learn": ask_kind == "answer" and policy["wiki_enabled"] and policy["wiki_learn"] and bool(citations),
     }, None
 
@@ -1852,8 +1867,12 @@ def _used_citation_indexes(citations: list, answer: str) -> set[int]:
 
     if not citations or not (answer or "").strip():
         return set()
-    body = _YIJU_RE.sub("", answer)
     used: set[int] = set()
+    # 「依据：资料1、资料2」这一行本身就是引用，先单独算进去
+    for line in re.findall(r"依据[：:][^\n]*", answer):
+        for match in re.finditer(r"资料\s*(\d+)", line):
+            used.add(int(match.group(1)))
+    body = _YIJU_RE.sub("", answer)
     for match in re.finditer(r"资料\s*(\d+)", body):
         index = int(match.group(1))
         window = body[max(0, match.start() - 12) : match.end() + 20]
@@ -1869,13 +1888,20 @@ def _used_citation_indexes(citations: list, answer: str) -> set[int]:
 
 
 def _keep_used_citations(citations: list, answer: str) -> tuple[list, str]:
-    """出处和依据只留真正用到的资料。"""
+    """出处和依据只留真正用到的资料，并把正文里的资料编号重新排成 1..N。"""
 
     used = _used_citation_indexes(citations, answer)
     if not used:
         return citations, answer
+    ordered = sorted(used)
+    mapping = {old: new for new, old in enumerate(ordered, start=1)}
+    answer = re.sub(
+        r"资料\s*(\d+)",
+        lambda match: f"资料{mapping[int(match.group(1))]}" if int(match.group(1)) in mapping else match.group(0),
+        answer or "",
+    )
     kept = [hit for index, hit in enumerate(citations, start=1) if index in used]
-    labels = "、".join(f"资料{index}" for index in sorted(used))
+    labels = "、".join(f"资料{index}" for index in range(1, len(kept) + 1))
     line = f"依据：{labels}"
     if _YIJU_RE.search(answer or ""):
         answer = _YIJU_RE.sub(line, (answer or "").rstrip())
@@ -1889,7 +1915,7 @@ def _finalize_llm_ask(prep: dict, answer: str) -> dict:
     if prep["should_learn"]:
         hint = "摘要正在后台更新，不影响这次回答。"
         Thread(target=_learn_wikis_job, args=(prep["question"], [row.id for row, _score in prep["ranked"]]), daemon=True).start()
-    return {
+    payload = {
         "answer": answer,
         "citations": citations,
         "used_llm": True,
@@ -1898,6 +1924,31 @@ def _finalize_llm_ask(prep: dict, answer: str) -> dict:
         "used_vector": prep["used_vector"],
         "ask_kind": prep["ask_kind"],
     }
+    payload["audit"] = _audit_payload(prep, answer, citations)
+    return payload
+
+
+def _audit_payload(prep: dict, answer: str, citations: list) -> dict:
+    """回答自检。关掉时返回 enabled=False；出错也不影响回答。"""
+
+    try:
+        return audit_answer(
+            prep.get("question", ""),
+            answer,
+            citations,
+            prep.get("ranked_full") or [],
+            mode=str(prep.get("mode") or "strict"),
+            ask_kind=str(prep.get("ask_kind") or "answer"),
+            enabled=bool(prep.get("audit_enabled", True)),
+        )
+    except Exception as exc:  # 双保险：audit_answer 内部已兜底
+        return {
+            "status": "error",
+            "score": 0.0,
+            "items": [{"code": "audit_failed", "severity": "error", "message": f"自检未完成：{str(exc)[:120]}"}],
+            "checked": 0,
+            "enabled": True,
+        }
 
 
 def _stream_ask(prep: dict, library_id: int, session_id: int | None, request: Request, db):

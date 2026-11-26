@@ -262,6 +262,7 @@ export type KbLibrary = {
   vector_enabled: boolean;
   link_enabled: boolean;
   link_hops: number;
+  audit_mode: "off" | "rules";
   created_at: string;
 };
 
@@ -332,6 +333,23 @@ export type KbAskHit = {
 
 export type KbAskKind = "answer" | "checklist" | "materials";
 
+export type KbAuditItem = {
+  code: string;
+  severity: "error" | "warn" | "info";
+  message: string;
+  claim?: string;
+  refs?: { citation: number; id?: number; title: string }[];
+};
+
+export type KbAudit = {
+  status: "ok" | "warn" | "error";
+  score?: number;
+  items: KbAuditItem[];
+  checked?: number;
+  elapsed_ms?: number;
+  enabled?: boolean;
+};
+
 export type KbAskResult = {
   answer: string;
   citations: KbAskHit[];
@@ -341,6 +359,7 @@ export type KbAskResult = {
   used_vector?: boolean;
   session_id?: number;
   ask_kind?: KbAskKind;
+  audit?: KbAudit;
 };
 
 export type KbSession = {
