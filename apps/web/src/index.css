@@ -63,3 +63,46 @@ input,
 button {
   border-radius: 6px;
 }
+
+/* 知识库：回答正文用阅读字体，衬线只用于对证内容，界面仍用无衬线。 */
+.kb-read {
+  font-family: Georgia, "Songti SC", "Source Han Serif SC", "Noto Serif CJK SC", serif;
+}
+.kb-read .kb-answer-md {
+  font-size: 14px;
+  line-height: 1.85;
+}
+.kb-read .kb-answer-md p,
+.kb-read .kb-answer-md li {
+  line-height: 1.85;
+}
+
+/* 知识库设置里的开关。 */
+.kb-toggle {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  border-radius: 10px;
+  background: #d8d3c5;
+  transition: background 0.15s;
+}
+.kb-toggle::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  transition: left 0.15s;
+}
+.kb-toggle[aria-pressed="true"] {
+  background: var(--ok);
+}
+.kb-toggle[aria-pressed="true"]::after {
+  left: 16px;
+}
+.kb-toggle:disabled {
+  opacity: 0.4;
+}

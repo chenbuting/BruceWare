@@ -15,7 +15,7 @@ export const FLOW_MODULES = [
 export const VIEW_MODULES = [
   { id: "file", label: "原文" },
   { id: "images", label: "图" },
-  { id: "chunks", label: "切片" },
+  { id: "chunks", label: "切片预览" },
   { id: "wiki", label: "摘要" },
 ] as const;
 
@@ -56,32 +56,24 @@ export function isFlowPane(pane: DocPane): pane is FlowPane {
 
 export function DocModuleBar({ pane, onChange }: { pane: DocPane; onChange: (id: DocPane) => void }) {
   return (
-    <div className="mb-2 border border-[var(--line)] text-[13px]">
-      <ModuleRow title="处理" items={FLOW_MODULES} pane={pane} onChange={onChange} />
-      <ModuleRow title="查看" items={VIEW_MODULES} pane={pane} onChange={onChange} />
-    </div>
-  );
-}
-
-function ModuleRow<T extends DocPane>({
-  title,
-  items,
-  pane,
-  onChange,
-}: {
-  title: string;
-  items: readonly { id: T; label: string }[];
-  pane: DocPane;
-  onChange: (id: DocPane) => void;
-}) {
-  return (
-    <div className="flex flex-wrap items-center gap-1 border-b border-[var(--line)] px-2 py-1 last:border-b-0">
-      <span className="mr-1 text-[var(--muted)]">{title}</span>
-      {items.map((item) => (
+    <div className="mb-2 flex flex-wrap items-center gap-1 border-b border-[var(--line)] text-[13px]">
+      {VIEW_MODULES.map((item) => (
         <button
           key={item.id}
           type="button"
-          className={`px-2 py-1 ${pane === item.id ? "bg-[var(--bg)] font-medium" : "text-[var(--muted)] hover:bg-[var(--hover)]"}`}
+          className={`px-2 py-1.5 ${pane === item.id ? "border-b-2 border-[var(--ok)] font-medium" : "text-[var(--muted)] hover:bg-[var(--hover)]"}`}
+          onClick={() => onChange(item.id)}
+        >
+          {item.label}
+        </button>
+      ))}
+      <span className="mx-1 h-4 w-px bg-[var(--line)]" />
+      <span className="pr-1 text-[11px] text-[var(--muted)]">处理</span>
+      {FLOW_MODULES.map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          className={`px-2 py-1.5 ${pane === item.id ? "border-b-2 border-[var(--ok)] font-medium" : "text-[var(--muted)] hover:bg-[var(--hover)]"}`}
           onClick={() => onChange(item.id)}
         >
           {item.label}
