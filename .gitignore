@@ -37,6 +37,9 @@ dist-ssr/
 *.swp
 *.swo
 
+# 本地核对记录，不进仓库
+docs/review/
+
 # 系统
 Thumbs.db
 .DS_Store
